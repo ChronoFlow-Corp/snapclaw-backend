@@ -45,5 +45,5 @@ type apiKeyManager interface {
 }
 
 type hostingManager interface {
-	Create(ctx context.Context, cl entities.Claw) (hosting.Container, error)
+	Create(ctx context.Context, cl entities.Claw, server entities.Server) (hosting.Container, error)
 }

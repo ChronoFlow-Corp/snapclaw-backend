@@ -2,17 +2,96 @@ package hosting
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 
 	"simpleClaw/internal/entities"
+
+	"github.com/google/uuid"
 )
 
-// Manager manager container running on server entities
-type Manager struct{}
-
-func NewManager() *Manager {
-	return &Manager{}
+// Manager orchestrates container lifecycle interactions with containerManager over HTTP.
+type Manager struct {
+	client *client
 }
 
-func (m *Manager) Create(ctx context.Context, cl entities.Claw) (Container, error) {
-	return Container{}, nil
+func NewManager() *Manager {
+	return &Manager{
+		client: newClient(defaultHTTPTimeout),
+	}
+}
+
+func (m *Manager) Create(
+	ctx context.Context,
+	cl entities.Claw,
+	server entities.Server,
+) (Container, error) {
+	const op = "infra.hosting.Manager.Create"
+
+	if m == nil || m.client == nil {
+		return Container{}, fmt.Errorf("%s: http client is not configured", op)
+	}
+
+	if cl.UserID == uuid.Nil {
+		return Container{}, fmt.Errorf("%s: user id is required", op)
+	}
+
+	if server.URL == "" {
+		return Container{}, fmt.Errorf("%s: server url is required", op)
+	}
+
+	configFiles, err := buildConfigFiles(cl.Config)
+	if err != nil {
+		return Container{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	resp, err := m.client.createClaw(ctx, server.URL, createClawRequest{
+		UserID:     cl.UserID.String(),
+		ClawConfig: configFiles,
+	})
+	if err != nil {
+		return Container{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if resp.ContainerID == "" {
+		return Container{}, fmt.Errorf("%s: empty container id received", op)
+	}
+
+	container := Container{
+		ID:     resp.ContainerID,
+		Status: entities.StatusStop,
+	}
+
+	if server.ID != uuid.Nil {
+		container.ServerID = server.ID
+	} else if cl.ServerID != uuid.Nil {
+		container.ServerID = cl.ServerID
+	}
+
+	if resp.ServerID != "" {
+		if srvID, err := uuid.Parse(resp.ServerID); err == nil {
+			container.ServerID = srvID
+		}
+	}
+
+	if resp.Status != "" {
+		container.Status = resp.Status
+	}
+
+	return container, nil
+}
+
+func buildConfigFiles(cfg entities.ClawConfig) ([]clawConfigFile, error) {
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("marshal openclaw config: %w", err)
+	}
+
+	return []clawConfigFile{
+		{
+			Name:     openClawConfigName,
+			FileType: fileTypeJSON,
+			Data:     string(data),
+		},
+	}, nil
 }

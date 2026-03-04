@@ -137,7 +137,7 @@ func (s *Service) Create(
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	container, err := s.hosting.Create(ctx, cl)
+	container, err := s.hosting.Create(ctx, cl, server)
 	if err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
