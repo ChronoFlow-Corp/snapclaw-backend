@@ -28,11 +28,13 @@ func (s *Storage) Create(ctx context.Context, u entities.User) error {
 	const op = "storages.Users.Create"
 
 	err := gorm.G[models.User](s.db).Create(ctx, &models.User{
-		ID:        u.ID,
-		Name:      u.Name,
-		Email:     u.Email,
-		Role:      u.Role,
-		CreatedAt: u.CreatedAt,
+		ID:               u.ID,
+		Name:             u.Name,
+		Email:            u.Email,
+		Role:             u.Role,
+		OpenRouterApiKey: u.OpenRouterApiKey,
+		OpenRouterKeyID:  u.OpenRouterKeyID,
+		CreatedAt:        u.CreatedAt,
 	})
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
@@ -84,11 +86,36 @@ func (s *Storage) GetByEmail(ctx context.Context, email string) (entities.User, 
 	}
 
 	return entities.User{
-		ID:        uDB.ID,
-		Name:      uDB.Name,
-		Email:     uDB.Email,
-		Role:      uDB.Role,
-		CreatedAt: uDB.CreatedAt,
+		ID:               uDB.ID,
+		Name:             uDB.Name,
+		Email:            uDB.Email,
+		Role:             uDB.Role,
+		OpenRouterApiKey: uDB.OpenRouterApiKey,
+		OpenRouterKeyID:  uDB.OpenRouterKeyID,
+		CreatedAt:        uDB.CreatedAt,
+	}, nil
+}
+
+func (s *Storage) GetByID(ctx context.Context, id uuid.UUID) (entities.User, error) {
+	const op = "storages.Users.GetByID"
+
+	uDB, err := gorm.G[models.User](s.db).Where("id = ?", id).First(ctx)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return entities.User{}, fmt.Errorf("%s: %w: %w", op, sql.ErrNotFound, err)
+		}
+
+		return entities.User{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return entities.User{
+		ID:               uDB.ID,
+		Name:             uDB.Name,
+		Email:            uDB.Email,
+		Role:             uDB.Role,
+		OpenRouterApiKey: uDB.OpenRouterApiKey,
+		OpenRouterKeyID:  uDB.OpenRouterKeyID,
+		CreatedAt:        uDB.CreatedAt,
 	}, nil
 }
 
@@ -140,4 +167,28 @@ func (s *Storage) GetSession(ctx context.Context, id uuid.UUID) (entities.Sessio
 		UserID:    sDB.UserID,
 		CreatedAt: sDB.CreatedAt,
 	}, nil
+}
+
+func (s *Storage) UpdateOpenRouterKey(
+	ctx context.Context,
+	id uuid.UUID,
+	key entities.OpenRouterKey,
+) error {
+	const op = "storages.Users.UpdateOpenRouterKey"
+
+	updates := map[string]any{
+		"open_router_api_key": key.Secret,
+		"open_router_key_id":  key.ID,
+	}
+
+	tx := s.db.WithContext(ctx).Model(&models.User{}).Where("id = ?", id).Updates(updates)
+	if err := tx.Error; err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if tx.RowsAffected == 0 {
+		return fmt.Errorf("%s: %w", op, sql.ErrNotFound)
+	}
+
+	return nil
 }

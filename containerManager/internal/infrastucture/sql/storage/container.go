@@ -9,7 +9,7 @@ import (
 	"containermanager/internal/entities"
 
 	"github.com/Masterminds/squirrel"
-	"github.com/jackc/pgx"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -150,10 +150,13 @@ func (c *Container) GetByUserID(ctx context.Context, uID string) (entities.Conta
 	return res, nil
 }
 
-func (c *Container) GetByID(ctx context.Context, id string) (entities.Container, error) {
+func (c *Container) GetByID(ctx context.Context, containerID string) (entities.Container, error) {
 	const op = "storage.Container.GetByID"
 
-	query, values, err := sq.Select(columns...).From(table).Where(squirrel.Eq{id: id}).ToSql()
+	query, values, err := sq.Select(columns...).
+		From(table).
+		Where(squirrel.Eq{columns[id]: containerID}).
+		ToSql()
 	if err != nil {
 		return entities.Container{}, fmt.Errorf("%s: %w", op, err)
 	}

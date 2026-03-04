@@ -16,6 +16,7 @@ type UStorage interface {
 	GetSessions(ctx context.Context, userID uuid.UUID) ([]entities.Session, error)
 	GetSession(ctx context.Context, id uuid.UUID) (entities.Session, error)
 	GetByEmail(ctx context.Context, email string) (entities.User, error)
+	UpdateOpenRouterKey(ctx context.Context, id uuid.UUID, key entities.OpenRouterKey) error
 }
 
 type ChannelStorage interface {
@@ -24,4 +25,14 @@ type ChannelStorage interface {
 	GetByUserID(ctx context.Context, userID uuid.UUID) ([]entities.Channel, error)
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	Update(ctx context.Context, ch entities.Channel) error
+}
+
+type apiKeyManager interface {
+	Create(
+		ctx context.Context,
+		userID uuid.UUID,
+		label string,
+		requestsPerMinute int,
+		monthlyBudgetUSD float64,
+	) (entities.OpenRouterKey, error)
 }

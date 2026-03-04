@@ -127,6 +127,46 @@ func (s *Storage) GetByUserID(ctx context.Context, userID uuid.UUID) ([]entities
 	return chs, nil
 }
 
+func (s *Storage) GetByIDs(
+	ctx context.Context,
+	ids []uuid.UUID,
+	userID uuid.UUID,
+) ([]entities.Channel, error) {
+	const op = "storages.Channels.GetByIDs"
+
+	if len(ids) == 0 {
+		return []entities.Channel{}, nil
+	}
+
+	chsDB, err := gorm.G[models.Channel](s.db).
+		Where("user_id = ? AND id IN ?", userID, ids).
+		Find(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	chs := make([]entities.Channel, 0, len(chsDB))
+
+	for _, chDB := range chsDB {
+		var cfg entities.ClawChannels
+		err = json.Unmarshal(chDB.OpenClawConfig, &cfg)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", op, err)
+		}
+
+		chs = append(chs, entities.Channel{
+			ID:          chDB.ID,
+			Name:        chDB.Name,
+			UserID:      chDB.UserID,
+			ChannelType: chDB.ChannelType,
+			CreatedAt:   chDB.CreatedAt,
+			Config:      cfg,
+		})
+	}
+
+	return chs, nil
+}
+
 func (s *Storage) Delete(ctx context.Context, id, userID uuid.UUID) error {
 	const op = "service.Service.Delete"
 

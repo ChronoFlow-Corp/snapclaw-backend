@@ -19,13 +19,15 @@ type Service struct {
 	j    jwt.JWT
 	uSt  UStorage
 	chSt ChannelStorage
+	keys apiKeyManager
 }
 
-func NewUser(j jwt.JWT, uSt UStorage, chSt ChannelStorage) *Service {
+func NewUser(j jwt.JWT, uSt UStorage, chSt ChannelStorage, keys apiKeyManager) *Service {
 	return &Service{
 		j:    j,
 		uSt:  uSt,
 		chSt: chSt,
+		keys: keys,
 	}
 }
 
@@ -41,8 +43,15 @@ func (s *Service) SignIn(
 	}
 
 	if errors.Is(err, sql.ErrNotFound) {
-		fmt.Println("THIS")
 		u = entities.NewUser(cm.Name, cm.Email, entities.UserRole)
+
+		key, keyErr := s.keys.Create(ctx, u.ID, u.Name, 0, 0)
+		if keyErr != nil {
+			return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, keyErr)
+		}
+
+		u.OpenRouterApiKey = key.Secret
+		u.OpenRouterKeyID = key.ID
 
 		err = s.uSt.Create(ctx, u)
 		if err != nil {

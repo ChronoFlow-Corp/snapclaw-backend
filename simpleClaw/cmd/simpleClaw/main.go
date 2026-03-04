@@ -8,9 +8,14 @@ import (
 	"simpleClaw/internal/api/rest/controllers"
 
 	"simpleClaw/config"
+	"simpleClaw/internal/infra/hosting"
+	"simpleClaw/internal/infra/openrouter"
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/infra/storages/channels"
+	"simpleClaw/internal/infra/storages/claws"
+	"simpleClaw/internal/infra/storages/servers"
 	"simpleClaw/internal/infra/storages/users"
+	"simpleClaw/internal/service/claw"
 	"simpleClaw/internal/service/user"
 
 	"github.com/go-chi/chi/v5"
@@ -47,6 +52,8 @@ func main() {
 
 	userStorage := users.NewStorage(db)
 	channelsStorage := channels.NewStorage(db)
+	clawStorage := claws.NewStorage(db)
+	serversStorage := servers.NewStorage(db)
 
 	j := jwt.New(
 		[]byte(cfg.Auth.Jwt.AccessSecretPrivate),
@@ -56,13 +63,26 @@ func main() {
 		cfg.Auth.Jwt.RefreshExpire,
 	)
 
-	uService := user.NewUser(j, userStorage, channelsStorage)
+	orManager, err := openrouter.NewApiKeyManager(openrouter.Options{
+		BaseURL:  cfg.OpenRouter.BaseURL,
+		APIToken: cfg.OpenRouter.APIToken,
+		Timeout:  cfg.OpenRouter.Timeout,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	uService := user.NewUser(j, userStorage, channelsStorage, orManager)
+	hostingManager := hosting.NewManager()
+	clawService := claw.NewClaw(clawStorage, channelsStorage, userStorage, serversStorage, hostingManager, orManager)
 
 	api := chi.NewRouter()
 
 	uController := controllers.NewUser(cfg.Environment, uService)
+	clawController := controllers.NewClaw(clawService)
 
 	uController.Register(api)
+	clawController.Register(api)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)

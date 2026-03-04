@@ -20,8 +20,6 @@ func NewClawConfigurer(basePath string) *ClawConfigurer {
 func (c *ClawConfigurer) Configure(cm commands.CreateClaw) (string, error) {
 	const op = "configurer.ClawConfigurer.Configure"
 
-	fmt.Println(c.basePath)
-
 	basePath := path.Join(c.basePath, cm.UserID)
 
 	err := os.MkdirAll(basePath, 0o755)
@@ -33,8 +31,6 @@ func (c *ClawConfigurer) Configure(cm commands.CreateClaw) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
-
-	fmt.Println(basePath)
 
 	return basePath, nil
 }
@@ -53,26 +49,29 @@ func configure(basePath string, cfg []entities.ClawConfig) error {
 				return err
 			}
 		case entities.ClawConfigTypeJson:
-			f, err := os.Create(fmt.Sprintf("%s/%s.json", basePath, c.Name))
-			if err != nil {
-				return err
-			}
-
-			_, err = f.Write(c.Data)
-			if err != nil {
+			if err := writeFile(fmt.Sprintf("%s/%s.json", basePath, c.Name), c.Data); err != nil {
 				return err
 			}
 		case entities.ClawConfigTypeMd:
-			f, err := os.Create(fmt.Sprintf("%s/%s.md", basePath, c.Name))
-			if err != nil {
-				return err
-			}
-
-			_, err = f.Write(c.Data)
-			if err != nil {
+			if err := writeFile(fmt.Sprintf("%s/%s.md", basePath, c.Name), c.Data); err != nil {
 				return err
 			}
 		}
 	}
+
 	return nil
+}
+
+func writeFile(path string, data []byte) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+
+	if _, err = f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+
+	return f.Close()
 }

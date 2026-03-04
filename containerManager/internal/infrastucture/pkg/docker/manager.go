@@ -76,13 +76,12 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (string, error
 	const op = "container.Manager.Create"
 
 	p := nat.Port(fmt.Sprintf("%s/tcp", opts.ContainerPort))
-	hP := nat.Port(fmt.Sprintf("%s/tcp", opts.HostPort))
 
 	rs, err := m.cl.ContainerCreate(ctx, &dcontainer.Config{
 		Cmd:          strslice.StrSlice{"node", "openclaw.mjs", "gateway"},
 		Image:        m.images[imageName].id,
 		Env:          opts.Env,
-		ExposedPorts: nat.PortSet{hP: struct{}{}},
+		ExposedPorts: nat.PortSet{p: struct{}{}},
 	}, &dcontainer.HostConfig{
 		PortBindings: nat.PortMap{p: []nat.PortBinding{{
 			HostPort: opts.HostPort,

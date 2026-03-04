@@ -1,0 +1,49 @@
+package claw
+
+import (
+	"context"
+
+	"simpleClaw/internal/entities"
+	"simpleClaw/internal/infra/hosting"
+
+	"github.com/google/uuid"
+)
+
+type clawStorage interface {
+	Create(ctx context.Context, cl entities.Claw, channelIDs []uuid.UUID) error
+	UpdateRuntime(
+		ctx context.Context,
+		clID uuid.UUID,
+		serverID uuid.UUID,
+		containerID string,
+		status string,
+	) error
+}
+
+type channelStorage interface {
+	GetByIDs(ctx context.Context, ids []uuid.UUID, userID uuid.UUID) ([]entities.Channel, error)
+}
+
+type userStorage interface {
+	GetByID(ctx context.Context, id uuid.UUID) (entities.User, error)
+	UpdateOpenRouterKey(ctx context.Context, id uuid.UUID, key entities.OpenRouterKey) error
+}
+
+type serverStorage interface {
+	GetAvailable(ctx context.Context) (entities.Server, error)
+}
+
+type apiKeyManager interface {
+	Create(
+		ctx context.Context,
+		userID uuid.UUID,
+		label string,
+		requestsPerMinute int,
+		monthlyBudgetUSD float64,
+	) (entities.OpenRouterKey, error)
+	ResolveModel(ctx context.Context, model string) (string, error)
+}
+
+type hostingManager interface {
+	Create(ctx context.Context, cl entities.Claw) (hosting.Container, error)
+}

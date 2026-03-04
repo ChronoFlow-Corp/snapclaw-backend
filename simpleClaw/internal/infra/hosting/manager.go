@@ -6,14 +6,13 @@ import (
 	"simpleClaw/internal/entities"
 )
 
+// Manager manager container running on server entities
 type Manager struct{}
 
 func NewManager() *Manager {
 	return &Manager{}
 }
 
-func (m *Manager) Create(ctx context.Context, cl entities.Claw) error {
-	const op = "service.Service.Create"
-
-	return nil
+func (m *Manager) Create(ctx context.Context, cl entities.Claw) (Container, error) {
+	return Container{}, nil
 }

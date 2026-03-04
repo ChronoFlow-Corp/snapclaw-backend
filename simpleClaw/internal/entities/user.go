@@ -17,11 +17,13 @@ type (
 )
 
 type User struct {
-	ID        uuid.UUID
-	Name      string
-	Email     string
-	Role      string
-	CreatedAt time.Time
+	ID               uuid.UUID
+	Name             string
+	Email            string
+	OpenRouterKeyID  string
+	OpenRouterApiKey string
+	Role             string
+	CreatedAt        time.Time
 }
 
 func NewUser(name string, email string, role string) User {

@@ -15,10 +15,12 @@ const (
 )
 
 type Config struct {
-	Environment string   `yaml:"environment" env:"ENVIRONMENT" env-default:"development"`
-	Http        http     `yaml:"http"`
-	Database    database `yaml:"database"`
-	Auth        auth     `yaml:"auth"`
+	Environment string     `yaml:"environment" env:"ENVIRONMENT" env-default:"development"`
+	Http        http       `yaml:"http"`
+	Database    database   `yaml:"database"`
+	Auth        auth       `yaml:"auth"`
+	Hosting     hosting    `yaml:"hosting"`
+	OpenRouter  openrouter `yaml:"openrouter"`
 }
 
 type http struct {
@@ -46,6 +48,21 @@ type Jwt struct {
 	AccessSecretPrivate string        `yaml:"access_secret_private" env-required:"true"`
 	AccessExpire        time.Duration `yaml:"access_expire"         env-required:"true" env-default:"24h"`
 	RefreshExpire       time.Duration `yaml:"refresh_expire"        env-required:"true" env-default:"148h"`
+}
+
+type hosting struct {
+	ContainerManager containerManager `yaml:"container_manager"`
+}
+
+type containerManager struct {
+	BaseURL string        `yaml:"base_url" env-required:"true"`
+	Timeout time.Duration `yaml:"timeout" env-default:"15s"`
+}
+
+type openrouter struct {
+	BaseURL  string        `yaml:"base_url" env-required:"true"`
+	APIToken string        `yaml:"api_token" env-required:"true"`
+	Timeout  time.Duration `yaml:"timeout" env-default:"15s"`
 }
 
 func New() Config {

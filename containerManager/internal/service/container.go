@@ -22,6 +22,8 @@ type Container struct {
 	cfg     *configurer.ClawConfigurer
 }
 
+var errForbidden = errors.New("container belongs to another user")
+
 func NewContainer(
 	cfg *configurer.ClawConfigurer,
 	clRepo ClawRepository,
@@ -53,14 +55,18 @@ func (c *Container) Start(ctx context.Context, cm commands.StartClaw) error {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
-	cont.Status = entities.ContainerStatusRunning
+	if cont.UserID != cm.UserID {
+		return fmt.Errorf("%s: %w", op, errForbidden)
+	}
 
-	err = c.clRepo.Update(ctx, cont)
+	err = c.manager.Start(ctx, cont.ContainerID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
-	err = c.manager.Start(ctx, cont.ContainerID)
+	cont.Status = entities.ContainerStatusRunning
+
+	err = c.clRepo.Update(ctx, cont)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -74,6 +80,10 @@ func (c *Container) Stop(ctx context.Context, cm commands.StopClaw) error {
 	cDb, err := c.clRepo.GetByID(ctx, cm.ContainerID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if cDb.UserID != cm.UserID {
+		return fmt.Errorf("%s: %w", op, errForbidden)
 	}
 
 	err = c.manager.Stop(ctx, cDb.ContainerID)
@@ -103,15 +113,21 @@ func (c *Container) Delete(ctx context.Context, cm commands.DeleteClaw) error {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
-	err = c.clRepo.Remove(ctx, cDb)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+	if cDb.UserID != cm.UserID {
+		return fmt.Errorf("%s: %w", op, errForbidden)
 	}
 
 	err = c.manager.Remove(ctx, cDb.ContainerID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
+
+	err = c.clRepo.Remove(ctx, cDb)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	c.p.Release(cDb.Port)
 
 	return nil
 }
@@ -138,6 +154,13 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
 
+	releasePort := func() {
+		if cPort != "" {
+			c.p.Release(cPort)
+			cPort = ""
+		}
+	}
+
 	cID, err := c.manager.Create(ctx, docker.CreateOptions{
 		HostPort:      cPort,
 		HostIP:        "127.0.0.1",
@@ -152,6 +175,7 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 		},
 	})
 	if err != nil {
+		releasePort()
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -163,6 +187,8 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 		Status:      entities.ConstainerStatusStop,
 	})
 	if err != nil {
+		_ = c.manager.Remove(ctx, cID)
+		releasePort()
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
 

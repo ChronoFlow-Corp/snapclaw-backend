@@ -9,7 +9,7 @@ import (
 	"containermanager/internal/service"
 	"containermanager/internal/service/commands"
 
-	"github.com/go-chi/chi"
+	"github.com/go-chi/chi/v5"
 )
 
 type Claw struct {
@@ -69,6 +69,8 @@ func (c *Claw) Start(w http.ResponseWriter, r *http.Request) {
 	cID := r.URL.Query().Get("containerId")
 	if cID == "" {
 		http.Error(w, "containerId is required", http.StatusBadRequest)
+
+		return
 	}
 
 	err := c.s.Start(r.Context(), commands.StartClaw{ContainerID: cID, UserID: q})
@@ -90,6 +92,8 @@ func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
 	cID := r.URL.Query().Get("containerId")
 	if cID == "" {
 		http.Error(w, "containerId is required", http.StatusBadRequest)
+
+		return
 	}
 
 	err := c.s.Stop(r.Context(), commands.StopClaw{ContainerID: cID, UserID: q})
@@ -109,6 +113,8 @@ func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 	cID := r.URL.Query().Get("containerId")
 	if cID == "" {
 		http.Error(w, "containerId is required", http.StatusBadRequest)
+
+		return
 	}
 
 	err := c.s.Delete(r.Context(), commands.DeleteClaw{ContainerID: cID, UserID: q})
@@ -133,7 +139,10 @@ func mapConfig(d []dto.ClawConfig) []entities.ClawConfig {
 	cm := make([]entities.ClawConfig, len(d))
 
 	for i, c := range d {
-		tmpCfg := entities.ClawConfig{}
+		tmpCfg := entities.ClawConfig{
+			Name: c.Name,
+			Data: []byte(c.Data),
+		}
 
 		switch c.FileType {
 		case entities.ClawConfigTypeJson:
@@ -142,14 +151,11 @@ func mapConfig(d []dto.ClawConfig) []entities.ClawConfig {
 			tmpCfg.FileType = entities.ClawConfigTypeMd
 		case entities.ClawConfigTypeDir:
 			tmpCfg.FileType = entities.ClawConfigTypeDir
-			tmpCfg.Name = c.Name
-			cm[i].ClawConfig = mapConfig(c.ClawConfig)
+			tmpCfg.ClawConfig = mapConfig(c.ClawConfig)
 		default:
 			continue
 		}
 
-		tmpCfg.Data = []byte(c.Data)
-		tmpCfg.Name = c.Name
 		cm[i] = tmpCfg
 	}
 

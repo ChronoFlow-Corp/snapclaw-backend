@@ -125,7 +125,7 @@ func (u *User) AddChannel(w http.ResponseWriter, r *http.Request) {
 	//	return
 	//}
 
-	userID, _ := uuid.Parse("d3612cab-4fbd-465d-85a6-6c360afc8812")
+	userID, _ := uuid.Parse("0de1813b-cc5b-4d85-93bb-0960841fcd93")
 
 	ch, err := u.service.AddChannel(r.Context(), commands.AddChannel{
 		UserID: userID,
