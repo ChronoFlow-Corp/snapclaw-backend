@@ -35,6 +35,24 @@ func (c *ClawConfigurer) Configure(cm commands.CreateClaw) (string, error) {
 	return basePath, nil
 }
 
+func (c *ClawConfigurer) Update(cm commands.UpdateClaw) (string, error) {
+	const op = "configurer.ClawConfigurer.Update"
+
+	basePath := path.Join(c.basePath, cm.UserID)
+
+	err := os.MkdirAll(basePath, 0o755)
+	if err != nil {
+		return "", err
+	}
+
+	err = configure(basePath, cm.Config)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", op, err)
+	}
+
+	return basePath, nil
+}
+
 func configure(basePath string, cfg []entities.ClawConfig) error {
 	for _, c := range cfg {
 		switch c.FileType {

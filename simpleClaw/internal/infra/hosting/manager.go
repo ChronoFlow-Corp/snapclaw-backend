@@ -81,8 +81,139 @@ func (m *Manager) Create(
 	return container, nil
 }
 
+func (m *Manager) Delete(
+	ctx context.Context,
+	cl entities.Claw,
+	server entities.Server,
+) error {
+	const op = "infra.hosting.Manager.Delete"
+
+	if m == nil || m.client == nil {
+		return fmt.Errorf("%s: http client is not configured", op)
+	}
+
+	if cl.UserID == uuid.Nil {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if cl.ContainerID == "" {
+		return nil
+	}
+
+	if server.URL == "" {
+		return fmt.Errorf("%s: server url is required", op)
+	}
+
+	_ = m.Stop(ctx, cl, server)
+
+	if err := m.client.deleteClaw(ctx, server.URL, cl.UserID.String(), cl.ContainerID); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (m *Manager) Start(
+	ctx context.Context,
+	cl entities.Claw,
+	server entities.Server,
+) error {
+	const op = "infra.hosting.Manager.Start"
+
+	if m == nil || m.client == nil {
+		return fmt.Errorf("%s: http client is not configured", op)
+	}
+
+	if cl.UserID == uuid.Nil {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if cl.ContainerID == "" {
+		return nil
+	}
+
+	if server.URL == "" {
+		return fmt.Errorf("%s: server url is required", op)
+	}
+
+	if err := m.client.startClaw(ctx, server.URL, cl.UserID.String(), cl.ContainerID); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (m *Manager) Stop(
+	ctx context.Context,
+	cl entities.Claw,
+	server entities.Server,
+) error {
+	const op = "infra.hosting.Manager.Stop"
+
+	if m == nil || m.client == nil {
+		return fmt.Errorf("%s: http client is not configured", op)
+	}
+
+	if cl.UserID == uuid.Nil {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if cl.ContainerID == "" {
+		return nil
+	}
+
+	if server.URL == "" {
+		return fmt.Errorf("%s: server url is required", op)
+	}
+
+	if err := m.client.stopClaw(ctx, server.URL, cl.UserID.String(), cl.ContainerID); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (m *Manager) Update(
+	ctx context.Context,
+	cl entities.Claw,
+	server entities.Server,
+) error {
+	const op = "infra.hosting.Manager.Update"
+
+	if m == nil || m.client == nil {
+		return fmt.Errorf("%s: http client is not configured", op)
+	}
+
+	if cl.UserID == uuid.Nil {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if cl.ContainerID == "" {
+		return nil
+	}
+
+	if server.URL == "" {
+		return fmt.Errorf("%s: server url is required", op)
+	}
+
+	configFiles, err := buildConfigFiles(cl.Config)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := m.client.updateClaw(ctx, server.URL, updateClawRequest{
+		UserID:      cl.UserID.String(),
+		ContainerID: cl.ContainerID,
+		ClawConfig:  configFiles,
+	}); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
 func buildConfigFiles(cfg entities.ClawConfig) ([]clawConfigFile, error) {
-	data, err := json.Marshal(cfg)
+	data, err := json.Marshal(buildOpenClawConfig(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("marshal openclaw config: %w", err)
 	}

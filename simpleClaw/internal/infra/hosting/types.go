@@ -10,11 +10,14 @@ const (
 	fileTypeJSON       = "json"
 	openClawConfigName = "openclaw"
 	clawsEndpoint      = "/claws"
+	clawsStartEndpoint = "/claws/start"
+	clawsStopEndpoint  = "/claws/stop"
 	defaultHTTPTimeout = 15 * time.Second
 )
 
 // Container represents the runtime container that is provisioned for a claw.
 type Container struct {
+	// ID is the containerManager container record ID (DB primary key).
 	ID       string
 	ServerID uuid.UUID
 	Status   string
@@ -23,6 +26,12 @@ type Container struct {
 type createClawRequest struct {
 	UserID     string           `json:"userId"`
 	ClawConfig []clawConfigFile `json:"clawConfig"`
+}
+
+type updateClawRequest struct {
+	UserID      string           `json:"userId"`
+	ContainerID string           `json:"containerId"`
+	ClawConfig  []clawConfigFile `json:"clawConfig"`
 }
 
 type clawConfigFile struct {

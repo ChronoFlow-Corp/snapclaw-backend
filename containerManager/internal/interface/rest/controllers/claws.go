@@ -24,6 +24,7 @@ func NewClaw(s *service.Container) *Claw {
 
 func (c *Claw) Register(mux chi.Router) {
 	mux.Post("/claws", c.CreateClaw)
+	mux.Put("/claws", c.Update)
 	mux.Get("/claws/start", c.Start)
 	mux.Get("/claws/stop", c.Stop)
 	mux.Delete("/claws", c.Delete)
@@ -41,7 +42,7 @@ func (c *Claw) CreateClaw(w http.ResponseWriter, r *http.Request) {
 
 	cm := mapCreateClawToCommand(cfg)
 
-	cId, err := c.s.Create(r.Context(), cm)
+	containerRecordID, err := c.s.Create(r.Context(), cm)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 
@@ -53,7 +54,7 @@ func (c *Claw) CreateClaw(w http.ResponseWriter, r *http.Request) {
 
 	var res dto.CreateClawResponse
 
-	res.ContainerID = cId
+	res.ContainerID = containerRecordID
 
 	json.NewEncoder(w).Encode(res)
 }
@@ -102,6 +103,40 @@ func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
+	var cfg dto.UpdateClaw
+
+	err := json.NewDecoder(r.Body).Decode(&cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+
+		return
+	}
+
+	if cfg.UserID == "" {
+		http.Error(w, "userId is required", http.StatusBadRequest)
+
+		return
+	}
+
+	if cfg.ContainerID == "" {
+		http.Error(w, "containerId is required", http.StatusBadRequest)
+
+		return
+	}
+
+	cm := mapUpdateClawToCommand(cfg)
+
+	err = c.s.Update(r.Context(), cm)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("userId")
 	if q == "" {
@@ -131,6 +166,18 @@ func mapCreateClawToCommand(d dto.CreateClaw) commands.CreateClaw {
 	cm.Config = mapConfig(d.ClawConfig)
 
 	cm.UserID = d.UserID
+
+	return cm
+}
+
+func mapUpdateClawToCommand(d dto.UpdateClaw) commands.UpdateClaw {
+	cm := commands.UpdateClaw{
+		Config: make([]entities.ClawConfig, 0),
+	}
+
+	cm.Config = mapConfig(d.ClawConfig)
+	cm.UserID = d.UserID
+	cm.ContainerID = d.ContainerID
 
 	return cm
 }

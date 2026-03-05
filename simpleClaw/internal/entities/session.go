@@ -7,9 +7,10 @@ import (
 )
 
 type Session struct {
-	ID        uuid.UUID
-	UserID    uuid.UUID
-	CreatedAt time.Time
+	ID           uuid.UUID
+	UserID       uuid.UUID
+	RefreshToken string
+	CreatedAt    time.Time
 }
 
 func NewSession(userID uuid.UUID) Session {

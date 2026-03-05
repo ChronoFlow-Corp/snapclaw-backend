@@ -101,6 +101,25 @@ func (c *Container) Stop(ctx context.Context, cm commands.StopClaw) error {
 	return nil
 }
 
+func (c *Container) Update(ctx context.Context, cm commands.UpdateClaw) error {
+	const op = "service.Container.Update"
+
+	cDb, err := c.clRepo.GetByID(ctx, cm.ContainerID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if cDb.UserID != cm.UserID {
+		return fmt.Errorf("%s: %w", op, errForbidden)
+	}
+
+	if _, err := c.cfg.Update(cm); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
 func (c *Container) Restart() error {
 	return nil
 }
@@ -179,8 +198,9 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
 
+	containerRecordID := uuid.New()
 	err = c.clRepo.Create(ctx, entities.Container{
-		ID:          uuid.New(),
+		ID:          containerRecordID,
 		UserID:      cm.UserID,
 		ContainerID: cID,
 		Port:        cPort,
@@ -192,7 +212,7 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
 
-	return cID, nil
+	return containerRecordID.String(), nil
 }
 
 func (c *Container) GetInfo() error {

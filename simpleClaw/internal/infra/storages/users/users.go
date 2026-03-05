@@ -62,9 +62,10 @@ func (s *Storage) CreateSession(ctx context.Context, session entities.Session) e
 	const op = "storages.Users.CreateSession"
 
 	err := gorm.G[models.Session](s.db).Create(ctx, &models.Session{
-		ID:        session.ID,
-		UserID:    session.UserID,
-		CreatedAt: session.CreatedAt,
+		ID:           session.ID,
+		UserID:       session.UserID,
+		RefreshToken: session.RefreshToken,
+		CreatedAt:    session.CreatedAt,
 	})
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
@@ -145,9 +146,10 @@ func (s *Storage) GetSessions(ctx context.Context, userID uuid.UUID) ([]entities
 
 	for _, s := range sDB {
 		sessions = append(sessions, entities.Session{
-			ID:        s.ID,
-			UserID:    s.UserID,
-			CreatedAt: s.CreatedAt,
+			ID:           s.ID,
+			UserID:       s.UserID,
+			RefreshToken: s.RefreshToken,
+			CreatedAt:    s.CreatedAt,
 		})
 	}
 
@@ -159,14 +161,44 @@ func (s *Storage) GetSession(ctx context.Context, id uuid.UUID) (entities.Sessio
 
 	sDB, err := gorm.G[models.Session](s.db).Where("id = ?", id).First(ctx)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return entities.Session{}, fmt.Errorf("%s: %w: %w", op, sql.ErrNotFound, err)
+		}
+
 		return entities.Session{}, fmt.Errorf("%s: %w", op, err)
 	}
 
 	return entities.Session{
-		ID:        sDB.ID,
-		UserID:    sDB.UserID,
-		CreatedAt: sDB.CreatedAt,
+		ID:           sDB.ID,
+		UserID:       sDB.UserID,
+		RefreshToken: sDB.RefreshToken,
+		CreatedAt:    sDB.CreatedAt,
 	}, nil
+}
+
+func (s *Storage) UpdateSessionRefresh(
+	ctx context.Context,
+	sessionID, userID uuid.UUID,
+	refreshToken string,
+) error {
+	const op = "storages.Users.UpdateSessionRefresh"
+
+	updates := map[string]any{
+		"refresh_token": refreshToken,
+	}
+
+	tx := s.db.WithContext(ctx).Model(&models.Session{}).
+		Where("id = ? AND user_id = ?", sessionID, userID).
+		Updates(updates)
+	if err := tx.Error; err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if tx.RowsAffected == 0 {
+		return fmt.Errorf("%s: %w", op, sql.ErrNotFound)
+	}
+
+	return nil
 }
 
 func (s *Storage) UpdateOpenRouterKey(

@@ -78,8 +78,8 @@ func main() {
 
 	api := chi.NewRouter()
 
-	uController := controllers.NewUser(cfg.Environment, uService)
-	clawController := controllers.NewClaw(clawService)
+	uController := controllers.NewUser(cfg.Environment, uService, j)
+	clawController := controllers.NewClaw(clawService, j)
 
 	uController.Register(api)
 	clawController.Register(api)

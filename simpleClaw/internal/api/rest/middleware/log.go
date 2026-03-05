@@ -17,9 +17,13 @@ func Logger() func(next http.Handler) http.Handler {
 		fn := func(w http.ResponseWriter, r *http.Request) {
 			logger := slog.Default()
 
-			userID, ok := r.Context().Value(entities.UserIDCtxKey{}).(string)
-			if ok && userID != "" {
-				logger = logger.With("user_id", userID)
+			switch userID := r.Context().Value(entities.UserIDCtxKey{}).(type) {
+			case string:
+				if userID != "" {
+					logger = logger.With("user_id", userID)
+				}
+			case interface{ String() string }:
+				logger = logger.With("user_id", userID.String())
 			}
 
 			ctx := slctx.WithLogger(

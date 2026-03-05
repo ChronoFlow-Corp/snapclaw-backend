@@ -60,12 +60,15 @@ func (s *Service) SignIn(
 	}
 
 	session := entities.NewSession(u.ID)
-	err = s.uSt.CreateSession(ctx, session)
+
+	access, refresh, err = s.j.GeneratePair(u.ID, session.ID)
 	if err != nil {
 		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	access, refresh, err = s.j.GeneratePair(u.ID, session.ID)
+	session.RefreshToken = refresh.Raw
+
+	err = s.uSt.CreateSession(ctx, session)
 	if err != nil {
 		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
 	}
@@ -75,6 +78,54 @@ func (s *Service) SignIn(
 
 func (s *Service) SignOut() {
 	const op = "service.Service.SignOut"
+}
+
+func (s *Service) Refresh(
+	ctx context.Context,
+	rawRefresh string,
+) (access jwt.AccessToken, refresh jwt.RefreshToken, err error) {
+	const op = "service.Service.Refresh"
+
+	t, err := s.j.ParseRefresh(rawRefresh)
+	if err != nil {
+		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	session, err := s.uSt.GetSession(ctx, t.Claims.SessionID)
+	if err != nil {
+		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if session.UserID != t.Claims.UserID {
+		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, sql.ErrNotFound)
+	}
+
+	if session.RefreshToken == "" || session.RefreshToken != rawRefresh {
+		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, jwt.ErrInvalid)
+	}
+
+	access, refresh, err = s.j.GeneratePair(t.Claims.UserID, t.Claims.SessionID)
+	if err != nil {
+		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	err = s.uSt.UpdateSessionRefresh(ctx, session.ID, session.UserID, refresh.Raw)
+	if err != nil {
+		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return access, refresh, nil
+}
+
+func (s *Service) UserInfo(ctx context.Context, userID uuid.UUID) (entities.User, error) {
+	const op = "service.Service.UserInfo"
+
+	user, err := s.uSt.GetByID(ctx, userID)
+	if err != nil {
+		return entities.User{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return user, nil
 }
 
 func (s *Service) AddChannel(

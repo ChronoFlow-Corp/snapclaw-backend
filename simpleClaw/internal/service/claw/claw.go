@@ -14,11 +14,13 @@ import (
 
 var (
 	errUserIDRequired   = errors.New("user id is required")
+	errClawIDRequired   = errors.New("claw id is required")
 	errNameRequired     = errors.New("name is required")
 	errModelRequired    = errors.New("model is required")
 	errChannelNotFound  = errors.New("channel not found")
 	errHostingMissing   = errors.New("hosting manager is not configured")
 	errOpenRouterClient = errors.New("openrouter manager is not configured")
+	errServerIDRequired = errors.New("server id is required")
 )
 
 type Service struct {
@@ -159,19 +161,322 @@ func (s *Service) Create(
 	return cl, nil
 }
 
-func (s *Service) Start() {
-	const op = "service.Service.Start"
-	_ = op
+func (s *Service) GetByID(
+	ctx context.Context,
+	clawID uuid.UUID,
+	userID uuid.UUID,
+) (entities.Claw, error) {
+	const op = "service.Claw.GetByID"
+
+	if userID == uuid.Nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errUserIDRequired)
+	}
+
+	if clawID == uuid.Nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errClawIDRequired)
+	}
+
+	cl, err := s.claws.GetByID(ctx, clawID, userID)
+	if err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return cl, nil
 }
 
-func (s *Service) Stop() {
-	const op = "service.Service.Stop"
-	_ = op
+func (s *Service) GetByUserID(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]entities.Claw, error) {
+	const op = "service.Claw.GetByUserID"
+
+	if userID == uuid.Nil {
+		return nil, fmt.Errorf("%s: %w", op, errUserIDRequired)
+	}
+
+	cls, err := s.claws.GetByUserID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return cls, nil
 }
 
-func (s *Service) Delete() {
-	const op = "service.Service.Delete"
-	_ = op
+func (s *Service) Update(
+	ctx context.Context,
+	cm commands.UpdateClaw,
+) (entities.Claw, error) {
+	const op = "service.Claw.Update"
+
+	if cm.UserID == uuid.Nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errUserIDRequired)
+	}
+
+	if cm.ClawID == uuid.Nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errClawIDRequired)
+	}
+
+	if cm.Name == "" {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errNameRequired)
+	}
+
+	if cm.Model == "" {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errModelRequired)
+	}
+
+	if s.keys == nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errOpenRouterClient)
+	}
+
+	existing, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
+	if err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	channelIDs := deduplicateUUIDs(cm.ChannelIDs)
+	var chs []entities.Channel
+	if len(channelIDs) > 0 {
+		chs, err = s.channels.GetByIDs(ctx, channelIDs, cm.UserID)
+		if err != nil {
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+		}
+
+		if len(chs) != len(channelIDs) {
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, errChannelNotFound)
+		}
+	}
+
+	keyValue := existing.Config.Env.OpenRouterAPIKey
+	if keyValue == "" {
+		user, err := s.users.GetByID(ctx, cm.UserID)
+		if err != nil {
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+		}
+
+		keyValue = user.OpenRouterApiKey
+		if keyValue == "" || user.OpenRouterKeyID == "" {
+			rpm, monthly := normalizeLimits(cm.ApiKeyLimit)
+			apiKey, err := s.keys.Create(ctx, user.ID, cm.Name, rpm, monthly)
+			if err != nil {
+				return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+			}
+
+			err = s.users.UpdateOpenRouterKey(ctx, user.ID, apiKey)
+			if err != nil {
+				return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+			}
+
+			keyValue = apiKey.Secret
+		}
+	}
+
+	primaryModel, err := s.keys.ResolveModel(ctx, cm.Model)
+	if err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	updatedCfg := applyBaseUpdates(existing.Config, primaryModel, keyValue, chs)
+
+	existing.Name = cm.Name
+	existing.Config = updatedCfg
+	existing.UpdatedAt = time.Now()
+
+	if existing.ContainerID != "" && existing.ServerID != uuid.Nil {
+		if s.hosting == nil {
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, errHostingMissing)
+		}
+
+		srv, err := s.servers.GetByID(ctx, existing.ServerID)
+		if err != nil {
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+		}
+
+		if err := s.hosting.Update(ctx, existing, srv); err != nil {
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+		}
+	}
+
+	if err := s.claws.Update(ctx, existing, channelIDs); err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return existing, nil
+}
+
+func (s *Service) DeleteByID(
+	ctx context.Context,
+	clawID uuid.UUID,
+	userID uuid.UUID,
+) error {
+	const op = "service.Claw.DeleteByID"
+
+	if userID == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, errUserIDRequired)
+	}
+
+	if clawID == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, errClawIDRequired)
+	}
+
+	return s.Delete(ctx, commands.DeleteClaw{
+		UserID: userID,
+		ClawID: clawID,
+	})
+}
+
+func (s *Service) Start(
+	ctx context.Context,
+	cm commands.StartClaw,
+) (entities.Claw, error) {
+	const op = "service.Claw.Start"
+
+	if cm.UserID == uuid.Nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errUserIDRequired)
+	}
+
+	if cm.ClawID == uuid.Nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errClawIDRequired)
+	}
+
+	if s.hosting == nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errHostingMissing)
+	}
+
+	cl, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
+	if err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if cl.ContainerID == "" {
+		return entities.Claw{}, fmt.Errorf("%s: claw container id is required", op)
+	}
+
+	if cl.ServerID == uuid.Nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errServerIDRequired)
+	}
+
+	srv, err := s.servers.GetByID(ctx, cl.ServerID)
+	if err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := s.hosting.Start(ctx, cl, srv); err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	cl.Status = entities.StatusRunning
+
+	if err := s.claws.UpdateRuntime(
+		ctx,
+		cl.ID,
+		cl.ServerID,
+		cl.ContainerID,
+		cl.Status,
+	); err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return cl, nil
+}
+
+func (s *Service) Stop(
+	ctx context.Context,
+	cm commands.StopClaw,
+) (entities.Claw, error) {
+	const op = "service.Claw.Stop"
+
+	if cm.UserID == uuid.Nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errUserIDRequired)
+	}
+
+	if cm.ClawID == uuid.Nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errClawIDRequired)
+	}
+
+	if s.hosting == nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errHostingMissing)
+	}
+
+	cl, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
+	if err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if cl.ContainerID == "" {
+		return entities.Claw{}, fmt.Errorf("%s: claw container id is required", op)
+	}
+
+	if cl.ServerID == uuid.Nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errServerIDRequired)
+	}
+
+	srv, err := s.servers.GetByID(ctx, cl.ServerID)
+	if err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := s.hosting.Stop(ctx, cl, srv); err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	cl.Status = entities.StatusStop
+
+	if err := s.claws.UpdateRuntime(
+		ctx,
+		cl.ID,
+		cl.ServerID,
+		cl.ContainerID,
+		cl.Status,
+	); err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return cl, nil
+}
+
+func (s *Service) Delete(
+	ctx context.Context,
+	cm commands.DeleteClaw,
+) error {
+	const op = "service.Claw.Delete"
+
+	if cm.UserID == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, errUserIDRequired)
+	}
+
+	if cm.ClawID == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, errClawIDRequired)
+	}
+
+	cl, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if cl.ContainerID != "" {
+		if s.hosting == nil {
+			return fmt.Errorf("%s: %w", op, errHostingMissing)
+		}
+
+		if cl.ServerID == uuid.Nil {
+			return fmt.Errorf("%s: %w", op, errServerIDRequired)
+		}
+
+		srv, err := s.servers.GetByID(ctx, cl.ServerID)
+		if err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+
+		if err := s.hosting.Delete(ctx, cl, srv); err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+	}
+
+	if err := s.claws.Delete(ctx, cm.ClawID, cm.UserID); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
 }
 
 func buildBaseConfig(
@@ -191,13 +496,43 @@ func buildBaseConfig(
 			},
 		},
 		Gateway: entities.GatewayConfig{
-			Mode: "token",
+			Mode: "local",
 			Auth: entities.GatewayAuth{
 				Mode:  "token",
 				Token: gatewayToken,
 			},
 		},
 	}
+}
+
+func applyBaseUpdates(
+	existing entities.ClawConfig,
+	primaryModel string,
+	apiKey string,
+	channels []entities.Channel,
+) entities.ClawConfig {
+	cfg := existing
+
+	if apiKey != "" {
+		cfg.Env.OpenRouterAPIKey = apiKey
+	}
+
+	cfg.Channels = mergeChannelConfigs(channels)
+	cfg.Agents.Defaults.Model.Primary = primaryModel
+
+	if cfg.Gateway.Auth.Token == "" {
+		cfg.Gateway.Auth.Token = generateGatewayToken()
+	}
+
+	if cfg.Gateway.Mode == "" {
+		cfg.Gateway.Mode = "local"
+	}
+
+	if cfg.Gateway.Auth.Mode == "" {
+		cfg.Gateway.Auth.Mode = "token"
+	}
+
+	return cfg
 }
 
 func mergeChannelConfigs(chs []entities.Channel) entities.ClawChannels {

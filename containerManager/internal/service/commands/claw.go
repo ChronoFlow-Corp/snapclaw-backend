@@ -23,3 +23,9 @@ type DeleteClaw struct {
 	UserID      string
 	ContainerID string
 }
+
+type UpdateClaw struct {
+	UserID      string
+	ContainerID string
+	Config      []entities.ClawConfig
+}

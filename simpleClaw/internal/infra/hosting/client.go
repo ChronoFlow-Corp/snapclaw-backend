@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -95,4 +96,252 @@ func (c *client) createClaw(
 	}
 
 	return out, nil
+}
+
+func (c *client) updateClaw(
+	ctx context.Context,
+	baseURL string,
+	payload updateClawRequest,
+) error {
+	const op = "infra.hosting.client.updateClaw"
+
+	if c == nil || c.http == nil {
+		return fmt.Errorf("%s: http client is not initialized", op)
+	}
+
+	url := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if url == "" {
+		return fmt.Errorf("%s: base url is required", op)
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPut,
+		url+clawsEndpoint,
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = resp.Status
+		}
+
+		return fmt.Errorf(
+			"%s: unexpected status %d: %s",
+			op,
+			resp.StatusCode,
+			msg,
+		)
+	}
+
+	return nil
+}
+
+func (c *client) deleteClaw(
+	ctx context.Context,
+	baseURL string,
+	userID string,
+	containerID string,
+) error {
+	const op = "infra.hosting.client.deleteClaw"
+
+	if c == nil || c.http == nil {
+		return fmt.Errorf("%s: http client is not initialized", op)
+	}
+
+	rawURL := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if rawURL == "" {
+		return fmt.Errorf("%s: base url is required", op)
+	}
+
+	u, err := url.Parse(rawURL + clawsEndpoint)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	q := u.Query()
+	q.Set("userId", userID)
+	q.Set("containerId", containerID)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u.String(), nil)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = resp.Status
+		}
+
+		return fmt.Errorf(
+			"%s: unexpected status %d: %s",
+			op,
+			resp.StatusCode,
+			msg,
+		)
+	}
+
+	return nil
+}
+
+func (c *client) stopClaw(
+	ctx context.Context,
+	baseURL string,
+	userID string,
+	containerID string,
+) error {
+	const op = "infra.hosting.client.stopClaw"
+
+	if c == nil || c.http == nil {
+		return fmt.Errorf("%s: http client is not initialized", op)
+	}
+
+	rawURL := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if rawURL == "" {
+		return fmt.Errorf("%s: base url is required", op)
+	}
+
+	u, err := url.Parse(rawURL + clawsStopEndpoint)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	q := u.Query()
+	q.Set("userId", userID)
+	q.Set("containerId", containerID)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = resp.Status
+		}
+
+		return fmt.Errorf(
+			"%s: unexpected status %d: %s",
+			op,
+			resp.StatusCode,
+			msg,
+		)
+	}
+
+	return nil
+}
+
+func (c *client) startClaw(
+	ctx context.Context,
+	baseURL string,
+	userID string,
+	containerID string,
+) error {
+	const op = "infra.hosting.client.startClaw"
+
+	if c == nil || c.http == nil {
+		return fmt.Errorf("%s: http client is not initialized", op)
+	}
+
+	rawURL := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if rawURL == "" {
+		return fmt.Errorf("%s: base url is required", op)
+	}
+
+	u, err := url.Parse(rawURL + clawsStartEndpoint)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	q := u.Query()
+	q.Set("userId", userID)
+	q.Set("containerId", containerID)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = resp.Status
+		}
+
+		return fmt.Errorf(
+			"%s: unexpected status %d: %s",
+			op,
+			resp.StatusCode,
+			msg,
+		)
+	}
+
+	return nil
 }

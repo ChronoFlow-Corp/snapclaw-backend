@@ -3,6 +3,7 @@ package claws
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"simpleClaw/internal/entities"
@@ -82,6 +83,7 @@ func (s *Storage) UpdateRuntime(
 	updates := map[string]any{
 		"server_id":    serverID,
 		"container_id": containerID,
+		"updated_at":   gorm.Expr("NOW()"),
 	}
 
 	if status != "" {
@@ -98,4 +100,155 @@ func (s *Storage) UpdateRuntime(
 	}
 
 	return nil
+}
+
+func (s *Storage) GetByID(
+	ctx context.Context,
+	id uuid.UUID,
+	userID uuid.UUID,
+) (entities.Claw, error) {
+	const op = "storages.Claws.GetByID"
+
+	clDB, err := gorm.G[models.Claw](s.db).Where("id = ? AND user_id = ?", id, userID).First(ctx)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return entities.Claw{}, fmt.Errorf("%s: %w: %w", op, sql.ErrNotFound, err)
+		}
+
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	var cfg entities.ClawConfig
+	if len(clDB.Config) > 0 {
+		if err := json.Unmarshal(clDB.Config, &cfg); err != nil {
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+		}
+	}
+
+	return entities.Claw{
+		ID:          clDB.ID,
+		Name:        clDB.Name,
+		UserID:      clDB.UserID,
+		ServerID:    clDB.ServerID,
+		Status:      clDB.Status,
+		ContainerID: clDB.ContainerID,
+		Config:      cfg,
+		CreatedAt:   clDB.CreatedAt,
+		UpdatedAt:   clDB.UpdatedAt,
+	}, nil
+}
+
+func (s *Storage) GetByUserID(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]entities.Claw, error) {
+	const op = "storages.Claws.GetByUserID"
+
+	clsDB, err := gorm.G[models.Claw](s.db).Where("user_id = ?", userID).Find(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	cls := make([]entities.Claw, 0, len(clsDB))
+	for _, clDB := range clsDB {
+		var cfg entities.ClawConfig
+		if len(clDB.Config) > 0 {
+			if err := json.Unmarshal(clDB.Config, &cfg); err != nil {
+				return nil, fmt.Errorf("%s: %w", op, err)
+			}
+		}
+
+		cls = append(cls, entities.Claw{
+			ID:          clDB.ID,
+			Name:        clDB.Name,
+			UserID:      clDB.UserID,
+			ServerID:    clDB.ServerID,
+			Status:      clDB.Status,
+			ContainerID: clDB.ContainerID,
+			Config:      cfg,
+			CreatedAt:   clDB.CreatedAt,
+			UpdatedAt:   clDB.UpdatedAt,
+		})
+	}
+
+	return cls, nil
+}
+
+func (s *Storage) Update(
+	ctx context.Context,
+	cl entities.Claw,
+	channelIDs []uuid.UUID,
+) error {
+	const op = "storages.Claws.Update"
+
+	cfg, err := json.Marshal(cl.Config)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		updates := map[string]any{
+			"name":       cl.Name,
+			"config":     datatypes.JSON(cfg),
+			"updated_at": cl.UpdatedAt,
+		}
+
+		res := tx.Model(&models.Claw{}).
+			Where("id = ? AND user_id = ?", cl.ID, cl.UserID).
+			Updates(updates)
+		if err := res.Error; err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+
+		if res.RowsAffected == 0 {
+			return fmt.Errorf("%s: %w", op, sql.ErrNotFound)
+		}
+
+		if err := tx.Table("claw_channels").Where("claw_id = ?", cl.ID).Delete(&clawChannel{}).Error; err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+
+		if len(channelIDs) == 0 {
+			return nil
+		}
+
+		relations := make([]clawChannel, 0, len(channelIDs))
+		for _, chID := range channelIDs {
+			relations = append(relations, clawChannel{
+				ClawID:    cl.ID,
+				ChannelID: chID,
+			})
+		}
+
+		if err := tx.Table("claw_channels").Create(&relations).Error; err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+
+		return nil
+	})
+}
+
+func (s *Storage) Delete(
+	ctx context.Context,
+	id uuid.UUID,
+	userID uuid.UUID,
+) error {
+	const op = "storages.Claws.Delete"
+
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Table("claw_channels").Where("claw_id = ?", id).Delete(&clawChannel{}).Error; err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+
+		res := tx.Where("id = ? AND user_id = ?", id, userID).Delete(&models.Claw{})
+		if err := res.Error; err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+
+		if res.RowsAffected == 0 {
+			return fmt.Errorf("%s: %w", op, sql.ErrNotFound)
+		}
+
+		return nil
+	})
 }

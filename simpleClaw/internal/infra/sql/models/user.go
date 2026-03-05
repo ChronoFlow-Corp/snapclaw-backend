@@ -21,7 +21,8 @@ type User struct {
 }
 
 type Session struct {
-	ID        uuid.UUID `gorm:"primary_key;type:uuid;default:gen_random_uuid()"`
-	UserID    uuid.UUID
-	CreatedAt time.Time `gorm:"autoCreateTime"`
+	ID           uuid.UUID `gorm:"primary_key;type:uuid;default:gen_random_uuid()"`
+	UserID       uuid.UUID
+	RefreshToken string    `gorm:"type:text"`
+	CreatedAt    time.Time `gorm:"autoCreateTime"`
 }

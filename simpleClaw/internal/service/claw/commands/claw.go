@@ -14,3 +14,27 @@ type ApiKeyLimits struct {
 	RequestsPerMinute int
 	MonthlyBudgetUSD  float64
 }
+
+type UpdateClaw struct {
+	UserID      uuid.UUID
+	ClawID      uuid.UUID
+	Name        string
+	ChannelIDs  []uuid.UUID
+	Model       string
+	ApiKeyLimit ApiKeyLimits
+}
+
+type StartClaw struct {
+	UserID uuid.UUID
+	ClawID uuid.UUID
+}
+
+type StopClaw struct {
+	UserID uuid.UUID
+	ClawID uuid.UUID
+}
+
+type DeleteClaw struct {
+	UserID uuid.UUID
+	ClawID uuid.UUID
+}
