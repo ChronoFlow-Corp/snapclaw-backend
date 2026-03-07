@@ -2,5 +2,6 @@
 <project version="4">
   <component name="DataSourcePerFileMappings">
     <file url="file://$PROJECT_DIR$/containerManager/migrations/01_init.up.sql" value="89ffacbb-e807-4288-aacb-4c6ec11c95f2" />
+    <file url="file://$PROJECT_DIR$/containerManager/migrations/02_add_claw_id.up.sql" value="89ffacbb-e807-4288-aacb-4c6ec11c95f2" />
   </component>
 </project>

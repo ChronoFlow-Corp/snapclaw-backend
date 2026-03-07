@@ -13,7 +13,7 @@ const (
 )
 
 const (
-	ConstainerStatusStop   = "stop"
+	ContainerStatusStop    = "stop"
 	ContainerStatusRunning = "running"
 	ContainerStatusError   = "error"
 )
@@ -26,6 +26,7 @@ type ContainerOptions struct {
 type Container struct {
 	ID          uuid.UUID
 	UserID      string
+	ClawID      string
 	ContainerID string
 	Status      string
 	Port        string

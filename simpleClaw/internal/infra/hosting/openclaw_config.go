@@ -11,6 +11,7 @@ type openClawConfig struct {
 	Channels *entities.ClawChannels  `json:"channels,omitempty"`
 	Agents   *openClawAgents         `json:"agents,omitempty"`
 	Gateway  *entities.GatewayConfig `json:"gateway,omitempty"`
+	Meta     *entities.ConfigMeta    `json:"meta,omitempty"`
 }
 
 type openClawAgents struct {
@@ -44,6 +45,11 @@ func buildOpenClawConfig(cfg entities.ClawConfig) openClawConfig {
 	if !isZero(cfg.Gateway) {
 		gateway := cfg.Gateway
 		out.Gateway = &gateway
+	}
+
+	if !isZero(cfg.Meta) {
+		meta := cfg.Meta
+		out.Meta = &meta
 	}
 
 	return out

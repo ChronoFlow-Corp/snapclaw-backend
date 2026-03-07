@@ -4,13 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"reflect"
 	"time"
 
 	"simpleClaw/internal/entities"
+	"simpleClaw/internal/infra/hosting"
 	"simpleClaw/internal/service/claw/commands"
 
 	"github.com/google/uuid"
 )
+
+const openClawConfigVersion = "2026.2.16"
 
 var (
 	errUserIDRequired   = errors.New("user id is required")
@@ -24,12 +31,13 @@ var (
 )
 
 type Service struct {
-	claws    clawStorage
-	channels channelStorage
-	users    userStorage
-	servers  serverStorage
-	hosting  hostingManager
-	keys     apiKeyManager
+	claws       clawStorage
+	channels    channelStorage
+	users       userStorage
+	servers     serverStorage
+	hosting     hostingManager
+	keys        apiKeyManager
+	archivePath string
 }
 
 func NewClaw(
@@ -39,14 +47,16 @@ func NewClaw(
 	servers serverStorage,
 	hosting hostingManager,
 	keys apiKeyManager,
+	archivePath string,
 ) *Service {
 	return &Service{
-		claws:    claws,
-		channels: channels,
-		users:    users,
-		servers:  servers,
-		hosting:  hosting,
-		keys:     keys,
+		claws:       claws,
+		channels:    channels,
+		users:       users,
+		servers:     servers,
+		hosting:     hosting,
+		keys:        keys,
+		archivePath: archivePath,
 	}
 }
 
@@ -82,16 +92,21 @@ func (s *Service) Create(
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	channelIDs := deduplicateUUIDs(cm.ChannelIDs)
+	var channelIDs []uuid.UUID
 	var chs []entities.Channel
-	if len(channelIDs) > 0 {
-		chs, err = s.channels.GetByIDs(ctx, channelIDs, cm.UserID)
-		if err != nil {
-			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-		}
+	if cm.ChannelIDs != nil {
+		if len(cm.ChannelIDs) == 0 {
+			channelIDs = []uuid.UUID{}
+		} else {
+			channelIDs = deduplicateUUIDs(cm.ChannelIDs)
+			chs, err = s.channels.GetByIDs(ctx, channelIDs, cm.UserID)
+			if err != nil {
+				return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+			}
 
-		if len(chs) != len(channelIDs) {
-			return entities.Claw{}, fmt.Errorf("%s: %w", op, errChannelNotFound)
+			if len(chs) != len(channelIDs) {
+				return entities.Claw{}, fmt.Errorf("%s: %w", op, errChannelNotFound)
+			}
 		}
 	}
 
@@ -101,8 +116,8 @@ func (s *Service) Create(
 			return entities.Claw{}, fmt.Errorf("%s: %w", op, errOpenRouterClient)
 		}
 
-		rpm, monthly := normalizeLimits(cm.ApiKeyLimit)
-		apiKey, err := s.keys.Create(ctx, user.ID, cm.Name, rpm, monthly)
+		monthly := normalizeLimits(cm.ApiKeyLimit)
+		apiKey, err := s.keys.Create(ctx, user.ID, cm.Name, monthly)
 		if err != nil {
 			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 		}
@@ -255,8 +270,8 @@ func (s *Service) Update(
 
 		keyValue = user.OpenRouterApiKey
 		if keyValue == "" || user.OpenRouterKeyID == "" {
-			rpm, monthly := normalizeLimits(cm.ApiKeyLimit)
-			apiKey, err := s.keys.Create(ctx, user.ID, cm.Name, rpm, monthly)
+			monthly := normalizeLimits(cm.ApiKeyLimit)
+			apiKey, err := s.keys.Create(ctx, user.ID, cm.Name, monthly)
 			if err != nil {
 				return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 			}
@@ -275,29 +290,48 @@ func (s *Service) Update(
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	updatedCfg := applyBaseUpdates(existing.Config, primaryModel, keyValue, chs)
+	updatedCfg := applyBaseUpdates(existing.Config, primaryModel, keyValue)
+	if cm.ChannelIDs != nil {
+		updatedCfg.Channels = mergeChannelConfigs(chs)
+	}
+
+	updatedCfg.Meta = existing.Config.Meta
+	if isConfigChanged(existing.Config, updatedCfg) {
+		updatedCfg.Meta = newConfigMeta(time.Now())
+	}
 
 	existing.Name = cm.Name
 	existing.Config = updatedCfg
 	existing.UpdatedAt = time.Now()
 
+	if err := s.claws.Update(ctx, existing, channelIDs); err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	var srv *entities.Server
+	var updateErr error
 	if existing.ContainerID != "" && existing.ServerID != uuid.Nil {
 		if s.hosting == nil {
 			return entities.Claw{}, fmt.Errorf("%s: %w", op, errHostingMissing)
 		}
 
-		srv, err := s.servers.GetByID(ctx, existing.ServerID)
+		availableSrv, err := s.servers.GetByID(ctx, existing.ServerID)
 		if err != nil {
 			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 		}
 
-		if err := s.hosting.Update(ctx, existing, srv); err != nil {
-			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+		srv = &availableSrv
+		if err := s.hosting.Update(ctx, existing, availableSrv); err != nil {
+			updateErr = fmt.Errorf("%s: %w", op, err)
 		}
 	}
 
-	if err := s.claws.Update(ctx, existing, channelIDs); err != nil {
+	if err := s.syncConfigArchive(ctx, existing, srv); err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if updateErr != nil {
+		return entities.Claw{}, updateErr
 	}
 
 	return existing, nil
@@ -347,17 +381,36 @@ func (s *Service) Start(
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	if cl.ContainerID == "" {
-		return entities.Claw{}, fmt.Errorf("%s: claw container id is required", op)
+	if cl.ContainerID != "" && cl.ServerID != uuid.Nil {
+		srv, err := s.servers.GetByID(ctx, cl.ServerID)
+		if err != nil {
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+		}
+
+		if err := s.hosting.Delete(ctx, cl, srv, false); err != nil {
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+		}
 	}
 
-	if cl.ServerID == uuid.Nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errServerIDRequired)
-	}
-
-	srv, err := s.servers.GetByID(ctx, cl.ServerID)
+	srv, err := s.servers.GetAvailable(ctx)
 	if err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := s.restoreConfigArchive(ctx, cl, srv); err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	container, err := s.hosting.Create(ctx, cl, srv)
+	if err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	cl.ContainerID = container.ID
+	if container.ServerID != uuid.Nil {
+		cl.ServerID = container.ServerID
+	} else {
+		cl.ServerID = srv.ID
 	}
 
 	if err := s.hosting.Start(ctx, cl, srv); err != nil {
@@ -415,11 +468,17 @@ func (s *Service) Stop(
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	if err := s.hosting.Stop(ctx, cl, srv); err != nil {
+	if err := s.backupConfigArchive(ctx, cl, srv, true); err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := s.hosting.Delete(ctx, cl, srv, false); err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
 	cl.Status = entities.StatusStop
+	cl.ServerID = uuid.Nil
+	cl.ContainerID = ""
 
 	if err := s.claws.UpdateRuntime(
 		ctx,
@@ -467,7 +526,7 @@ func (s *Service) Delete(
 			return fmt.Errorf("%s: %w", op, err)
 		}
 
-		if err := s.hosting.Delete(ctx, cl, srv); err != nil {
+		if err := s.hosting.Delete(ctx, cl, srv, true); err != nil {
 			return fmt.Errorf("%s: %w", op, err)
 		}
 	}
@@ -477,6 +536,181 @@ func (s *Service) Delete(
 	}
 
 	return nil
+}
+
+func (s *Service) backupConfigArchive(
+	ctx context.Context,
+	cl entities.Claw,
+	server entities.Server,
+	deleteAfter bool,
+) error {
+	const op = "service.Claw.backupConfigArchive"
+
+	if s.archivePath == "" {
+		return fmt.Errorf("%s: config archive path is required", op)
+	}
+
+	if s.hosting == nil {
+		return fmt.Errorf("%s: %w", op, errHostingMissing)
+	}
+
+	body, err := s.hosting.ConfigArchive(ctx, cl, server, deleteAfter)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer body.Close()
+
+	archiveFile, err := s.archiveFilePath(cl)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(archiveFile), 0o755); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	tmp := archiveFile + ".tmp"
+
+	f, err := os.Create(tmp)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	_, err = io.Copy(f, body)
+	if err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := os.Rename(tmp, archiveFile); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Service) syncConfigArchive(
+	ctx context.Context,
+	cl entities.Claw,
+	server *entities.Server,
+) error {
+	const op = "service.Claw.syncConfigArchive"
+
+	if server != nil && cl.ContainerID != "" && cl.ServerID != uuid.Nil {
+		if err := s.backupConfigArchive(ctx, cl, *server, false); err == nil {
+			return nil
+		}
+	}
+
+	if err := s.writeArchiveFromConfig(cl); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Service) writeArchiveFromConfig(cl entities.Claw) error {
+	const op = "service.Claw.writeArchiveFromConfig"
+
+	if s.archivePath == "" {
+		return fmt.Errorf("%s: config archive path is required", op)
+	}
+
+	archiveFile, err := s.archiveFilePath(cl)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(archiveFile), 0o755); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	tmp := archiveFile + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := hosting.WriteConfigArchive(cl.Config, cl.ID.String(), f); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := os.Rename(tmp, archiveFile); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Service) restoreConfigArchive(
+	ctx context.Context,
+	cl entities.Claw,
+	server entities.Server,
+) error {
+	const op = "service.Claw.restoreConfigArchive"
+
+	if s.archivePath == "" {
+		return fmt.Errorf("%s: config archive path is required", op)
+	}
+
+	if s.hosting == nil {
+		return fmt.Errorf("%s: %w", op, errHostingMissing)
+	}
+
+	archiveFile, err := s.archiveFilePath(cl)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	f, err := os.Open(archiveFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer f.Close()
+
+	if err := s.hosting.RestoreConfigArchive(ctx, cl, server, f); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Service) archiveFilePath(cl entities.Claw) (string, error) {
+	if s.archivePath == "" {
+		return "", fmt.Errorf("config archive path is required")
+	}
+
+	return filepath.Join(s.archivePath, cl.UserID.String(), cl.ID.String()+".tar"), nil
 }
 
 func buildBaseConfig(
@@ -489,6 +723,7 @@ func buildBaseConfig(
 		Env: entities.Env{
 			OpenRouterAPIKey: apiKey,
 		},
+		Meta:     newConfigMeta(time.Now()),
 		Channels: mergeChannelConfigs(channels),
 		Agents: entities.Agents{
 			Defaults: entities.AgentDefaults{
@@ -509,7 +744,6 @@ func applyBaseUpdates(
 	existing entities.ClawConfig,
 	primaryModel string,
 	apiKey string,
-	channels []entities.Channel,
 ) entities.ClawConfig {
 	cfg := existing
 
@@ -517,7 +751,6 @@ func applyBaseUpdates(
 		cfg.Env.OpenRouterAPIKey = apiKey
 	}
 
-	cfg.Channels = mergeChannelConfigs(channels)
 	cfg.Agents.Defaults.Model.Primary = primaryModel
 
 	if cfg.Gateway.Auth.Token == "" {
@@ -533,6 +766,20 @@ func applyBaseUpdates(
 	}
 
 	return cfg
+}
+
+func newConfigMeta(now time.Time) entities.ConfigMeta {
+	return entities.ConfigMeta{
+		LastTouchedVersion: openClawConfigVersion,
+		LastTouchedAt:      now.UTC().Format("2006-01-02T15:04:05.000Z"),
+	}
+}
+
+func isConfigChanged(before, after entities.ClawConfig) bool {
+	before.Meta = entities.ConfigMeta{}
+	after.Meta = entities.ConfigMeta{}
+
+	return !reflect.DeepEqual(before, after)
 }
 
 func mergeChannelConfigs(chs []entities.Channel) entities.ClawChannels {
@@ -568,18 +815,13 @@ func mergeChannelConfigs(chs []entities.Channel) entities.ClawChannels {
 	return cfg
 }
 
-func normalizeLimits(l commands.ApiKeyLimits) (int, float64) {
-	rpm := l.RequestsPerMinute
-	if rpm <= 0 {
-		rpm = 60
-	}
-
+func normalizeLimits(l commands.ApiKeyLimits) float64 {
 	monthly := l.MonthlyBudgetUSD
 	if monthly <= 0 {
 		monthly = 50
 	}
 
-	return rpm, monthly
+	return monthly
 }
 
 func deduplicateUUIDs(ids []uuid.UUID) []uuid.UUID {

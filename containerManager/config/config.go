@@ -8,9 +8,10 @@ import (
 )
 
 type Config struct {
-	Postgres Postgres `yaml:"postgres"`
-	Http     Http     `yaml:"http"`
-	Image    Image    `yaml:"image"`
+	Postgres   Postgres   `yaml:"postgres"`
+	Http       Http       `yaml:"http"`
+	Image      Image      `yaml:"image"`
+	Migrations Migrations `yaml:"migrations"`
 }
 
 type Http struct {
@@ -26,6 +27,11 @@ type Postgres struct {
 type Image struct {
 	BuildCtx []string `yaml:"build_context"`
 	BasePath string   `yaml:"base_path"`
+}
+
+type Migrations struct {
+	Auto bool   `env:"MIGRATIONS_AUTO" env-default:"true" yaml:"auto"`
+	Path string `env:"MIGRATIONS_PATH" env-default:"migrations" yaml:"path"`
 }
 
 func MustLoadConfig() Config {

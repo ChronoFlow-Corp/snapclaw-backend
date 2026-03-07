@@ -11,8 +11,7 @@ type CreateClaw struct {
 }
 
 type ApiKeyLimits struct {
-	RequestsPerMinute int
-	MonthlyBudgetUSD  float64
+	MonthlyBudgetUSD float64
 }
 
 type UpdateClaw struct {
@@ -35,6 +34,7 @@ type StopClaw struct {
 }
 
 type DeleteClaw struct {
-	UserID uuid.UUID
-	ClawID uuid.UUID
+	UserID       uuid.UUID
+	ClawID       uuid.UUID
+	DeleteConfig bool
 }

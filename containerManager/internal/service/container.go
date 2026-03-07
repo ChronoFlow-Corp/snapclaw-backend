@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"containermanager/internal/entities"
@@ -50,7 +51,15 @@ func NewContainer(
 func (c *Container) Start(ctx context.Context, cm commands.StartClaw) error {
 	const op = "service.Container.Start"
 
-	cont, err := c.clRepo.GetByID(ctx, cm.ContainerID)
+	if cm.UserID == "" {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if cm.ClawID == "" {
+		return fmt.Errorf("%s: claw id is required", op)
+	}
+
+	cont, err := c.clRepo.GetByUserClawID(ctx, cm.UserID, cm.ClawID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -77,7 +86,15 @@ func (c *Container) Start(ctx context.Context, cm commands.StartClaw) error {
 func (c *Container) Stop(ctx context.Context, cm commands.StopClaw) error {
 	const op = "service.Container.Stop"
 
-	cDb, err := c.clRepo.GetByID(ctx, cm.ContainerID)
+	if cm.UserID == "" {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if cm.ClawID == "" {
+		return fmt.Errorf("%s: claw id is required", op)
+	}
+
+	cDb, err := c.clRepo.GetByUserClawID(ctx, cm.UserID, cm.ClawID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -91,7 +108,7 @@ func (c *Container) Stop(ctx context.Context, cm commands.StopClaw) error {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
-	cDb.Status = entities.ConstainerStatusStop
+	cDb.Status = entities.ContainerStatusStop
 
 	err = c.clRepo.Update(ctx, cDb)
 	if err != nil {
@@ -104,7 +121,15 @@ func (c *Container) Stop(ctx context.Context, cm commands.StopClaw) error {
 func (c *Container) Update(ctx context.Context, cm commands.UpdateClaw) error {
 	const op = "service.Container.Update"
 
-	cDb, err := c.clRepo.GetByID(ctx, cm.ContainerID)
+	if cm.UserID == "" {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if cm.ClawID == "" {
+		return fmt.Errorf("%s: claw id is required", op)
+	}
+
+	cDb, err := c.clRepo.GetByUserClawID(ctx, cm.UserID, cm.ClawID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -127,7 +152,15 @@ func (c *Container) Restart() error {
 func (c *Container) Delete(ctx context.Context, cm commands.DeleteClaw) error {
 	const op = "service.Container.Delete"
 
-	cDb, err := c.clRepo.GetByID(ctx, cm.ContainerID)
+	if cm.UserID == "" {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if cm.ClawID == "" {
+		return fmt.Errorf("%s: claw id is required", op)
+	}
+
+	cDb, err := c.clRepo.GetByUserClawID(ctx, cm.UserID, cm.ClawID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -148,13 +181,31 @@ func (c *Container) Delete(ctx context.Context, cm commands.DeleteClaw) error {
 
 	c.p.Release(cDb.Port)
 
+	if cm.DeleteConfig {
+		if c.cfg == nil {
+			return fmt.Errorf("%s: configurer is not configured", op)
+		}
+
+		if err := c.cfg.DeleteClawConfig(cm.UserID, cm.ClawID); err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+	}
+
 	return nil
 }
 
 func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string, error) {
 	const op = "service.Container.CreateClaw"
 
-	cDb, err := c.clRepo.GetByUserID(ctx, cm.UserID)
+	if cm.UserID == "" {
+		return "", fmt.Errorf("%s: user id is required", op)
+	}
+
+	if cm.ClawID == "" {
+		return "", fmt.Errorf("%s: claw id is required", op)
+	}
+
+	cDb, err := c.clRepo.GetByUserClawID(ctx, cm.UserID, cm.ClawID)
 	if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
@@ -202,9 +253,10 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 	err = c.clRepo.Create(ctx, entities.Container{
 		ID:          containerRecordID,
 		UserID:      cm.UserID,
+		ClawID:      cm.ClawID,
 		ContainerID: cID,
 		Port:        cPort,
-		Status:      entities.ConstainerStatusStop,
+		Status:      entities.ContainerStatusStop,
 	})
 	if err != nil {
 		_ = c.manager.Remove(ctx, cID)
@@ -216,6 +268,72 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 }
 
 func (c *Container) GetInfo() error {
+	return nil
+}
+
+func (c *Container) ConfigArchive(
+	ctx context.Context,
+	cm commands.ConfigArchive,
+	w io.Writer,
+) error {
+	const op = "service.Container.ConfigArchive"
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if cm.UserID == "" {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if cm.ClawID == "" {
+		return fmt.Errorf("%s: claw id is required", op)
+	}
+
+	if c.cfg == nil {
+		return fmt.Errorf("%s: configurer is not configured", op)
+	}
+
+	if err := c.cfg.ArchiveClawConfig(cm.UserID, cm.ClawID, w); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if cm.DeleteAfter {
+		if err := c.cfg.DeleteClawConfig(cm.UserID, cm.ClawID); err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+	}
+
+	return nil
+}
+
+func (c *Container) RestoreConfig(
+	ctx context.Context,
+	cm commands.RestoreConfig,
+	r io.Reader,
+) error {
+	const op = "service.Container.RestoreConfig"
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if cm.UserID == "" {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if cm.ClawID == "" {
+		return fmt.Errorf("%s: claw id is required", op)
+	}
+
+	if c.cfg == nil {
+		return fmt.Errorf("%s: configurer is not configured", op)
+	}
+
+	if err := c.cfg.RestoreClawConfig(cm.UserID, cm.ClawID, r); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
 	return nil
 }
 

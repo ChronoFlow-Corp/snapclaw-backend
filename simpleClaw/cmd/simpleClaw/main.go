@@ -74,7 +74,15 @@ func main() {
 
 	uService := user.NewUser(j, userStorage, channelsStorage, orManager)
 	hostingManager := hosting.NewManager()
-	clawService := claw.NewClaw(clawStorage, channelsStorage, userStorage, serversStorage, hostingManager, orManager)
+	clawService := claw.NewClaw(
+		clawStorage,
+		channelsStorage,
+		userStorage,
+		serversStorage,
+		hostingManager,
+		orManager,
+		cfg.Hosting.ContainerManager.BackupPath,
+	)
 
 	api := chi.NewRouter()
 

@@ -1,7 +1,7 @@
 package dto
 
 type UpdateClaw struct {
-	UserID      string       `json:"userId"`
-	ContainerID string       `json:"containerId"`
-	ClawConfig  []ClawConfig `json:"clawConfig"`
+	UserID     string       `json:"userId"`
+	ClawID     string       `json:"clawId"`
+	ClawConfig []ClawConfig `json:"clawConfig"`
 }

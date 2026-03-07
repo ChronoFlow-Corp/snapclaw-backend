@@ -80,8 +80,14 @@ func (s *Storage) UpdateRuntime(
 ) error {
 	const op = "storages.Claws.UpdateRuntime"
 
+	var sID *uuid.UUID
+
+	if serverID != uuid.Nil {
+		sID = &serverID
+	}
+
 	updates := map[string]any{
-		"server_id":    serverID,
+		"server_id":    sID,
 		"container_id": containerID,
 		"updated_at":   gorm.Expr("NOW()"),
 	}
@@ -204,24 +210,26 @@ func (s *Storage) Update(
 			return fmt.Errorf("%s: %w", op, sql.ErrNotFound)
 		}
 
-		if err := tx.Table("claw_channels").Where("claw_id = ?", cl.ID).Delete(&clawChannel{}).Error; err != nil {
-			return fmt.Errorf("%s: %w", op, err)
-		}
+		if channelIDs != nil {
+			if err := tx.Table("claw_channels").Where("claw_id = ?", cl.ID).Delete(&clawChannel{}).Error; err != nil {
+				return fmt.Errorf("%s: %w", op, err)
+			}
 
-		if len(channelIDs) == 0 {
-			return nil
-		}
+			if len(channelIDs) == 0 {
+				return nil
+			}
 
-		relations := make([]clawChannel, 0, len(channelIDs))
-		for _, chID := range channelIDs {
-			relations = append(relations, clawChannel{
-				ClawID:    cl.ID,
-				ChannelID: chID,
-			})
-		}
+			relations := make([]clawChannel, 0, len(channelIDs))
+			for _, chID := range channelIDs {
+				relations = append(relations, clawChannel{
+					ClawID:    cl.ID,
+					ChannelID: chID,
+				})
+			}
 
-		if err := tx.Table("claw_channels").Create(&relations).Error; err != nil {
-			return fmt.Errorf("%s: %w", op, err)
+			if err := tx.Table("claw_channels").Create(&relations).Error; err != nil {
+				return fmt.Errorf("%s: %w", op, err)
+			}
 		}
 
 		return nil

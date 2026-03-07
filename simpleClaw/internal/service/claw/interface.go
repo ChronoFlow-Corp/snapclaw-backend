@@ -2,6 +2,7 @@ package claw
 
 import (
 	"context"
+	"io"
 
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/hosting"
@@ -43,7 +44,6 @@ type apiKeyManager interface {
 		ctx context.Context,
 		userID uuid.UUID,
 		label string,
-		requestsPerMinute int,
 		monthlyBudgetUSD float64,
 	) (entities.OpenRouterKey, error)
 	ResolveModel(ctx context.Context, model string) (string, error)
@@ -53,6 +53,18 @@ type hostingManager interface {
 	Create(ctx context.Context, cl entities.Claw, server entities.Server) (hosting.Container, error)
 	Start(ctx context.Context, cl entities.Claw, server entities.Server) error
 	Stop(ctx context.Context, cl entities.Claw, server entities.Server) error
-	Delete(ctx context.Context, cl entities.Claw, server entities.Server) error
+	Delete(ctx context.Context, cl entities.Claw, server entities.Server, deleteConfig bool) error
 	Update(ctx context.Context, cl entities.Claw, server entities.Server) error
+	ConfigArchive(
+		ctx context.Context,
+		cl entities.Claw,
+		server entities.Server,
+		deleteAfter bool,
+	) (io.ReadCloser, error)
+	RestoreConfigArchive(
+		ctx context.Context,
+		cl entities.Claw,
+		server entities.Server,
+		body io.Reader,
+	) error
 }

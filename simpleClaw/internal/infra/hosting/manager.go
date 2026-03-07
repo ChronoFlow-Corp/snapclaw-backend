@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"simpleClaw/internal/entities"
 
@@ -47,6 +48,7 @@ func (m *Manager) Create(
 
 	resp, err := m.client.createClaw(ctx, server.URL, createClawRequest{
 		UserID:     cl.UserID.String(),
+		ClawID:     cl.ID.String(),
 		ClawConfig: configFiles,
 	})
 	if err != nil {
@@ -85,6 +87,7 @@ func (m *Manager) Delete(
 	ctx context.Context,
 	cl entities.Claw,
 	server entities.Server,
+	deleteConfig bool,
 ) error {
 	const op = "infra.hosting.Manager.Delete"
 
@@ -106,7 +109,7 @@ func (m *Manager) Delete(
 
 	_ = m.Stop(ctx, cl, server)
 
-	if err := m.client.deleteClaw(ctx, server.URL, cl.UserID.String(), cl.ContainerID); err != nil {
+	if err := m.client.deleteClaw(ctx, server.URL, cl.UserID.String(), cl.ID.String(), deleteConfig); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -136,7 +139,7 @@ func (m *Manager) Start(
 		return fmt.Errorf("%s: server url is required", op)
 	}
 
-	if err := m.client.startClaw(ctx, server.URL, cl.UserID.String(), cl.ContainerID); err != nil {
+	if err := m.client.startClaw(ctx, server.URL, cl.UserID.String(), cl.ID.String()); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -166,7 +169,7 @@ func (m *Manager) Stop(
 		return fmt.Errorf("%s: server url is required", op)
 	}
 
-	if err := m.client.stopClaw(ctx, server.URL, cl.UserID.String(), cl.ContainerID); err != nil {
+	if err := m.client.stopClaw(ctx, server.URL, cl.UserID.String(), cl.ID.String()); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -202,10 +205,65 @@ func (m *Manager) Update(
 	}
 
 	if err := m.client.updateClaw(ctx, server.URL, updateClawRequest{
-		UserID:      cl.UserID.String(),
-		ContainerID: cl.ContainerID,
-		ClawConfig:  configFiles,
+		UserID:     cl.UserID.String(),
+		ClawID:     cl.ID.String(),
+		ClawConfig: configFiles,
 	}); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (m *Manager) ConfigArchive(
+	ctx context.Context,
+	cl entities.Claw,
+	server entities.Server,
+	deleteAfter bool,
+) (io.ReadCloser, error) {
+	const op = "infra.hosting.Manager.ConfigArchive"
+
+	if m == nil || m.client == nil {
+		return nil, fmt.Errorf("%s: http client is not configured", op)
+	}
+
+	if cl.UserID == uuid.Nil {
+		return nil, fmt.Errorf("%s: user id is required", op)
+	}
+
+	if server.URL == "" {
+		return nil, fmt.Errorf("%s: server url is required", op)
+	}
+
+	body, err := m.client.configArchive(ctx, server.URL, cl.UserID.String(), cl.ID.String(), deleteAfter)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return body, nil
+}
+
+func (m *Manager) RestoreConfigArchive(
+	ctx context.Context,
+	cl entities.Claw,
+	server entities.Server,
+	body io.Reader,
+) error {
+	const op = "infra.hosting.Manager.RestoreConfigArchive"
+
+	if m == nil || m.client == nil {
+		return fmt.Errorf("%s: http client is not configured", op)
+	}
+
+	if cl.UserID == uuid.Nil {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if server.URL == "" {
+		return fmt.Errorf("%s: server url is required", op)
+	}
+
+	if err := m.client.restoreConfigArchive(ctx, server.URL, cl.UserID.String(), cl.ID.String(), body); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 

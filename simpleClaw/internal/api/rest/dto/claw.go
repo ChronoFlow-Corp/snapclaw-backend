@@ -8,8 +8,7 @@ type CreateClawRequest struct {
 }
 
 type ApiLimitRequest struct {
-	RequestsPerMinute int     `json:"requestsPerMinute"`
-	MonthlyBudgetUSD  float64 `json:"monthlyBudgetUsd"`
+	MonthlyBudgetUSD float64 `json:"monthlyBudgetUsd"`
 }
 
 type UpdateClawRequest struct {

@@ -164,7 +164,8 @@ func (c *client) deleteClaw(
 	ctx context.Context,
 	baseURL string,
 	userID string,
-	containerID string,
+	clawID string,
+	deleteConfig bool,
 ) error {
 	const op = "infra.hosting.client.deleteClaw"
 
@@ -184,7 +185,10 @@ func (c *client) deleteClaw(
 
 	q := u.Query()
 	q.Set("userId", userID)
-	q.Set("containerId", containerID)
+	q.Set("clawId", clawID)
+	if deleteConfig {
+		q.Set("deleteConfig", "true")
+	}
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u.String(), nil)
@@ -222,11 +226,153 @@ func (c *client) deleteClaw(
 	return nil
 }
 
+func (c *client) configArchive(
+	ctx context.Context,
+	baseURL string,
+	userID string,
+	clawID string,
+	deleteAfter bool,
+) (io.ReadCloser, error) {
+	const op = "infra.hosting.client.configArchive"
+
+	if c == nil || c.http == nil {
+		return nil, fmt.Errorf("%s: http client is not initialized", op)
+	}
+
+	rawURL := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if rawURL == "" {
+		return nil, fmt.Errorf("%s: base url is required", op)
+	}
+
+	if userID == "" {
+		return nil, fmt.Errorf("%s: user id is required", op)
+	}
+
+	if clawID == "" {
+		return nil, fmt.Errorf("%s: claw id is required", op)
+	}
+
+	u, err := url.Parse(rawURL + clawsConfigEndpoint)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	q := u.Query()
+	q.Set("userId", userID)
+	q.Set("clawId", clawID)
+	if deleteAfter {
+		q.Set("deleteAfter", "true")
+	}
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	req.Header.Set("Accept", "application/x-tar")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = resp.Status
+		}
+
+		return nil, fmt.Errorf(
+			"%s: unexpected status %d: %s",
+			op,
+			resp.StatusCode,
+			msg,
+		)
+	}
+
+	return resp.Body, nil
+}
+
+func (c *client) restoreConfigArchive(
+	ctx context.Context,
+	baseURL string,
+	userID string,
+	clawID string,
+	body io.Reader,
+) error {
+	const op = "infra.hosting.client.restoreConfigArchive"
+
+	if c == nil || c.http == nil {
+		return fmt.Errorf("%s: http client is not initialized", op)
+	}
+
+	rawURL := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if rawURL == "" {
+		return fmt.Errorf("%s: base url is required", op)
+	}
+
+	if userID == "" {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if clawID == "" {
+		return fmt.Errorf("%s: claw id is required", op)
+	}
+
+	if body == nil {
+		return fmt.Errorf("%s: body is required", op)
+	}
+
+	u, err := url.Parse(rawURL + clawsConfigEndpoint)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	q := u.Query()
+	q.Set("userId", userID)
+	q.Set("clawId", clawID)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), body)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	req.Header.Set("Content-Type", "application/x-tar")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = resp.Status
+		}
+
+		return fmt.Errorf(
+			"%s: unexpected status %d: %s",
+			op,
+			resp.StatusCode,
+			msg,
+		)
+	}
+
+	return nil
+}
+
 func (c *client) stopClaw(
 	ctx context.Context,
 	baseURL string,
 	userID string,
-	containerID string,
+	clawID string,
 ) error {
 	const op = "infra.hosting.client.stopClaw"
 
@@ -246,7 +392,7 @@ func (c *client) stopClaw(
 
 	q := u.Query()
 	q.Set("userId", userID)
-	q.Set("containerId", containerID)
+	q.Set("clawId", clawID)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -288,7 +434,7 @@ func (c *client) startClaw(
 	ctx context.Context,
 	baseURL string,
 	userID string,
-	containerID string,
+	clawID string,
 ) error {
 	const op = "infra.hosting.client.startClaw"
 
@@ -308,7 +454,7 @@ func (c *client) startClaw(
 
 	q := u.Query()
 	q.Set("userId", userID)
-	q.Set("containerId", containerID)
+	q.Set("clawId", clawID)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)

@@ -6,26 +6,39 @@ import (
 
 type CreateClaw struct {
 	UserID string
+	ClawID string
 	Config []entities.ClawConfig
 }
 
 type StartClaw struct {
-	UserID      string
-	ContainerID string
+	UserID string
+	ClawID string
 }
 
 type StopClaw struct {
-	UserID      string
-	ContainerID string
+	UserID string
+	ClawID string
 }
 
 type DeleteClaw struct {
-	UserID      string
-	ContainerID string
+	UserID       string
+	ClawID       string
+	DeleteConfig bool
 }
 
 type UpdateClaw struct {
+	UserID string
+	ClawID string
+	Config []entities.ClawConfig
+}
+
+type ConfigArchive struct {
 	UserID      string
-	ContainerID string
-	Config      []entities.ClawConfig
+	ClawID      string
+	DeleteAfter bool
+}
+
+type RestoreConfig struct {
+	UserID string
+	ClawID string
 }

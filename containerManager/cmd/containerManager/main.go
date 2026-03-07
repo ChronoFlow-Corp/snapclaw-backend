@@ -13,6 +13,7 @@ import (
 	"containermanager/config"
 	"containermanager/internal/infrastucture/pkg/configurer"
 	"containermanager/internal/infrastucture/pkg/docker"
+	"containermanager/internal/infrastucture/sql/migrations"
 	"containermanager/internal/infrastucture/sql/pgx"
 	"containermanager/internal/infrastucture/sql/storage"
 	"containermanager/internal/interface/rest"
@@ -28,6 +29,12 @@ func main() {
 	cfg := config.MustLoadConfig()
 
 	ctx := context.Background()
+
+	if cfg.Migrations.Auto {
+		if err := migrations.Run(ctx, cfg.Postgres.URL, cfg.Migrations.Path); err != nil {
+			panic(err)
+		}
+	}
 
 	pool, err := pgx.New(ctx, cfg.Postgres.URL)
 	if err != nil {

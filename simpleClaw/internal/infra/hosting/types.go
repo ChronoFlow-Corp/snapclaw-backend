@@ -7,12 +7,13 @@ import (
 )
 
 const (
-	fileTypeJSON       = "json"
-	openClawConfigName = "openclaw"
-	clawsEndpoint      = "/claws"
-	clawsStartEndpoint = "/claws/start"
-	clawsStopEndpoint  = "/claws/stop"
-	defaultHTTPTimeout = 15 * time.Second
+	fileTypeJSON        = "json"
+	openClawConfigName  = "openclaw"
+	clawsEndpoint       = "/claws"
+	clawsStartEndpoint  = "/claws/start"
+	clawsStopEndpoint   = "/claws/stop"
+	clawsConfigEndpoint = "/claws/config"
+	defaultHTTPTimeout  = 15 * time.Second
 )
 
 // Container represents the runtime container that is provisioned for a claw.
@@ -25,13 +26,14 @@ type Container struct {
 
 type createClawRequest struct {
 	UserID     string           `json:"userId"`
+	ClawID     string           `json:"clawId"`
 	ClawConfig []clawConfigFile `json:"clawConfig"`
 }
 
 type updateClawRequest struct {
-	UserID      string           `json:"userId"`
-	ContainerID string           `json:"containerId"`
-	ClawConfig  []clawConfigFile `json:"clawConfig"`
+	UserID     string           `json:"userId"`
+	ClawID     string           `json:"clawId"`
+	ClawConfig []clawConfigFile `json:"clawConfig"`
 }
 
 type clawConfigFile struct {

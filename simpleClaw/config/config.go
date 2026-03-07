@@ -20,6 +20,7 @@ type Config struct {
 	Database    database   `yaml:"database"`
 	Auth        auth       `yaml:"auth"`
 	OpenRouter  openrouter `yaml:"openrouter"`
+	Hosting     hosting    `yaml:"hosting"`
 }
 
 type http struct {
@@ -53,6 +54,16 @@ type openrouter struct {
 	BaseURL  string        `yaml:"base_url"  env-required:"true"`
 	APIToken string        `yaml:"api_token" env-required:"true"`
 	Timeout  time.Duration `yaml:"timeout"                       env-default:"15s"`
+}
+
+type hosting struct {
+	ContainerManager containerManager `yaml:"container_manager"`
+}
+
+type containerManager struct {
+	BaseURL    string        `yaml:"base_url"`
+	Timeout    time.Duration `yaml:"timeout" env-default:"15s"`
+	BackupPath string        `yaml:"backup_path" env:"CONTAINER_MANAGER_BACKUP_PATH" env-default:"/tmp/simpleclaw/config-archives"`
 }
 
 func New() Config {

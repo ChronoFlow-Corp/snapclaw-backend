@@ -93,8 +93,6 @@ func (c *Claw) Create(w http.ResponseWriter, r *http.Request) {
 
 	var limits commands.ApiKeyLimits
 	if req.ApiLimits != nil {
-		limits.RequestsPerMinute = req.ApiLimits.RequestsPerMinute
-
 		limits.MonthlyBudgetUSD = req.ApiLimits.MonthlyBudgetUSD
 	}
 
@@ -210,23 +208,25 @@ func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	channelIDs := make([]uuid.UUID, 0, len(req.ChannelIDs))
-	for _, raw := range req.ChannelIDs {
-		chID, err := uuid.Parse(raw)
-		if err != nil {
-			response.RespondError(w, response.Error{
-				Code:    http.StatusBadRequest,
-				Message: "invalid channel id: " + raw,
-			})
-			return
-		}
+	var channelIDs []uuid.UUID
+	if req.ChannelIDs != nil {
+		channelIDs = make([]uuid.UUID, 0, len(req.ChannelIDs))
+		for _, raw := range req.ChannelIDs {
+			chID, err := uuid.Parse(raw)
+			if err != nil {
+				response.RespondError(w, response.Error{
+					Code:    http.StatusBadRequest,
+					Message: "invalid channel id: " + raw,
+				})
+				return
+			}
 
-		channelIDs = append(channelIDs, chID)
+			channelIDs = append(channelIDs, chID)
+		}
 	}
 
 	var limits commands.ApiKeyLimits
 	if req.ApiLimits != nil {
-		limits.RequestsPerMinute = req.ApiLimits.RequestsPerMinute
 		limits.MonthlyBudgetUSD = req.ApiLimits.MonthlyBudgetUSD
 	}
 
@@ -275,8 +275,9 @@ func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := c.service.Delete(r.Context(), commands.DeleteClaw{
-		UserID: userID,
-		ClawID: id,
+		UserID:       userID,
+		ClawID:       id,
+		DeleteConfig: true,
 	}); err != nil {
 		code := http.StatusInternalServerError
 		if errors.Is(err, sql.ErrNotFound) {

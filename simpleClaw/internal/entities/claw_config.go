@@ -9,6 +9,7 @@ type ClawConfig struct {
 	Logging  Logging       `json:"logging,omitempty"`
 	Messages Messages      `json:"messages,omitempty"`
 	Routing  Routing       `json:"routing,omitempty"`
+	Meta     ConfigMeta    `json:"meta,omitempty"`
 	Tooling  ToolingMedia  `json:"tools,omitempty"` // см. замечание про duplicate keys ниже
 	Tools    ToolsConfig   `json:"toolsRuntime,omitempty"`
 	Session  SessionConfig `json:"session,omitempty"`
@@ -19,6 +20,11 @@ type ClawConfig struct {
 	Hooks    HooksConfig   `json:"hooks,omitempty"`
 	Gateway  GatewayConfig `json:"gateway,omitempty"`
 	Skills   SkillsConfig  `json:"skills,omitempty"`
+}
+
+type ConfigMeta struct {
+	LastTouchedVersion string `json:"lastTouchedVersion,omitempty"`
+	LastTouchedAt      string `json:"lastTouchedAt,omitempty"`
 }
 
 type Env struct {

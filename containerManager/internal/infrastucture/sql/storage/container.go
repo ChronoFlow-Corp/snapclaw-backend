@@ -20,6 +20,7 @@ const (
 const (
 	id = iota
 	userID
+	clawID
 	containerID
 	status
 	port
@@ -30,6 +31,7 @@ const (
 var columns = []string{
 	id:          "id",
 	userID:      "user_id",
+	clawID:      "claw_id",
 	containerID: "container_id",
 	status:      "status",
 	port:        "port",
@@ -51,8 +53,8 @@ func (c *Container) Create(ctx context.Context, cl entities.Container) error {
 	const op = "storage.Container.Create"
 
 	query, values, err := sq.Insert(table).
-		Columns(columns[id], columns[containerID], columns[port], columns[userID]).
-		Values(cl.ID, cl.ContainerID, cl.Port, cl.UserID).
+		Columns(columns[id], columns[containerID], columns[port], columns[userID], columns[clawID]).
+		Values(cl.ID, cl.ContainerID, cl.Port, cl.UserID, cl.ClawID).
 		ToSql()
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
@@ -69,7 +71,7 @@ func (c *Container) Create(ctx context.Context, cl entities.Container) error {
 func (c *Container) Update(ctx context.Context, cl entities.Container) error {
 	const op = "storage.Container.Update"
 
-	cDb, err := c.GetByUserID(ctx, cl.UserID)
+	cDb, err := c.GetByID(ctx, cl.ID.String())
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -115,12 +117,15 @@ func (c *Container) Remove(ctx context.Context, cl entities.Container) error {
 	return nil
 }
 
-func (c *Container) GetByUserID(ctx context.Context, uID string) (entities.Container, error) {
-	const op = "storage.Container.GetByUserID"
+func (c *Container) GetByUserClawID(ctx context.Context, uID, cID string) (entities.Container, error) {
+	const op = "storage.Container.GetByUserClawID"
 
 	query, values, err := sq.Select(columns...).
 		From(table).
-		Where(squirrel.Eq{columns[userID]: uID}).
+		Where(squirrel.Eq{
+			columns[userID]: uID,
+			columns[clawID]: cID,
+		}).
 		ToSql()
 	if err != nil {
 		return entities.Container{}, fmt.Errorf("%s: %w", op, err)
@@ -133,6 +138,7 @@ func (c *Container) GetByUserID(ctx context.Context, uID string) (entities.Conta
 	err = row.Scan(
 		&res.ID,
 		&res.UserID,
+		&res.ClawID,
 		&res.ContainerID,
 		&res.Status,
 		&res.Port,
@@ -168,6 +174,7 @@ func (c *Container) GetByID(ctx context.Context, containerID string) (entities.C
 	err = row.Scan(
 		&res.ID,
 		&res.UserID,
+		&res.ClawID,
 		&res.ContainerID,
 		&res.Status,
 		&res.Port,
@@ -207,6 +214,7 @@ func (c *Container) GetAll(ctx context.Context) ([]entities.Container, error) {
 		err = rows.Scan(
 			&row.ID,
 			&row.UserID,
+			&row.ClawID,
 			&row.ContainerID,
 			&row.Status,
 			&row.Port,

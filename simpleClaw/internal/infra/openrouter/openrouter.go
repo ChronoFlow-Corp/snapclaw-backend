@@ -80,7 +80,6 @@ func (m *ApiKeyManager) Create(
 	ctx context.Context,
 	userID uuid.UUID,
 	label string,
-	requestsPerMinute int,
 	monthlyBudgetUSD float64,
 ) (entities.OpenRouterKey, error) {
 	name := makeKeyName(userID, label)
