@@ -237,7 +237,6 @@ type Agents struct {
 type AgentDefault struct {
 	Workspace             string               `json:"workspace,omitempty"`
 	UserTimezone          string               `json:"userTimezone,omitempty"`
-	Default               bool                 `json:"default"`
 	Model                 AgentModelSelection  `json:"model,omitempty"`
 	ImageModel            AgentModelSelection  `json:"imageModel,omitempty"`
 	Models                map[string]ModelMeta `json:"models,omitempty"`
@@ -262,8 +261,8 @@ type AgentCompaction struct {
 	ReserveTokensFloor int `json:"reserveTokensFloor,omitempty"`
 	MemoryFlush        struct {
 		Enabled              bool `json:"enabled"`
-		SoftThreshHoldTokens int  `json:"softThreshHoldTokens,omitempty"`
-	}
+		SoftThreshHoldTokens int  `json:"softThresholdTokens,omitempty"`
+	} `json:"memoryFlush,omitempty"`
 }
 
 type AgentModelSelection struct {
@@ -365,7 +364,7 @@ func NewDefaultClawConfig(model string) ClawConfig {
 					ReserveTokensFloor: 20000,
 					MemoryFlush: struct {
 						Enabled              bool `json:"enabled"`
-						SoftThreshHoldTokens int  `json:"softThreshHoldTokens,omitempty"`
+						SoftThreshHoldTokens int  `json:"softThresholdTokens,omitempty"`
 					}{
 						Enabled:              true,
 						SoftThreshHoldTokens: 4000,
@@ -431,6 +430,9 @@ func NewDefaultClawConfig(model string) ClawConfig {
 }
 
 func (c *ClawConfig) AddTelegramChannel(ch *channels.TelegramConfig) {
+	if c.Channels == nil {
+		c.Channels = &ClawChannels{}
+	}
 	c.Channels.Telegram = ch
 
 	c.Channels.Telegram.Enabled = true
