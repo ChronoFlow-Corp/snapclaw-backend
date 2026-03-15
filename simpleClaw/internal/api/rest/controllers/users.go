@@ -219,6 +219,8 @@ func (u *User) UserInfo(w http.ResponseWriter, r *http.Request) {
 		ID:        user.ID.String(),
 		Name:      user.Name,
 		Email:     user.Email,
+		NickName:  user.Nickname,
+		AvatarURL: user.AvatarURL,
 		Role:      user.Role,
 		CreatedAt: user.CreatedAt,
 	})
