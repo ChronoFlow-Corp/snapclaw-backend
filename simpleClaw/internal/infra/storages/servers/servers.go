@@ -34,6 +34,7 @@ func (s *Storage) GetAvailable(ctx context.Context) (entities.Server, error) {
 		IP:        srv.Ip,
 		URL:       srv.Url,
 		Status:    srv.Status,
+		SecretKey: srv.SecretKey,
 		CreatedAt: srv.CreatedAt,
 	}, nil
 }
@@ -52,6 +53,7 @@ func (s *Storage) GetByID(ctx context.Context, id uuid.UUID) (entities.Server, e
 		IP:        srv.Ip,
 		URL:       srv.Url,
 		Status:    srv.Status,
+		SecretKey: srv.SecretKey,
 		CreatedAt: srv.CreatedAt,
 	}, nil
 }

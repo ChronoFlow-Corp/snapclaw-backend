@@ -23,6 +23,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 	"github.com/markbates/goth"
 	"github.com/markbates/goth/providers/google"
 	"gorm.io/driver/postgres"
@@ -90,7 +91,7 @@ func main() {
 
 	api := chi.NewRouter()
 
-	uController := controllers.NewUser(cfg.Environment, uService, j)
+	uController := controllers.NewUser(cfg.Environment, uService, j, cfg.Auth.Google.FrontendURL)
 	clawController := controllers.NewClaw(clawService, j)
 
 	uController.Register(api)
@@ -101,6 +102,7 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(appmw.Logger())
 	r.Use(middleware.Recoverer)
+	r.Use(cors.Handler(corsOptions(cfg)))
 
 	r.Mount("/api", api)
 
@@ -139,4 +141,30 @@ func setupLogger(env string) *slog.Logger {
 	slog.SetDefault(logger)
 
 	return logger
+}
+
+func corsOptions(cfg config.Config) cors.Options {
+	allowedOrigins := []string{cfg.Auth.Google.FrontendURL}
+	allowedOrigins = append(allowedOrigins, cfg.Http.Origins...)
+
+	return cors.Options{
+		AllowedOrigins:   allowedOrigins,
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}
+}
+
+func splitCommaList(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }

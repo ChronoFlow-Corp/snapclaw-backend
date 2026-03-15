@@ -32,6 +32,7 @@ func newClient(timeout time.Duration) *client {
 func (c *client) createClaw(
 	ctx context.Context,
 	baseURL string,
+	headers map[string]string,
 	payload createClawRequest,
 ) (createClawResponse, error) {
 	const op = "infra.hosting.client.createClaw"
@@ -62,6 +63,9 @@ func (c *client) createClaw(
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -101,6 +105,7 @@ func (c *client) createClaw(
 func (c *client) updateClaw(
 	ctx context.Context,
 	baseURL string,
+	headers map[string]string,
 	payload updateClawRequest,
 ) error {
 	const op = "infra.hosting.client.updateClaw"
@@ -131,6 +136,9 @@ func (c *client) updateClaw(
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -163,6 +171,7 @@ func (c *client) updateClaw(
 func (c *client) deleteClaw(
 	ctx context.Context,
 	baseURL string,
+	headers map[string]string,
 	userID string,
 	clawID string,
 	deleteConfig bool,
@@ -197,6 +206,9 @@ func (c *client) deleteClaw(
 	}
 
 	req.Header.Set("Accept", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -229,6 +241,7 @@ func (c *client) deleteClaw(
 func (c *client) configArchive(
 	ctx context.Context,
 	baseURL string,
+	headers map[string]string,
 	userID string,
 	clawID string,
 	deleteAfter bool,
@@ -271,6 +284,9 @@ func (c *client) configArchive(
 	}
 
 	req.Header.Set("Accept", "application/x-tar")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -300,6 +316,7 @@ func (c *client) configArchive(
 func (c *client) restoreConfigArchive(
 	ctx context.Context,
 	baseURL string,
+	headers map[string]string,
 	userID string,
 	clawID string,
 	body io.Reader,
@@ -343,6 +360,9 @@ func (c *client) restoreConfigArchive(
 	}
 
 	req.Header.Set("Content-Type", "application/x-tar")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -371,6 +391,7 @@ func (c *client) restoreConfigArchive(
 func (c *client) stopClaw(
 	ctx context.Context,
 	baseURL string,
+	headers map[string]string,
 	userID string,
 	clawID string,
 ) error {
@@ -401,6 +422,9 @@ func (c *client) stopClaw(
 	}
 
 	req.Header.Set("Accept", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -433,6 +457,7 @@ func (c *client) stopClaw(
 func (c *client) startClaw(
 	ctx context.Context,
 	baseURL string,
+	headers map[string]string,
 	userID string,
 	clawID string,
 ) error {
@@ -463,6 +488,9 @@ func (c *client) startClaw(
 	}
 
 	req.Header.Set("Accept", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -495,6 +523,7 @@ func (c *client) startClaw(
 func (c *client) approvePairing(
 	ctx context.Context,
 	baseURL string,
+	headers map[string]string,
 	userID string,
 	clawID string,
 	code string,
@@ -539,6 +568,9 @@ func (c *client) approvePairing(
 	}
 
 	req.Header.Set("Accept", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {

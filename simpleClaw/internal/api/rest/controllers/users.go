@@ -41,16 +41,18 @@ type service interface {
 	) (entities.Channel, error)
 }
 type User struct {
-	env     string
-	service service
-	j       jwt.JWT
+	env         string
+	service     service
+	frontendURL string
+	j           jwt.JWT
 }
 
-func NewUser(env string, service service, j jwt.JWT) *User {
+func NewUser(env string, service service, j jwt.JWT, frontendURL string) *User {
 	return &User{
-		env:     env,
-		service: service,
-		j:       j,
+		env:         env,
+		service:     service,
+		j:           j,
+		frontendURL: frontendURL,
 	}
 }
 
@@ -83,7 +85,7 @@ func (u *User) Login(w http.ResponseWriter, r *http.Request) {
 
 		u.setCookie(w, "/", "access_token", access.Raw, access.Claims.ExpiresAt.Time)
 		u.setCookie(w, "/", "refresh_token", refresh.Raw, refresh.Claims.ExpiresAt.Time)
-
+		http.Redirect(w, r, u.frontendURL, http.StatusFound)
 	} else {
 		gothic.BeginAuthHandler(w, r)
 	}
@@ -108,6 +110,8 @@ func (u *User) Callback(w http.ResponseWriter, r *http.Request) {
 
 	u.setCookie(w, "/", "access_token", access.Raw, access.Claims.ExpiresAt.Time)
 	u.setCookie(w, "/", "refresh_token", refresh.Raw, refresh.Claims.ExpiresAt.Time)
+
+	http.Redirect(w, r, u.frontendURL, http.StatusFound)
 }
 
 func (u *User) AddChannel(w http.ResponseWriter, r *http.Request) {

@@ -63,10 +63,10 @@ services:
       context: .
       dockerfile: simpleClaw/Dockerfile
     environment:
-      CONFIG_PATH: /config/config.yaml
+      CONFIG_PATH: /config/dev-config.yaml
       LOG_LEVEL: info
     volumes:
-      - ./deploy/simpleClaw/config.yaml:/config/config.yaml:ro
+      - ./deploy/simpleClaw/dev-config.yaml:/config/dev-config.yaml:ro
       - ./deploy/simpleClaw/keys:/config/keys:ro
       - simpleclaw_backups:/data/simpleclaw/backups
     ports:
@@ -80,14 +80,14 @@ services:
       context: .
       dockerfile: containerManager/Dockerfile
     environment:
-      CONFIG_PATH: /config/config.yaml
+      CONFIG_PATH: /config/dev-config.yaml
       LOG_LEVEL: info
     user: "0"
     volumes:
-      - ./deploy/containerManager/config.yaml:/config/config.yaml:ro
+      - ./deploy/containerManager/dev-config.yaml:/config/dev-config.yaml:ro
       - ./:/workspace:ro
       - /var/run/docker.sock:/var/run/docker.sock
-      - /Users/kodokuus/work/go/tmp/claw-configs:/Users/kodokuus/work/go/tmp/claw-configs
+      - ./claw-configs:/claw-configs
     ports:
       - "8080:8080"
     depends_on:

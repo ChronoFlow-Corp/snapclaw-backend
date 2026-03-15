@@ -48,8 +48,6 @@ func (m *Manager) Create(
 		return Container{}, fmt.Errorf("%s: server url is required", op)
 	}
 
-	fmt.Println(cl.Config.Agents, "AGENTS")
-
 	configFiles, err := buildConfigFiles(cl.Config)
 	if err != nil {
 		return Container{}, fmt.Errorf("%s: %w", op, err)
@@ -57,12 +55,17 @@ func (m *Manager) Create(
 
 	vars := buildVars(cl.Config)
 
-	resp, err := m.client.createClaw(ctx, server.URL, createClawRequest{
-		UserID:     cl.UserID.String(),
-		ClawID:     cl.ID.String(),
-		Vars:       vars,
-		ClawConfig: configFiles,
-	})
+	resp, err := m.client.createClaw(
+		ctx,
+		server.URL,
+		map[string]string{"Authorization": server.SecretKey},
+		createClawRequest{
+			UserID:     cl.UserID.String(),
+			ClawID:     cl.ID.String(),
+			Vars:       vars,
+			ClawConfig: configFiles,
+		},
+	)
 	if err != nil {
 		return Container{}, fmt.Errorf("%s: %w", op, err)
 	}
@@ -121,7 +124,14 @@ func (m *Manager) Delete(
 
 	_ = m.Stop(ctx, cl, server)
 
-	if err := m.client.deleteClaw(ctx, server.URL, cl.UserID.String(), cl.ID.String(), deleteConfig); err != nil {
+	if err := m.client.deleteClaw(
+		ctx,
+		server.URL,
+		map[string]string{"Authorization": server.SecretKey},
+		cl.UserID.String(),
+		cl.ID.String(),
+		deleteConfig,
+	); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -151,7 +161,13 @@ func (m *Manager) Start(
 		return fmt.Errorf("%s: server url is required", op)
 	}
 
-	if err := m.client.startClaw(ctx, server.URL, cl.UserID.String(), cl.ID.String()); err != nil {
+	if err := m.client.startClaw(
+		ctx,
+		server.URL,
+		map[string]string{"Authorization": server.SecretKey},
+		cl.UserID.String(),
+		cl.ID.String(),
+	); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -181,7 +197,13 @@ func (m *Manager) Stop(
 		return fmt.Errorf("%s: server url is required", op)
 	}
 
-	if err := m.client.stopClaw(ctx, server.URL, cl.UserID.String(), cl.ID.String()); err != nil {
+	if err := m.client.stopClaw(
+		ctx,
+		server.URL,
+		map[string]string{"Authorization": server.SecretKey},
+		cl.UserID.String(),
+		cl.ID.String(),
+	); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -218,12 +240,17 @@ func (m *Manager) Update(
 
 	vars := buildVars(cl.Config)
 
-	if err := m.client.updateClaw(ctx, server.URL, updateClawRequest{
-		UserID:     cl.UserID.String(),
-		ClawID:     cl.ID.String(),
-		Vars:       vars,
-		ClawConfig: configFiles,
-	}); err != nil {
+	if err := m.client.updateClaw(
+		ctx,
+		server.URL,
+		map[string]string{"Authorization": server.SecretKey},
+		updateClawRequest{
+			UserID:     cl.UserID.String(),
+			ClawID:     cl.ID.String(),
+			Vars:       vars,
+			ClawConfig: configFiles,
+		},
+	); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -253,6 +280,7 @@ func (m *Manager) ConfigArchive(
 	body, err := m.client.configArchive(
 		ctx,
 		server.URL,
+		map[string]string{"Authorization": server.SecretKey},
 		cl.UserID.String(),
 		cl.ID.String(),
 		deleteAfter,
@@ -284,7 +312,14 @@ func (m *Manager) RestoreConfigArchive(
 		return fmt.Errorf("%s: server url is required", op)
 	}
 
-	if err := m.client.restoreConfigArchive(ctx, server.URL, cl.UserID.String(), cl.ID.String(), body); err != nil {
+	if err := m.client.restoreConfigArchive(
+		ctx,
+		server.URL,
+		map[string]string{"Authorization": server.SecretKey},
+		cl.UserID.String(),
+		cl.ID.String(),
+		body,
+	); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -319,7 +354,14 @@ func (m *Manager) ApprovePairing(
 		return fmt.Errorf("%s: code is required", op)
 	}
 
-	if err := m.client.approvePairing(ctx, server.URL, cl.UserID.String(), cl.ID.String(), code); err != nil {
+	if err := m.client.approvePairing(
+		ctx,
+		server.URL,
+		map[string]string{"Authorization": server.SecretKey},
+		cl.UserID.String(),
+		cl.ID.String(),
+		code,
+	); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 

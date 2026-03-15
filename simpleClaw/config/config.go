@@ -24,7 +24,8 @@ type Config struct {
 }
 
 type http struct {
-	Addr string `yaml:"addr" env-default:":8080"`
+	Addr    string   `yaml:"addr"    env-default:":8080"`
+	Origins []string `yaml:"origins" env-default:"*"`
 }
 
 type database struct {
@@ -40,6 +41,7 @@ type google struct {
 	ClientID     string `yaml:"client_id"     env-required:"true"`
 	ClientSecret string `yaml:"client_secret" env-required:"true"`
 	CallbackURL  string `yaml:"callback_url"  env-required:"true"`
+	FrontendURL  string `yaml:"frontend_url"  env-required:"true"`
 }
 
 type Jwt struct {

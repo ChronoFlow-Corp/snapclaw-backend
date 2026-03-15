@@ -12,5 +12,6 @@ type Server struct {
 	IP        string
 	URL       string
 	Status    string
+	SecretKey string
 	CreatedAt time.Time
 }

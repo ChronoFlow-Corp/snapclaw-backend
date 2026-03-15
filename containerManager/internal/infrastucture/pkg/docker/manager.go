@@ -78,6 +78,7 @@ func (m *Manager) Build(ctx context.Context, buildCtxPaths []string) error {
 	rs, err := m.cl.ImageBuild(context.Background(), buildCtx, build.ImageBuildOptions{
 		Dockerfile: "images/openclaw/Dockerfile",
 		Context:    buildCtx,
+		Remove:     true,
 		Tags:       []string{imageName},
 	})
 	if err != nil {

@@ -57,7 +57,7 @@ func main() {
 
 	s := service.NewContainer(c, st, m)
 
-	cl := controllers.NewClaw(s)
+	cl := controllers.NewClaw(s, cfg.Http.ApiKey)
 
 	mux := chi.NewRouter()
 	mux.Use(middleware.RequestID)

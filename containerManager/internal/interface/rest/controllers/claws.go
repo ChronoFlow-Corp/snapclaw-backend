@@ -9,6 +9,8 @@ import (
 	"os"
 	"strconv"
 
+	"containermanager/internal/interface/rest/middleware"
+
 	"containermanager/internal/entities"
 	"containermanager/internal/interface/rest/controllers/dto"
 	"containermanager/internal/pkg/logctx"
@@ -19,16 +21,19 @@ import (
 )
 
 type Claw struct {
-	s *service.Container
+	s   *service.Container
+	key string
 }
 
-func NewClaw(s *service.Container) *Claw {
+func NewClaw(s *service.Container, key string) *Claw {
 	return &Claw{
-		s: s,
+		s:   s,
+		key: key,
 	}
 }
 
 func (c *Claw) Register(mux chi.Router) {
+	mux.Use(middleware.Auth(c.key))
 	mux.Post("/claws", c.CreateClaw)
 	mux.Put("/claws", c.Update)
 	mux.Get("/claws/start", c.Start)
