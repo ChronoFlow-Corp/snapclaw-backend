@@ -1,0 +1,31 @@
+environment: development
+
+http:
+  addr: ":1337"
+  origins: [ "http://localhost", "http://localhost:3000" ]
+
+database:
+  dsn: "postgresql://simpleclaw:simpleclaw@simpleclaw-db:5432/simpleclaw?sslmode=disable"
+
+auth:
+  google:
+    callback_url: "http://localhost:1337/api/auth/connect/google/callback"
+    client_id: "REPLACE_ME"
+    frontend_url: "localhost:3000"
+    client_secret: "REPLACE_ME"
+  jwt:
+    refresh_secret: "REPLACE_ME"
+    access_secret_public: /config/keys/jwtRS256.key.pub
+    access_secret_private: /config/keys/jwtRS256.key
+    access_expire: 24h
+    refresh_expire: 168h
+
+hosting:
+  container_manager:
+    timeout: 15s
+    backup_path: "/data/simpleclaw/backups"
+
+openrouter:
+  base_url: "https://openrouter.ai"
+  api_token: "REPLACE_ME"
+  timeout: 15s
