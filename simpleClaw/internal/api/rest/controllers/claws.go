@@ -3,16 +3,15 @@ package controllers
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"shared/pkg/jwt"
 	"shared/pkg/response"
+	"strings"
 
 	"simpleClaw/internal/api/rest/middleware"
 
 	"simpleClaw/internal/api/rest/dto"
 	"simpleClaw/internal/entities"
-	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/service/claw/commands"
 
 	"github.com/go-chi/chi/v5"
@@ -27,6 +26,7 @@ type clawService interface {
 	Start(ctx context.Context, cm commands.StartClaw) (entities.Claw, error)
 	Stop(ctx context.Context, cm commands.StopClaw) (entities.Claw, error)
 	Delete(ctx context.Context, cm commands.DeleteClaw) error
+	ApprovePairing(ctx context.Context, cm commands.ApprovePairing) error
 }
 
 type Claw struct {
@@ -50,6 +50,7 @@ func (c *Claw) Register(r chi.Router) {
 		r.Put("/claws/{id}", c.Update)
 		r.Post("/claws/{id}/start", c.Start)
 		r.Post("/claws/{id}/stop", c.Stop)
+		r.Post("/claws/{id}/approve", c.ApprovePairing)
 		r.Delete("/claws/{id}", c.Delete)
 	})
 }
@@ -60,7 +61,7 @@ func (c *Claw) Create(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusBadRequest,
-			Message: err.Error(),
+			Message: "invalid request body",
 		})
 
 		return
@@ -70,7 +71,7 @@ func (c *Claw) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusUnauthorized,
-			Message: "User ID should be a UUID",
+			Message: "invalid user id",
 		})
 
 		return
@@ -82,7 +83,7 @@ func (c *Claw) Create(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			response.RespondError(w, response.Error{
 				Code:    http.StatusBadRequest,
-				Message: "invalid channel id: " + raw,
+				Message: "invalid channel id",
 			})
 
 			return
@@ -104,15 +105,16 @@ func (c *Claw) Create(w http.ResponseWriter, r *http.Request) {
 		ApiKeyLimit: limits,
 	})
 	if err != nil {
-		response.RespondError(w, response.Error{
-			Code:    http.StatusInternalServerError,
-			Message: err.Error(),
-		})
+		respondServiceError(w, err)
 
 		return
 	}
 
-	response.RespondOK(w, cl)
+	response.RespondOK(w, dto.CreateClawResponse{
+		ID:     cl.ID.String(),
+		Name:   cl.Name,
+		Status: cl.Status,
+	})
 }
 
 func (c *Claw) List(w http.ResponseWriter, r *http.Request) {
@@ -127,19 +129,21 @@ func (c *Claw) List(w http.ResponseWriter, r *http.Request) {
 
 	cls, err := c.service.GetByUserID(r.Context(), userID)
 	if err != nil {
-		code := http.StatusInternalServerError
-		if errors.Is(err, sql.ErrNotFound) {
-			code = http.StatusNotFound
-		}
-
-		response.RespondError(w, response.Error{
-			Code:    code,
-			Message: err.Error(),
-		})
+		respondServiceError(w, err)
 		return
 	}
 
-	response.RespondOK(w, cls)
+	rs := make([]dto.CreateClawResponse, 0, len(cls))
+
+	for _, cl := range cls {
+		rs = append(rs, dto.CreateClawResponse{
+			ID:     cl.ID.String(),
+			Name:   cl.Name,
+			Status: cl.Status,
+		})
+	}
+
+	response.RespondOK(w, rs)
 }
 
 func (c *Claw) Get(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +152,7 @@ func (c *Claw) Get(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusBadRequest,
-			Message: "invalid claw id: " + rawID,
+			Message: "invalid claw id",
 		})
 		return
 	}
@@ -157,26 +161,22 @@ func (c *Claw) Get(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusUnauthorized,
-			Message: "User ID should be a UUID",
+			Message: "invalid user id",
 		})
 		return
 	}
 
 	cl, err := c.service.GetByID(r.Context(), id, userID)
 	if err != nil {
-		code := http.StatusInternalServerError
-		if errors.Is(err, sql.ErrNotFound) {
-			code = http.StatusNotFound
-		}
-
-		response.RespondError(w, response.Error{
-			Code:    code,
-			Message: err.Error(),
-		})
+		respondServiceError(w, err)
 		return
 	}
 
-	response.RespondOK(w, cl)
+	response.RespondOK(w, dto.CreateClawResponse{
+		ID:     cl.ID.String(),
+		Name:   cl.Name,
+		Status: cl.Status,
+	})
 }
 
 func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +194,7 @@ func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusBadRequest,
-			Message: err.Error(),
+			Message: "invalid request body",
 		})
 		return
 	}
@@ -203,7 +203,7 @@ func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusUnauthorized,
-			Message: "User ID should be a UUID",
+			Message: "invalid user id",
 		})
 		return
 	}
@@ -216,7 +216,7 @@ func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				response.RespondError(w, response.Error{
 					Code:    http.StatusBadRequest,
-					Message: "invalid channel id: " + raw,
+					Message: "invalid channel id",
 				})
 				return
 			}
@@ -239,15 +239,7 @@ func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
 		ApiKeyLimit: limits,
 	})
 	if err != nil {
-		code := http.StatusInternalServerError
-		if errors.Is(err, sql.ErrNotFound) {
-			code = http.StatusNotFound
-		}
-
-		response.RespondError(w, response.Error{
-			Code:    code,
-			Message: err.Error(),
-		})
+		respondServiceError(w, err)
 		return
 	}
 
@@ -260,7 +252,7 @@ func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusBadRequest,
-			Message: "invalid claw id: " + rawID,
+			Message: "invalid claw id",
 		})
 		return
 	}
@@ -269,7 +261,7 @@ func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusUnauthorized,
-			Message: "User ID should be a UUID",
+			Message: "invalid user id",
 		})
 		return
 	}
@@ -279,15 +271,7 @@ func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 		ClawID:       id,
 		DeleteConfig: true,
 	}); err != nil {
-		code := http.StatusInternalServerError
-		if errors.Is(err, sql.ErrNotFound) {
-			code = http.StatusNotFound
-		}
-
-		response.RespondError(w, response.Error{
-			Code:    code,
-			Message: err.Error(),
-		})
+		respondServiceError(w, err)
 		return
 	}
 
@@ -300,7 +284,7 @@ func (c *Claw) Start(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusBadRequest,
-			Message: "invalid claw id: " + rawID,
+			Message: "invalid claw id",
 		})
 
 		return
@@ -310,7 +294,7 @@ func (c *Claw) Start(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusUnauthorized,
-			Message: "User ID should be a UUID",
+			Message: "invalid user id",
 		})
 
 		return
@@ -321,16 +305,7 @@ func (c *Claw) Start(w http.ResponseWriter, r *http.Request) {
 		ClawID: id,
 	})
 	if err != nil {
-		code := http.StatusInternalServerError
-		if errors.Is(err, sql.ErrNotFound) {
-			code = http.StatusNotFound
-		}
-
-		response.RespondError(w, response.Error{
-			Code:    code,
-			Message: err.Error(),
-		})
-
+		respondServiceError(w, err)
 		return
 	}
 
@@ -343,7 +318,7 @@ func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusBadRequest,
-			Message: "invalid claw id: " + rawID,
+			Message: "invalid claw id",
 		})
 
 		return
@@ -353,7 +328,7 @@ func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusUnauthorized,
-			Message: "User ID should be a UUID",
+			Message: "invalid user id",
 		})
 
 		return
@@ -364,18 +339,63 @@ func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
 		ClawID: id,
 	})
 	if err != nil {
-		code := http.StatusInternalServerError
-		if errors.Is(err, sql.ErrNotFound) {
-			code = http.StatusNotFound
-		}
+		respondServiceError(w, err)
+		return
+	}
 
+	response.RespondOK(w, map[string]any{"stopped": true})
+}
+
+func (c *Claw) ApprovePairing(w http.ResponseWriter, r *http.Request) {
+	rawID := chi.URLParam(r, "id")
+	id, err := uuid.Parse(rawID)
+	if err != nil {
 		response.RespondError(w, response.Error{
-			Code:    code,
-			Message: err.Error(),
+			Code:    http.StatusBadRequest,
+			Message: "invalid claw id",
 		})
 
 		return
 	}
 
-	response.RespondOK(w, map[string]any{"stopped": true})
+	var req dto.ApprovePairingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid request body",
+		})
+
+		return
+	}
+
+	code := strings.TrimSpace(req.Code)
+	if code == "" {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "code is required",
+		})
+
+		return
+	}
+
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	if err := c.service.ApprovePairing(r.Context(), commands.ApprovePairing{
+		UserID: userID,
+		ClawID: id,
+		Code:   code,
+	}); err != nil {
+		respondServiceError(w, err)
+		return
+	}
+
+	response.RespondOK(w, map[string]any{"approved": true})
 }

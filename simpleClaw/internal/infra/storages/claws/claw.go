@@ -3,7 +3,6 @@ package claws
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"simpleClaw/internal/entities"
@@ -49,7 +48,7 @@ func (s *Storage) Create(
 
 	err = gorm.G[models.Claw](s.db).Create(ctx, &model)
 	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	if len(channelIDs) == 0 {
@@ -65,7 +64,7 @@ func (s *Storage) Create(
 	}
 
 	if err = s.db.WithContext(ctx).Table("claw_channels").Create(&relations).Error; err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	return nil
@@ -98,7 +97,7 @@ func (s *Storage) UpdateRuntime(
 
 	tx := s.db.WithContext(ctx).Model(&models.Claw{}).Where("id = ?", clID).Updates(updates)
 	if err := tx.Error; err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	if tx.RowsAffected == 0 {
@@ -117,11 +116,7 @@ func (s *Storage) GetByID(
 
 	clDB, err := gorm.G[models.Claw](s.db).Where("id = ? AND user_id = ?", id, userID).First(ctx)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return entities.Claw{}, fmt.Errorf("%s: %w: %w", op, sql.ErrNotFound, err)
-		}
-
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	var cfg entities.ClawConfig
@@ -152,7 +147,7 @@ func (s *Storage) GetByUserID(
 
 	clsDB, err := gorm.G[models.Claw](s.db).Where("user_id = ?", userID).Find(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", op, err)
+		return nil, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	cls := make([]entities.Claw, 0, len(clsDB))
@@ -203,7 +198,7 @@ func (s *Storage) Update(
 			Where("id = ? AND user_id = ?", cl.ID, cl.UserID).
 			Updates(updates)
 		if err := res.Error; err != nil {
-			return fmt.Errorf("%s: %w", op, err)
+			return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 		}
 
 		if res.RowsAffected == 0 {
@@ -212,7 +207,7 @@ func (s *Storage) Update(
 
 		if channelIDs != nil {
 			if err := tx.Table("claw_channels").Where("claw_id = ?", cl.ID).Delete(&clawChannel{}).Error; err != nil {
-				return fmt.Errorf("%s: %w", op, err)
+				return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 			}
 
 			if len(channelIDs) == 0 {
@@ -228,7 +223,7 @@ func (s *Storage) Update(
 			}
 
 			if err := tx.Table("claw_channels").Create(&relations).Error; err != nil {
-				return fmt.Errorf("%s: %w", op, err)
+				return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 			}
 		}
 
@@ -245,12 +240,12 @@ func (s *Storage) Delete(
 
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Table("claw_channels").Where("claw_id = ?", id).Delete(&clawChannel{}).Error; err != nil {
-			return fmt.Errorf("%s: %w", op, err)
+			return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 		}
 
 		res := tx.Where("id = ? AND user_id = ?", id, userID).Delete(&models.Claw{})
 		if err := res.Error; err != nil {
-			return fmt.Errorf("%s: %w", op, err)
+			return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 		}
 
 		if res.RowsAffected == 0 {

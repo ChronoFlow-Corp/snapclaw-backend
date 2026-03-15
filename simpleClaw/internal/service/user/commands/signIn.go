@@ -1,6 +1,8 @@
 package commands
 
 type SignIn struct {
-	Name  string
-	Email string
+	NickName  string
+	Name      string
+	Email     string
+	AvatarURL string
 }

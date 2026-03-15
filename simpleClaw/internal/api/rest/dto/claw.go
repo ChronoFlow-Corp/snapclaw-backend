@@ -17,3 +17,13 @@ type UpdateClawRequest struct {
 	ChannelIDs []string         `json:"channelIds"`
 	ApiLimits  *ApiLimitRequest `json:"apiLimits,omitempty"`
 }
+
+type ApprovePairingRequest struct {
+	Code string `json:"code"`
+}
+
+type CreateClawResponse struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}

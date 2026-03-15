@@ -85,6 +85,13 @@ func AuthJwt(j jwtProvider) func(next http.Handler) http.Handler {
 
 			ctx := context.WithValue(r.Context(), entities.UserIDCtxKey{}, token.Claims.UserID)
 			ctx = context.WithValue(ctx, entities.SessionIDCtxKey{}, token.Claims.SessionID)
+
+			logger := slctx.Logger(ctx).With(
+				slog.String("user_id", token.Claims.UserID.String()),
+				slog.String("session_id", token.Claims.SessionID.String()),
+			)
+			ctx = slctx.WithLogger(ctx, logger)
+
 			r = r.WithContext(ctx)
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			next.ServeHTTP(ww, r)

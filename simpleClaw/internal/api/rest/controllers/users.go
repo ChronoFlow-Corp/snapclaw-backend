@@ -71,15 +71,13 @@ func (u *User) Register(r chi.Router) {
 func (u *User) Login(w http.ResponseWriter, r *http.Request) {
 	if gothUser, err := gothic.CompleteUserAuth(w, r); err == nil {
 		access, refresh, err := u.service.SignIn(r.Context(), commands.SignIn{
-			Name:  gothUser.NickName,
-			Email: gothUser.Email,
+			NickName:  gothUser.NickName,
+			AvatarURL: gothUser.AvatarURL,
+			Name:      gothUser.FirstName,
+			Email:     gothUser.Email,
 		})
 		if err != nil {
-			response.RespondError(w, response.Error{
-				Code:    http.StatusUnauthorized,
-				Message: err.Error(),
-			})
-
+			respondServiceError(w, err)
 			return
 		}
 
@@ -98,15 +96,13 @@ func (u *User) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	access, refresh, err := u.service.SignIn(r.Context(), commands.SignIn{
-		Name:  gothUser.NickName,
-		Email: gothUser.Email,
+		NickName:  gothUser.NickName,
+		AvatarURL: gothUser.AvatarURL,
+		Name:      gothUser.FirstName,
+		Email:     gothUser.Email,
 	})
 	if err != nil {
-		response.RespondError(w, response.Error{
-			Code:    http.StatusUnauthorized,
-			Message: err.Error(),
-		})
-
+		respondServiceError(w, err)
 		return
 	}
 
@@ -121,7 +117,7 @@ func (u *User) AddChannel(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusBadRequest,
-			Message: err.Error(),
+			Message: "invalid request body",
 		})
 
 		return
@@ -131,7 +127,7 @@ func (u *User) AddChannel(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusUnauthorized,
-			Message: "User ID should be a UUID",
+			Message: "invalid user id",
 		})
 
 		return
@@ -147,10 +143,8 @@ func (u *User) AddChannel(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 	if err != nil {
-		response.RespondError(w, response.Error{
-			Code:    http.StatusInternalServerError,
-			Message: err.Error(),
-		})
+		respondServiceError(w, err)
+		return
 	}
 
 	response.RespondOK(w, ch)
@@ -186,7 +180,7 @@ func (u *User) Refresh(w http.ResponseWriter, r *http.Request) {
 			message = "Refresh token invalid"
 		default:
 			code = http.StatusInternalServerError
-			message = err.Error()
+			message = "internal error"
 		}
 
 		response.RespondError(w, response.Error{Code: code, Message: message})
@@ -205,7 +199,7 @@ func (u *User) UserInfo(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusUnauthorized,
-			Message: "User ID should be a UUID",
+			Message: "invalid user id",
 		})
 
 		return
@@ -213,15 +207,7 @@ func (u *User) UserInfo(w http.ResponseWriter, r *http.Request) {
 
 	user, err := u.service.UserInfo(r.Context(), userID)
 	if err != nil {
-		code := http.StatusInternalServerError
-		if errors.Is(err, sql.ErrNotFound) {
-			code = http.StatusNotFound
-		}
-
-		response.RespondError(w, response.Error{
-			Code:    code,
-			Message: err.Error(),
-		})
+		respondServiceError(w, err)
 		return
 	}
 

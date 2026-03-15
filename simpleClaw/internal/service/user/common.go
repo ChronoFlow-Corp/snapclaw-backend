@@ -19,6 +19,12 @@ func addTgCfg(cm commands.TelegramChannel) channels.TelegramConfig {
 			allowFrom = append(allowFrom, "*")
 		}
 		tgCh.AllowFrom = allowFrom
+		tgCh.GroupPolicy = "allowlist"
+		tgCh.Groups = map[string]interface{}{"*": struct {
+			RequireMention bool `json:"requireMention"`
+		}{
+			RequireMention: true,
+		}}
 	case channels.DmAllowList:
 		tgCh.DmPolicy = channels.DmAllowList
 		tgCh.AllowFrom = normalizeAllowFrom(cm.AllowFrom)

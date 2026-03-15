@@ -10,6 +10,7 @@ const (
 	fileTypeJSON        = "json"
 	openClawConfigName  = "openclaw"
 	clawsEndpoint       = "/claws"
+	approveEndpoint     = "/approve"
 	clawsStartEndpoint  = "/claws/start"
 	clawsStopEndpoint   = "/claws/stop"
 	clawsConfigEndpoint = "/claws/config"
@@ -27,12 +28,14 @@ type Container struct {
 type createClawRequest struct {
 	UserID     string           `json:"userId"`
 	ClawID     string           `json:"clawId"`
+	Vars       []string         `json:"vars,omitempty"`
 	ClawConfig []clawConfigFile `json:"clawConfig"`
 }
 
 type updateClawRequest struct {
 	UserID     string           `json:"userId"`
 	ClawID     string           `json:"clawId"`
+	Vars       []string         `json:"vars,omitempty"`
 	ClawConfig []clawConfigFile `json:"clawConfig"`
 }
 

@@ -2,7 +2,6 @@ package servers
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"simpleClaw/internal/entities"
@@ -26,11 +25,7 @@ func (s *Storage) GetAvailable(ctx context.Context) (entities.Server, error) {
 
 	srv, err := gorm.G[models.Server](s.db).Order("created_at ASC").First(ctx)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return entities.Server{}, fmt.Errorf("%s: %w", op, sql.ErrNotFound)
-		}
-
-		return entities.Server{}, fmt.Errorf("%s: %w", op, err)
+		return entities.Server{}, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	return entities.Server{
@@ -48,11 +43,7 @@ func (s *Storage) GetByID(ctx context.Context, id uuid.UUID) (entities.Server, e
 
 	srv, err := gorm.G[models.Server](s.db).Where("id = ?", id).First(ctx)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return entities.Server{}, fmt.Errorf("%s: %w", op, sql.ErrNotFound)
-		}
-
-		return entities.Server{}, fmt.Errorf("%s: %w", op, err)
+		return entities.Server{}, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	return entities.Server{

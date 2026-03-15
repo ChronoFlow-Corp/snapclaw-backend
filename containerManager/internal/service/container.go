@@ -235,14 +235,15 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 		HostPort:      cPort,
 		HostIP:        "127.0.0.1",
 		ContainerPort: cPort,
-		Volumes:       []string{fmt.Sprintf("%s:/app/.openclaw:rw", cfgPath)},
-		Env: []string{
-			"OPENCLAW_HOME=/app/.openclaw",
+		Volumes:       []string{fmt.Sprintf("%s:/app/:rw", cfgPath)},
+		Env: append([]string{
+			"OPENCLAW_HOME=/app/",
 			"NODE_ENV=production",
-			"OPENCLAW_GATEWAY_BIND=lan",
+			"OPENCLAW_GATEWAY_BIND=loopback",
 			fmt.Sprintf("OPENCLAW_GATEWAY_PORT=%s", cPort),
-			"OPENCLAW_CONFIG_PATH=/app/.openclaw/openclaw.json",
-		},
+			"OPENCLAW_CONFIG_PATH=/app/openclaw.json",
+			"NODE_OPTIONS=--max-old-space-size=3072",
+		}, cm.Vars...),
 	})
 	if err != nil {
 		releasePort()
@@ -331,6 +332,17 @@ func (c *Container) RestoreConfig(
 	}
 
 	if err := c.cfg.RestoreClawConfig(cm.UserID, cm.ClawID, r); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (c *Container) Approve(clawID, userID, code string) error {
+	const op = "container.Manager.Approve"
+
+	err := c.cfg.ApprovePair(userID, clawID, code)
+	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 

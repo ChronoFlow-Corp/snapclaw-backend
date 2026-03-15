@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"gorm.io/datatypes"
 )
 
@@ -12,10 +13,11 @@ type Claw struct {
 	Name        string         `gorm:"type:varchar(255);not null"`
 	Config      datatypes.JSON `gorm:"type:jsonb"`
 	UserID      uuid.UUID
-	Status      string `gorm:"type:varchar(255);not null"`
 	ServerID    uuid.UUID
-	ContainerID string     `gorm:"type:varchar(255)"`
-	Channels    []*Channel `gorm:"many2many:claw_channels;"`
-	CreatedAt   time.Time  `gorm:"autoCreateTime"`
-	UpdatedAt   time.Time  `gorm:"autoUpdateTime"`
+	Status      string         `gorm:"type:varchar(255);not null"`
+	ContainerID string         `gorm:"type:varchar(255)"`
+	Vars        pq.StringArray `gorm:"type:text[]"`
+	Channels    []*Channel     `gorm:"many2many:claw_channels;"`
+	CreatedAt   time.Time      `gorm:"autoCreateTime"`
+	UpdatedAt   time.Time      `gorm:"autoUpdateTime"`
 }

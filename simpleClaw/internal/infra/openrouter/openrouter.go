@@ -2,7 +2,6 @@ package openrouter
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -29,11 +28,6 @@ type Options struct {
 	Referer    string
 	Title      string
 }
-
-var (
-	ErrMissingBaseURL  = errors.New("openrouter base url is required")
-	ErrMissingAPIToken = errors.New("openrouter api token is required")
-)
 
 // NewApiKeyManager constructs a manager backed by github.com/revrost/go-openrouter.
 func NewApiKeyManager(opts Options) (*ApiKeyManager, error) {
@@ -93,7 +87,7 @@ func (m *ApiKeyManager) Create(
 
 	resp, err := m.client.CreateAPIKey(ctx, req)
 	if err != nil {
-		return entities.OpenRouterKey{}, err
+		return entities.OpenRouterKey{}, wrapError(err)
 	}
 
 	return entities.OpenRouterKey{
@@ -106,7 +100,6 @@ func (m *ApiKeyManager) Create(
 func (m *ApiKeyManager) UpdateLimits(
 	ctx context.Context,
 	keyID string,
-	_ int,
 	monthlyBudgetUSD float64,
 ) error {
 	limit := normalizeBudget(monthlyBudgetUSD)
@@ -116,13 +109,13 @@ func (m *ApiKeyManager) UpdateLimits(
 	}
 
 	_, err := m.client.UpdateAPIKey(ctx, keyID, req)
-	return err
+	return wrapError(err)
 }
 
 // Delete removes the key from OpenRouter.
 func (m *ApiKeyManager) Delete(ctx context.Context, keyID string) error {
 	_, err := m.client.DeleteAPIKey(ctx, keyID)
-	return err
+	return wrapError(err)
 }
 
 // ResolveModel returns the fully-qualified model slug for OpenRouter agents config.
@@ -131,12 +124,12 @@ func (m *ApiKeyManager) ResolveModel(ctx context.Context, model string) (string,
 
 	slug := normalizeModelSlug(model)
 	if slug == "" {
-		return "", fmt.Errorf("model slug is required")
+		return "", ErrModelRequired
 	}
 
 	models, err := m.client.ListModels(ctx)
 	if err != nil {
-		return "", err
+		return "", wrapError(err)
 	}
 
 	for _, mdl := range models {
@@ -145,7 +138,7 @@ func (m *ApiKeyManager) ResolveModel(ctx context.Context, model string) (string,
 		}
 	}
 
-	return "", fmt.Errorf("model %s not found", model)
+	return "", fmt.Errorf("%w: %s", ErrModelNotFound, model)
 }
 
 func normalizeBaseURL(base string) string {

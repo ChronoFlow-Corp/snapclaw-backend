@@ -9,6 +9,8 @@ import (
 type User struct {
 	ID               uuid.UUID `gorm:"primary_key;type:uuid;default:gen_random_uuid()"`
 	Name             string    `gorm:"type:varchar(255)"`
+	NickName         string    `gorm:"type:varchar(255)"`
+	AvatarURL        string    `gorm:"type:varchar(255)"`
 	Email            string    `gorm:"type:varchar(255);unique"`
 	Role             string    `gorm:"type:varchar(16)"`
 	OpenRouterKeyID  string    `gorm:"type:varchar(128)"`

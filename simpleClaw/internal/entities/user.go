@@ -19,6 +19,8 @@ type (
 type User struct {
 	ID               uuid.UUID
 	Name             string
+	Nickname         string
+	AvatarURL        string
 	Email            string
 	OpenRouterKeyID  string
 	OpenRouterApiKey string

@@ -1,0 +1,103 @@
+name: snapclaw
+
+services:
+  loki:
+    image: grafana/loki:2.9.4
+    command: -config.file=/etc/loki/config.yaml
+    volumes:
+      - ./deploy/loki/config.yaml:/etc/loki/config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+
+  grafana:
+    image: grafana/grafana:10.4.3
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - loki
+
+  promtail:
+    image: grafana/promtail:2.9.4
+    command: -config.file=/etc/promtail/config.yaml
+    volumes:
+      - ./deploy/promtail/config.yaml:/etc/promtail/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - promtail_positions:/tmp
+    depends_on:
+      - loki
+
+  simpleclaw-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: simpleclaw
+      POSTGRES_PASSWORD: simpleclaw
+      POSTGRES_DB: simpleclaw
+    volumes:
+      - simpleclaw_db:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+
+  containermanager-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: containermanager
+      POSTGRES_PASSWORD: containermanager
+      POSTGRES_DB: containermanager
+    volumes:
+      - containermanager_db:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+
+  simpleclaw:
+    user: "0"
+    build:
+      context: .
+      dockerfile: simpleClaw/Dockerfile
+    environment:
+      CONFIG_PATH: /config/config.yaml
+      LOG_LEVEL: info
+    volumes:
+      - ./deploy/simpleClaw/config.yaml:/config/config.yaml:ro
+      - ./deploy/simpleClaw/keys:/config/keys:ro
+      - simpleclaw_backups:/data/simpleclaw/backups
+    ports:
+      - "1337:1337"
+    depends_on:
+      - simpleclaw-db
+      - containermanager
+
+  containermanager:
+    build:
+      context: .
+      dockerfile: containerManager/Dockerfile
+    environment:
+      CONFIG_PATH: /config/config.yaml
+      LOG_LEVEL: info
+    user: "0"
+    volumes:
+      - ./deploy/containerManager/config.yaml:/config/config.yaml:ro
+      - ./:/workspace:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /Users/kodokuus/work/go/tmp/claw-configs:/Users/kodokuus/work/go/tmp/claw-configs
+    ports:
+      - "8080:8080"
+    depends_on:
+      - containermanager-db
+
+volumes:
+  grafana_data:
+  promtail_positions:
+  loki_data:
+  simpleclaw_db:
+  containermanager_db:
+  claw_configs:
+  simpleclaw_backups:

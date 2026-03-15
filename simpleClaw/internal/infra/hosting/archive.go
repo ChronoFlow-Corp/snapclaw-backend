@@ -24,7 +24,7 @@ func WriteConfigArchive(cfg entities.ClawConfig, clawID string, w io.Writer) err
 		return fmt.Errorf("%s: claw id is required", op)
 	}
 
-	data, err := json.Marshal(buildOpenClawConfig(cfg))
+	data, err := json.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}

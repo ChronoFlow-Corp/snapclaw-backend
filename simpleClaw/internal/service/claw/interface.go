@@ -55,6 +55,7 @@ type hostingManager interface {
 	Stop(ctx context.Context, cl entities.Claw, server entities.Server) error
 	Delete(ctx context.Context, cl entities.Claw, server entities.Server, deleteConfig bool) error
 	Update(ctx context.Context, cl entities.Claw, server entities.Server) error
+	ApprovePairing(ctx context.Context, cl entities.Claw, server entities.Server, code string) error
 	ConfigArchive(
 		ctx context.Context,
 		cl entities.Claw,

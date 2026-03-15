@@ -3,6 +3,7 @@ package dto
 type CreateClaw struct {
 	UserID     string       `json:"userId"`
 	ClawID     string       `json:"clawId"`
+	Vars       []string     `json:"vars"`
 	ClawConfig []ClawConfig `json:"clawConfig"`
 }
 

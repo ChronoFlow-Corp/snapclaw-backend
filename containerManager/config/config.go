@@ -18,6 +18,7 @@ type Http struct {
 	Addr         string `env:"HTTP_ADDR"          env-default:"localhost:8080" yaml:"addr"`
 	ReadTimeout  int    `env:"HTTP_READ_TIMEOUT"  env-default:"5"              yaml:"read_timeout"`
 	WriteTimeout int    `env:"HTTP_WRITE_TIMEOUT" env-default:"10"             yaml:"write_timeout"`
+	ApiKey       string `env:"API_KEY"                                         yaml:"api_key"`
 }
 
 type Postgres struct {
@@ -30,7 +31,7 @@ type Image struct {
 }
 
 type Migrations struct {
-	Auto bool   `env:"MIGRATIONS_AUTO" env-default:"true" yaml:"auto"`
+	Auto bool   `env:"MIGRATIONS_AUTO" env-default:"true"       yaml:"auto"`
 	Path string `env:"MIGRATIONS_PATH" env-default:"migrations" yaml:"path"`
 }
 

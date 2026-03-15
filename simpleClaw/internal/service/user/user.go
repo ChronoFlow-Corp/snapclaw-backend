@@ -45,7 +45,7 @@ func (s *Service) SignIn(
 	if errors.Is(err, sql.ErrNotFound) {
 		u = entities.NewUser(cm.Name, cm.Email, entities.UserRole)
 
-		key, keyErr := s.keys.Create(ctx, u.ID, u.Name, 0, 0)
+		key, keyErr := s.keys.Create(ctx, u.ID, u.Name, 0)
 		if keyErr != nil {
 			return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, keyErr)
 		}
@@ -146,8 +146,7 @@ func (s *Service) AddChannel(
 			cm.UserID,
 		)
 	default:
-		// TODO: err type
-		return entities.Channel{}, errors.New("channel is not supported")
+		return entities.Channel{}, ErrChannelUnsupported
 	}
 
 	err := s.chSt.Create(ctx, ch)
@@ -184,8 +183,7 @@ func (s *Service) UpdateChannel(ctx context.Context, cm commands.UpdateChannel) 
 			cm.UserID,
 		)
 	default:
-		// TODO: err type
-		return errors.New("channel is not supported")
+		return ErrChannelUnsupported
 	}
 
 	ch.ID = cm.ChannelID

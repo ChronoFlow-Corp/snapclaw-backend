@@ -1,25 +1,32 @@
 package entities
 
-import "simpleClaw/internal/entities/channels"
+import (
+	"path"
+
+	"simpleClaw/internal/entities/channels"
+)
+
+const (
+	workspacePrefix = "./workspace/"
+	agentDirPrefix  = "./agent/"
+)
 
 type ClawConfig struct {
-	Env      Env           `json:"env,omitempty"`
-	Auth     Auth          `json:"auth,omitempty"`
-	Identity Identity      `json:"identity,omitempty"`
-	Logging  Logging       `json:"logging,omitempty"`
-	Messages Messages      `json:"messages,omitempty"`
-	Routing  Routing       `json:"routing,omitempty"`
-	Meta     ConfigMeta    `json:"meta,omitempty"`
-	Tooling  ToolingMedia  `json:"tools,omitempty"` // см. замечание про duplicate keys ниже
-	Tools    ToolsConfig   `json:"toolsRuntime,omitempty"`
-	Session  SessionConfig `json:"session,omitempty"`
-	Channels ClawChannels  `json:"channels,omitempty"`
-	Agents   Agents        `json:"agents,omitempty"`
-	Models   ModelsConfig  `json:"models,omitempty"`
-	Cron     CronConfig    `json:"cron,omitempty"`
-	Hooks    HooksConfig   `json:"hooks,omitempty"`
-	Gateway  GatewayConfig `json:"gateway,omitempty"`
-	Skills   SkillsConfig  `json:"skills,omitempty"`
+	Env      Env            `json:"env,omitempty"`
+	Auth     *Auth          `json:"auth,omitempty"`
+	Logging  *Logging       `json:"logging,omitempty"`
+	Messages *Messages      `json:"messages,omitempty"`
+	Meta     *ConfigMeta    `json:"meta,omitempty"`
+	Tooling  *ToolingMedia  `json:"tools,omitempty"` // см. замечание про duplicate keys ниже
+	Tools    *ToolsConfig   `json:"toolsRuntime,omitempty"`
+	Session  *SessionConfig `json:"session,omitempty"`
+	Channels *ClawChannels  `json:"channels,omitempty"`
+	Agents   Agents         `json:"agents,omitempty"`
+	Models   *ModelsConfig  `json:"models,omitempty"`
+	Cron     *CronConfig    `json:"cron,omitempty"`
+	Hooks    *HooksConfig   `json:"hooks,omitempty"`
+	Gateway  *GatewayConfig `json:"gateway,omitempty"`
+	Skills   *SkillsConfig  `json:"skills,omitempty"`
 }
 
 type ConfigMeta struct {
@@ -49,12 +56,6 @@ type AuthProfile struct {
 	// secrets live elsewhere (auth-profiles.json)
 }
 
-type Identity struct {
-	Name  string `json:"name,omitempty"`
-	Theme string `json:"theme,omitempty"`
-	Emoji string `json:"emoji,omitempty"`
-}
-
 type Logging struct {
 	Level           string `json:"level,omitempty"`
 	File            string `json:"file,omitempty"`
@@ -68,16 +69,6 @@ type Messages struct {
 	ResponsePrefix   string `json:"responsePrefix,omitempty"`
 	AckReaction      string `json:"ackReaction,omitempty"`
 	AckReactionScope string `json:"ackReactionScope,omitempty"`
-}
-
-type Routing struct {
-	GroupChat GroupChatConfig `json:"groupChat,omitempty"`
-	Queue     QueueConfig     `json:"queue,omitempty"`
-}
-
-type GroupChatConfig struct {
-	MentionPatterns []string `json:"mentionPatterns,omitempty"`
-	HistoryLimit    int      `json:"historyLimit,omitempty"`
 }
 
 type QueueConfig struct {
@@ -125,7 +116,6 @@ type ToolsConfig struct {
 	Exec     ToolsExec     `json:"exec,omitempty"`
 	Elevated ToolsElevated `json:"elevated,omitempty"`
 }
-
 type ToolsExec struct {
 	BackgroundMs int `json:"backgroundMs,omitempty"`
 	TimeoutSec   int `json:"timeoutSec,omitempty"`
@@ -240,17 +230,22 @@ type SlackSlashCommand struct {
 }
 
 type Agents struct {
-	Defaults AgentDefaults `json:"defaults,omitempty"`
+	Defaults *AgentDefault     `json:"defaults,omitempty"`
+	List     []AgentListConfig `json:"list,omitempty"`
 }
 
-type AgentDefaults struct {
+type AgentDefault struct {
 	Workspace             string               `json:"workspace,omitempty"`
 	UserTimezone          string               `json:"userTimezone,omitempty"`
+	Default               bool                 `json:"default"`
 	Model                 AgentModelSelection  `json:"model,omitempty"`
 	ImageModel            AgentModelSelection  `json:"imageModel,omitempty"`
 	Models                map[string]ModelMeta `json:"models,omitempty"`
 	ThinkingDefault       string               `json:"thinkingDefault,omitempty"`
 	VerboseDefault        string               `json:"verboseDefault,omitempty"`
+	SkipBootstrap         bool                 `json:"skipBootstrap,omitempty"`
+	Compaction            AgentCompaction      `json:"compaction,omitempty"`
+	SubAgents             Subagents            `json:"subagents,omitempty"`
 	ElevatedDefault       string               `json:"elevatedDefault,omitempty"`
 	BlockStreamingDefault string               `json:"blockStreamingDefault,omitempty"`
 	TimeoutSeconds        int                  `json:"timeoutSeconds,omitempty"`
@@ -261,6 +256,14 @@ type AgentDefaults struct {
 	MemorySearch          MemorySearchConfig   `json:"memorySearch,omitempty"`
 	Sandbox               SandboxConfig        `json:"sandbox,omitempty"`
 	// и т.д.
+}
+
+type AgentCompaction struct {
+	ReserveTokensFloor int `json:"reserveTokensFloor,omitempty"`
+	MemoryFlush        struct {
+		Enabled              bool `json:"enabled"`
+		SoftThreshHoldTokens int  `json:"softThreshHoldTokens,omitempty"`
+	}
 }
 
 type AgentModelSelection struct {
@@ -289,53 +292,6 @@ type MemorySearchConfig struct {
 	ExtraPaths []string          `json:"extraPaths,omitempty"`
 }
 
-type SandboxConfig struct {
-	Mode          string         `json:"mode,omitempty"`
-	PerSession    bool           `json:"perSession,omitempty"`
-	WorkspaceRoot string         `json:"workspaceRoot,omitempty"`
-	Docker        SandboxDocker  `json:"docker,omitempty"`
-	Browser       SandboxBrowser `json:"browser,omitempty"`
-}
-
-type SandboxDocker struct {
-	Image        string   `json:"image,omitempty"`
-	Workdir      string   `json:"workdir,omitempty"`
-	ReadOnlyRoot bool     `json:"readOnlyRoot,omitempty"`
-	Tmpfs        []string `json:"tmpfs,omitempty"`
-	Network      string   `json:"network,omitempty"`
-	User         string   `json:"user,omitempty"`
-}
-
-type SandboxBrowser struct {
-	Enabled bool `json:"enabled"`
-}
-
-type ModelsConfig struct {
-	Mode      string                         `json:"mode,omitempty"`
-	Providers map[string]ModelProviderConfig `json:"providers,omitempty"`
-}
-
-type ModelProviderConfig struct {
-	BaseURL    string            `json:"baseUrl,omitempty"`
-	APIKey     string            `json:"apiKey,omitempty"`
-	API        string            `json:"api,omitempty"`
-	AuthHeader bool              `json:"authHeader,omitempty"`
-	Headers    map[string]string `json:"headers,omitempty"`
-	Models     []ProviderModel   `json:"models,omitempty"`
-}
-
-type ProviderModel struct {
-	ID            string             `json:"id,omitempty"`
-	Name          string             `json:"name,omitempty"`
-	API           string             `json:"api,omitempty"`
-	Reasoning     bool               `json:"reasoning,omitempty"`
-	Input         []string           `json:"input,omitempty"`
-	Cost          map[string]float64 `json:"cost,omitempty"`
-	ContextWindow int                `json:"contextWindow,omitempty"`
-	MaxTokens     int                `json:"maxTokens,omitempty"`
-}
-
-// ---------------- Cron ----------------
 type CronConfig struct {
 	Enabled           bool         `json:"enabled"`
 	Store             string       `json:"store,omitempty"`
@@ -345,108 +301,137 @@ type CronConfig struct {
 }
 
 type RunLogConfig struct {
-	MaxBytes  int `json:"maxBytes,omitempty"`
-	KeepLines int `json:"keepLines,omitempty"`
+	MaxBytes  string `json:"maxBytes,omitempty"`
+	KeepLines int    `json:"keepLines,omitempty"`
 }
 
-// ---------------- Hooks ----------------
-type HooksConfig struct {
-	Enabled       bool            `json:"enabled"`
-	Path          string          `json:"path,omitempty"`
-	Token         string          `json:"token,omitempty"`
-	Presets       []string        `json:"presets,omitempty"`
-	TransformsDir string          `json:"transformsDir,omitempty"`
-	Mappings      []HookMapping   `json:"mappings,omitempty"`
-	Gmail         GmailHookConfig `json:"gmail,omitempty"`
+func NewDefaultClawConfig(model string) ClawConfig {
+	cfg := ClawConfig{
+		Env: Env{
+			OpenRouterAPIKey: "${OPENROUTER_API_KEY}",
+			Vars:             map[string]string{},
+			ShellEnv: ShellEnvConfig{
+				Enabled:   true,
+				TimeoutMs: 30000,
+			},
+		},
+		Logging: &Logging{
+			Level:        "info",
+			ConsoleLevel: "info",
+			ConsoleStyle: "pretty",
+		},
+		Tooling: &ToolingMedia{
+			Media: MediaTools{
+				Audio: MediaAudio{
+					Enabled:        false,
+					MaxBytes:       10 * 1024 * 1024,
+					TimeoutSeconds: 60,
+				},
+				Video: MediaVideo{
+					Enabled:  false,
+					MaxBytes: 50 * 1024 * 1024,
+				},
+			},
+		},
+		Cron: &CronConfig{
+			Enabled:           true,
+			MaxConcurrentRuns: 2,
+			SessionRetention:  "24h",
+			RunLog: RunLogConfig{
+				MaxBytes:  "2mb",
+				KeepLines: 1000,
+			},
+		},
+		Session: &SessionConfig{
+			Scope: "per-sender",
+			Reset: SessionResetConfig{
+				Mode:        "idle",
+				IdleMinutes: 60,
+			},
+			Store: "file",
+			Maintenance: SessionMaintenance{
+				Mode:       "warn",
+				PruneAfter: "30d",
+				MaxEntries: 1000,
+			},
+			TypingIntervalSeconds: 3,
+			SendPolicy: SendPolicyConfig{
+				Default: "allow",
+			},
+		},
+		Agents: Agents{
+			Defaults: &AgentDefault{
+				Compaction: AgentCompaction{
+					ReserveTokensFloor: 20000,
+					MemoryFlush: struct {
+						Enabled              bool `json:"enabled"`
+						SoftThreshHoldTokens int  `json:"softThreshHoldTokens,omitempty"`
+					}{
+						Enabled:              true,
+						SoftThreshHoldTokens: 4000,
+					},
+				},
+			},
+			List: []AgentListConfig{
+				{
+					ID:            "main",
+					Default:       true,
+					Name:          "main",
+					Workspace:     path.Join(workspacePrefix, "main"),
+					AgentDir:      path.Join(agentDirPrefix, "agents"),
+					SkipBootstrap: false,
+					Model: &AgentModelSelection{
+						Primary: model,
+					},
+					Params:   nil,
+					Identity: nil,
+					GroupChat: &GroupChat{
+						MentionPatterns: []string{"@OpenClaw"},
+					},
+					Sandbox: &Sandbox{
+						Mode: "off",
+					},
+					Runtime: nil,
+					Subagents: &Subagents{
+						AllowAgents: []string{"*"},
+					},
+					Tools: &Tools{
+						Allow: []string{
+							"group:fs",
+							"group:sessions",
+							"group:web",
+							"group:messaging",
+							"group:automation",
+							"exec",
+							"process",
+						},
+						Deny: []string{"canvas", "browser"},
+					},
+				},
+			},
+		},
+		Gateway: &GatewayConfig{
+			Mode: "local",
+			Bind: "lan",
+			ControlUI: ControlUI{
+				Enabled: false,
+			},
+			Auth: GatewayAuth{
+				Mode:  "token",
+				Token: "${OPENCLAW_GATEWAY_TOKEN}",
+			},
+			Reload: ReloadConfig{
+				Mode:       "restart",
+				DebounceMs: 2000,
+			},
+		},
+	}
+
+	return cfg
 }
 
-type HookMapping struct {
-	ID              string                 `json:"id,omitempty"`
-	Match           map[string]interface{} `json:"match,omitempty"`
-	Action          string                 `json:"action,omitempty"`
-	WakeMode        string                 `json:"wakeMode,omitempty"`
-	Name            string                 `json:"name,omitempty"`
-	SessionKey      string                 `json:"sessionKey,omitempty"`
-	MessageTemplate string                 `json:"messageTemplate,omitempty"`
-	TextTemplate    string                 `json:"textTemplate,omitempty"`
-	Deliver         bool                   `json:"deliver,omitempty"`
-	Channel         string                 `json:"channel,omitempty"`
-	To              string                 `json:"to,omitempty"`
-	Thinking        string                 `json:"thinking,omitempty"`
-	TimeoutSeconds  int                    `json:"timeoutSeconds,omitempty"`
-	Transform       HookTransform          `json:"transform,omitempty"`
-}
+func (c *ClawConfig) AddTelegramChannel(ch *channels.TelegramConfig) {
+	c.Channels.Telegram = ch
 
-type HookTransform struct {
-	Module string `json:"module,omitempty"`
-	Export string `json:"export,omitempty"`
-}
-
-type GmailHookConfig struct {
-	Account           string            `json:"account,omitempty"`
-	Label             string            `json:"label,omitempty"`
-	Topic             string            `json:"topic,omitempty"`
-	Subscription      string            `json:"subscription,omitempty"`
-	PushToken         string            `json:"pushToken,omitempty"`
-	HookUrl           string            `json:"hookUrl,omitempty"`
-	IncludeBody       bool              `json:"includeBody,omitempty"`
-	MaxBytes          int               `json:"maxBytes,omitempty"`
-	RenewEveryMinutes int               `json:"renewEveryMinutes,omitempty"`
-	Serve             ServeConfig       `json:"serve,omitempty"`
-	Tailscale         map[string]string `json:"tailscale,omitempty"`
-}
-
-type ServeConfig struct {
-	Bind string `json:"bind,omitempty"`
-	Port int    `json:"port,omitempty"`
-	Path string `json:"path,omitempty"`
-}
-
-type GatewayConfig struct {
-	Mode      string                 `json:"mode,omitempty"`
-	Port      int                    `json:"port,omitempty"`
-	Bind      string                 `json:"bind,omitempty"`
-	ControlUI ControlUI              `json:"controlUi,omitempty"`
-	Auth      GatewayAuth            `json:"auth,omitempty"`
-	Tailscale map[string]interface{} `json:"tailscale,omitempty"`
-	Remote    map[string]string      `json:"remote,omitempty"`
-	Reload    ReloadConfig           `json:"reload,omitempty"`
-}
-
-type ControlUI struct {
-	Enabled  bool   `json:"enabled"`
-	BasePath string `json:"basePath,omitempty"`
-}
-
-type GatewayAuth struct {
-	Mode           string `json:"mode,omitempty"`
-	Token          string `json:"token,omitempty"`
-	AllowTailscale bool   `json:"allowTailscale,omitempty"`
-}
-
-type ReloadConfig struct {
-	Mode       string `json:"mode,omitempty"`
-	DebounceMs int    `json:"debounceMs,omitempty"`
-}
-
-type SkillsConfig struct {
-	AllowBundled []string              `json:"allowBundled,omitempty"`
-	Load         SkillsLoad            `json:"load,omitempty"`
-	Install      SkillsInstall         `json:"install,omitempty"`
-	Entries      map[string]SkillEntry `json:"entries,omitempty"`
-}
-
-type SkillsLoad struct {
-	ExtraDirs []string `json:"extraDirs,omitempty"`
-}
-
-type SkillsInstall struct {
-	PreferBrew  bool   `json:"preferBrew,omitempty"`
-	NodeManager string `json:"nodeManager,omitempty"`
-}
-
-type SkillEntry struct {
-	Enabled bool              `json:"enabled,omitempty"`
-	APIKey  string            `json:"apiKey,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
+	c.Channels.Telegram.Enabled = true
 }

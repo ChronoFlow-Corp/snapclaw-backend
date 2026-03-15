@@ -38,3 +38,9 @@ type DeleteClaw struct {
 	ClawID       uuid.UUID
 	DeleteConfig bool
 }
+
+type ApprovePairing struct {
+	UserID uuid.UUID
+	ClawID uuid.UUID
+	Code   string
+}

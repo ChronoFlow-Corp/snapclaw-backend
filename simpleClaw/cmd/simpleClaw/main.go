@@ -1,11 +1,14 @@
 package main
 
 import (
-	"fmt"
+	"log/slog"
+	"os"
 	"shared/pkg/jwt"
+	"strings"
 
 	"simpleClaw/internal/api/rest"
 	"simpleClaw/internal/api/rest/controllers"
+	appmw "simpleClaw/internal/api/rest/middleware"
 
 	"simpleClaw/config"
 	"simpleClaw/internal/infra/hosting"
@@ -28,6 +31,7 @@ import (
 
 func main() {
 	cfg := config.New()
+	logger := setupLogger(cfg.Environment)
 
 	goth.UseProviders(
 		google.New(
@@ -95,16 +99,44 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
+	r.Use(appmw.Logger())
 	r.Use(middleware.Recoverer)
 
 	r.Mount("/api", api)
 
 	s := rest.NewServer(cfg.Http.Addr, r)
 
-	fmt.Println("Starting server on " + cfg.Http.Addr)
+	logger.Info("simpleClaw server starting", slog.String("addr", cfg.Http.Addr))
 
 	if err := s.ListenAndServe(); err != nil {
+		logger.Error("simpleClaw server stopped", slog.Any("err", err))
 		panic(err)
 	}
+}
+
+func setupLogger(env string) *slog.Logger {
+	level := new(slog.LevelVar)
+	level.Set(slog.LevelInfo)
+
+	switch strings.ToLower(os.Getenv("LOG_LEVEL")) {
+	case "debug":
+		level.Set(slog.LevelDebug)
+	case "info":
+		level.Set(slog.LevelInfo)
+	case "warn", "warning":
+		level.Set(slog.LevelWarn)
+	case "error":
+		level.Set(slog.LevelError)
+	}
+
+	logger := slog.New(
+		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}),
+	).With(
+		"service", "simpleclaw",
+		"env", env,
+	)
+
+	slog.SetDefault(logger)
+
+	return logger
 }

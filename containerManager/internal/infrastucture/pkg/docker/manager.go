@@ -1,10 +1,15 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -13,14 +18,13 @@ import (
 	"github.com/docker/docker/api/types/build"
 	dcontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/strslice"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
 
 const MB = 1024 * 1024
 
-const imageName = "openclaw-gateway"
+const imageName = "openclaw_npm"
 
 type Manager struct {
 	images map[string]imageInfo
@@ -43,7 +47,7 @@ func NewManager(ctx context.Context, cl *client.Client) *Manager {
 	return m
 }
 
-func (m *Manager) Build(ctx context.Context, bCtx io.Reader) error {
+func (m *Manager) Build(ctx context.Context, buildCtxPaths []string) error {
 	const op = "container.Manager.Build"
 
 	err := m.getImages(ctx)
@@ -53,14 +57,27 @@ func (m *Manager) Build(ctx context.Context, bCtx io.Reader) error {
 
 	img, ok := m.images[imageName]
 	if ok {
-		fmt.Printf("image %s already exists: %s\n", imageName, img.id)
+		slog.Info(
+			"image already exists",
+			slog.String("image", imageName),
+			slog.String("id", img.id),
+		)
 
 		return nil
 	}
 
-	rs, err := m.cl.ImageBuild(context.Background(), bCtx, build.ImageBuildOptions{
-		Dockerfile: "Dockerfile",
-		Context:    bCtx,
+	buildCtx := bytes.NewBuffer([]byte{})
+
+	defer buildCtx.Reset()
+
+	err = tarDir(buildCtx, buildCtxPaths...)
+	if err != nil {
+		panic(err)
+	}
+
+	rs, err := m.cl.ImageBuild(context.Background(), buildCtx, build.ImageBuildOptions{
+		Dockerfile: "images/openclaw/Dockerfile",
+		Context:    buildCtx,
 		Tags:       []string{imageName},
 	})
 	if err != nil {
@@ -78,7 +95,6 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (string, error
 	p := nat.Port(fmt.Sprintf("%s/tcp", opts.ContainerPort))
 
 	rs, err := m.cl.ContainerCreate(ctx, &dcontainer.Config{
-		Cmd:          strslice.StrSlice{"node", "openclaw.mjs", "gateway"},
 		Image:        m.images[imageName].id,
 		Env:          opts.Env,
 		ExposedPorts: nat.PortSet{p: struct{}{}},
@@ -94,7 +110,10 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (string, error
 			Type:   "json-file",
 			Config: map[string]string{"max-size": "10m"},
 		},
-		Resources: dcontainer.Resources{Memory: MB * 1500},
+		Resources: dcontainer.Resources{
+			Memory:     MB * 3000,
+			MemorySwap: MB * 3000,
+		},
 	}, nil, nil, "")
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", op, err)
@@ -189,4 +208,145 @@ func (m *Manager) ping(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+func tarDir(w io.Writer, roots ...string) error {
+	tw := tar.NewWriter(w)
+	defer tw.Close()
+
+	wd, _ := os.Getwd()
+
+	for _, root := range roots {
+		root = filepath.Clean(root)
+
+		var archiveRoot string
+
+		if strings.HasPrefix(root, "."+string(os.PathSeparator)) {
+			archiveRoot = root[2:]
+		} else if !filepath.IsAbs(root) {
+			archiveRoot = root
+		} else {
+			if rel, err := filepath.Rel(wd, root); err == nil && !strings.HasPrefix(rel, "..") {
+				archiveRoot = rel
+			} else {
+				archiveRoot = filepath.Base(root)
+			}
+		}
+
+		archiveRoot = filepath.ToSlash(archiveRoot)
+
+		info, err := os.Lstat(root)
+		if err != nil {
+			return err
+		}
+
+		if !info.IsDir() {
+			var link string
+
+			if info.Mode()&os.ModeSymlink != 0 {
+				link, err = os.Readlink(root)
+				if err != nil {
+					return err
+				}
+			}
+
+			hdr, err := tar.FileInfoHeader(info, link)
+			if err != nil {
+				return err
+			}
+
+			hdr.Name = archiveRoot
+			if info.IsDir() && !strings.HasSuffix(hdr.Name, "/") {
+				hdr.Name += "/"
+			}
+
+			if err := tw.WriteHeader(hdr); err != nil {
+				return err
+			}
+
+			if info.Mode().IsRegular() {
+				f, err := os.Open(root)
+				if err != nil {
+					return err
+				}
+
+				_, err = io.Copy(tw, f)
+				_ = f.Close()
+
+				if err != nil {
+					return err
+				}
+			}
+
+			continue
+		}
+
+		err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+
+			var archPath string
+
+			if rel == "." {
+				archPath = archiveRoot
+			} else {
+				archPath = filepath.ToSlash(filepath.Join(archiveRoot, rel))
+			}
+
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+
+			var link string
+
+			if info.Mode()&os.ModeSymlink != 0 {
+				link, err = os.Readlink(path)
+				if err != nil {
+					return err
+				}
+			}
+
+			hdr, err := tar.FileInfoHeader(info, link)
+			if err != nil {
+				return err
+			}
+
+			hdr.Name = archPath
+			if info.IsDir() && !strings.HasSuffix(hdr.Name, "/") {
+				hdr.Name += "/"
+			}
+
+			if err := tw.WriteHeader(hdr); err != nil {
+				return err
+			}
+
+			if info.Mode().IsRegular() {
+				f, err := os.Open(path)
+				if err != nil {
+					return err
+				}
+
+				_, err = io.Copy(tw, f)
+				_ = f.Close()
+
+				if err != nil {
+					return err
+				}
+			}
+
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

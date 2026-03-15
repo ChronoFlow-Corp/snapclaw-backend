@@ -2,7 +2,6 @@ package users
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"simpleClaw/internal/infra/sql"
@@ -30,6 +29,8 @@ func (s *Storage) Create(ctx context.Context, u entities.User) error {
 	err := gorm.G[models.User](s.db).Create(ctx, &models.User{
 		ID:               u.ID,
 		Name:             u.Name,
+		NickName:         u.Nickname,
+		AvatarURL:        u.AvatarURL,
 		Email:            u.Email,
 		Role:             u.Role,
 		OpenRouterApiKey: u.OpenRouterApiKey,
@@ -37,7 +38,7 @@ func (s *Storage) Create(ctx context.Context, u entities.User) error {
 		CreatedAt:        u.CreatedAt,
 	})
 	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	return nil
@@ -48,7 +49,7 @@ func (s *Storage) Delete(ctx context.Context, id uuid.UUID) error {
 
 	affected, err := gorm.G[models.User](s.db).Where("id = ?", id).Delete(ctx)
 	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	if affected == 0 {
@@ -68,7 +69,7 @@ func (s *Storage) CreateSession(ctx context.Context, session entities.Session) e
 		CreatedAt:    session.CreatedAt,
 	})
 	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	return nil
@@ -79,11 +80,7 @@ func (s *Storage) GetByEmail(ctx context.Context, email string) (entities.User, 
 
 	uDB, err := gorm.G[models.User](s.db).Where("email = ?", email).First(ctx)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return entities.User{}, fmt.Errorf("%s: %w: %w", op, sql.ErrNotFound, err)
-		}
-
-		return entities.User{}, fmt.Errorf("%s: %w", op, err)
+		return entities.User{}, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	return entities.User{
@@ -102,11 +99,7 @@ func (s *Storage) GetByID(ctx context.Context, id uuid.UUID) (entities.User, err
 
 	uDB, err := gorm.G[models.User](s.db).Where("id = ?", id).First(ctx)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return entities.User{}, fmt.Errorf("%s: %w: %w", op, sql.ErrNotFound, err)
-		}
-
-		return entities.User{}, fmt.Errorf("%s: %w", op, err)
+		return entities.User{}, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	return entities.User{
@@ -128,7 +121,7 @@ func (s *Storage) DeleteSession(ctx context.Context, session entities.Session) e
 	).Where("id = ? AND user_id = ?", session.ID, session.UserID).
 		Delete(ctx)
 	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	return nil
@@ -141,7 +134,7 @@ func (s *Storage) GetSessions(ctx context.Context, userID uuid.UUID) ([]entities
 
 	sDB, err := gorm.G[models.Session](s.db).Where("user_id = ?", userID).Find(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", op, err)
+		return nil, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	for _, s := range sDB {
@@ -161,11 +154,7 @@ func (s *Storage) GetSession(ctx context.Context, id uuid.UUID) (entities.Sessio
 
 	sDB, err := gorm.G[models.Session](s.db).Where("id = ?", id).First(ctx)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return entities.Session{}, fmt.Errorf("%s: %w: %w", op, sql.ErrNotFound, err)
-		}
-
-		return entities.Session{}, fmt.Errorf("%s: %w", op, err)
+		return entities.Session{}, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	return entities.Session{
@@ -191,7 +180,7 @@ func (s *Storage) UpdateSessionRefresh(
 		Where("id = ? AND user_id = ?", sessionID, userID).
 		Updates(updates)
 	if err := tx.Error; err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	if tx.RowsAffected == 0 {
@@ -215,7 +204,7 @@ func (s *Storage) UpdateOpenRouterKey(
 
 	tx := s.db.WithContext(ctx).Model(&models.User{}).Where("id = ?", id).Updates(updates)
 	if err := tx.Error; err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	if tx.RowsAffected == 0 {

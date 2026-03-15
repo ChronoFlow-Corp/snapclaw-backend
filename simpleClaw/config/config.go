@@ -61,9 +61,8 @@ type hosting struct {
 }
 
 type containerManager struct {
-	BaseURL    string        `yaml:"base_url"`
-	Timeout    time.Duration `yaml:"timeout" env-default:"15s"`
-	BackupPath string        `yaml:"backup_path" env:"CONTAINER_MANAGER_BACKUP_PATH" env-default:"/tmp/simpleclaw/config-archives"`
+	Timeout    time.Duration `yaml:"timeout"     env-default:"15s"`
+	BackupPath string        `yaml:"backup_path" env-default:"/tmp/simpleclaw/config-archives" env:"CONTAINER_MANAGER_BACKUP_PATH"`
 }
 
 func New() Config {

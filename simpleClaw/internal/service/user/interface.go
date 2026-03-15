@@ -15,7 +15,11 @@ type UStorage interface {
 	DeleteSession(ctx context.Context, session entities.Session) error
 	GetSessions(ctx context.Context, userID uuid.UUID) ([]entities.Session, error)
 	GetSession(ctx context.Context, id uuid.UUID) (entities.Session, error)
-	UpdateSessionRefresh(ctx context.Context, sessionID, userID uuid.UUID, refreshToken string) error
+	UpdateSessionRefresh(
+		ctx context.Context,
+		sessionID, userID uuid.UUID,
+		refreshToken string,
+	) error
 	GetByEmail(ctx context.Context, email string) (entities.User, error)
 	GetByID(ctx context.Context, id uuid.UUID) (entities.User, error)
 	UpdateOpenRouterKey(ctx context.Context, id uuid.UUID, key entities.OpenRouterKey) error
@@ -34,7 +38,6 @@ type apiKeyManager interface {
 		ctx context.Context,
 		userID uuid.UUID,
 		label string,
-		requestsPerMinute int,
 		monthlyBudgetUSD float64,
 	) (entities.OpenRouterKey, error)
 }

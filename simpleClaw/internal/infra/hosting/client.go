@@ -491,3 +491,79 @@ func (c *client) startClaw(
 
 	return nil
 }
+
+func (c *client) approvePairing(
+	ctx context.Context,
+	baseURL string,
+	userID string,
+	clawID string,
+	code string,
+) error {
+	const op = "infra.hosting.client.approvePairing"
+
+	if c == nil || c.http == nil {
+		return fmt.Errorf("%s: http client is not initialized", op)
+	}
+
+	rawURL := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if rawURL == "" {
+		return fmt.Errorf("%s: base url is required", op)
+	}
+
+	if userID == "" {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if clawID == "" {
+		return fmt.Errorf("%s: claw id is required", op)
+	}
+
+	if code == "" {
+		return fmt.Errorf("%s: code is required", op)
+	}
+
+	u, err := url.Parse(rawURL + approveEndpoint)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	q := u.Query()
+	q.Set("userId", userID)
+	q.Set("clawId", clawID)
+	q.Set("code", code)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = resp.Status
+		}
+
+		return fmt.Errorf(
+			"%s: unexpected status %d: %s",
+			op,
+			resp.StatusCode,
+			msg,
+		)
+	}
+
+	return nil
+}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"time"
 
 	"simpleClaw/internal/entities"
@@ -17,17 +18,36 @@ import (
 	"github.com/google/uuid"
 )
 
-const openClawConfigVersion = "2026.2.16"
+const (
+	openClawConfigVersion   = "2026.2.16"
+	openRouterAPIKeyVar     = "OPENROUTER_API_KEY"
+	openClawGatewayTokenVar = "OPENCLAW_GATEWAY_TOKEN"
+)
 
 var (
-	errUserIDRequired   = errors.New("user id is required")
-	errClawIDRequired   = errors.New("claw id is required")
-	errNameRequired     = errors.New("name is required")
-	errModelRequired    = errors.New("model is required")
-	errChannelNotFound  = errors.New("channel not found")
-	errHostingMissing   = errors.New("hosting manager is not configured")
-	errOpenRouterClient = errors.New("openrouter manager is not configured")
-	errServerIDRequired = errors.New("server id is required")
+	ErrUserIDRequired            = errors.New("user id is required")
+	ErrClawIDRequired            = errors.New("claw id is required")
+	ErrNameRequired              = errors.New("name is required")
+	ErrModelRequired             = errors.New("model is required")
+	ErrChannelNotFound           = errors.New("channel not found")
+	ErrHostingMissing            = errors.New("hosting manager is not configured")
+	ErrOpenRouterClient          = errors.New("openrouter manager is not configured")
+	ErrServerIDRequired          = errors.New("server id is required")
+	ErrContainerIDRequired       = errors.New("claw container id is required")
+	ErrConfigArchivePathRequired = errors.New("config archive path is required")
+	ErrPairingCodeRequired       = errors.New("pairing code is required")
+
+	errUserIDRequired            = ErrUserIDRequired
+	errClawIDRequired            = ErrClawIDRequired
+	errNameRequired              = ErrNameRequired
+	errModelRequired             = ErrModelRequired
+	errChannelNotFound           = ErrChannelNotFound
+	errHostingMissing            = ErrHostingMissing
+	errOpenRouterClient          = ErrOpenRouterClient
+	errServerIDRequired          = ErrServerIDRequired
+	errContainerIDRequired       = ErrContainerIDRequired
+	errConfigArchivePathRequired = ErrConfigArchivePathRequired
+	errPairingCodeRequired       = ErrPairingCodeRequired
 )
 
 type Service struct {
@@ -135,8 +155,14 @@ func (s *Service) Create(
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	gatewayToken := generateGatewayToken()
-	cfg := buildBaseConfig(primaryModel, keyValue, chs, gatewayToken)
+	cfg := entities.NewDefaultClawConfig(primaryModel)
+	ensureConfigVars(&cfg, keyValue, "")
+
+	for _, ch := range chs {
+		if ch.Config.Telegram != nil {
+			cfg.AddTelegramChannel(ch.Config.Telegram)
+		}
+	}
 
 	now := time.Now()
 	cl := entities.Claw{
@@ -261,7 +287,16 @@ func (s *Service) Update(
 		}
 	}
 
-	keyValue := existing.Config.Env.OpenRouterAPIKey
+	keyValue := ""
+	if existing.Config.Env.Vars != nil {
+		keyValue = existing.Config.Env.Vars[openRouterAPIKeyVar]
+	}
+	if keyValue == "" {
+		keyValue = strings.TrimSpace(existing.Config.Env.OpenRouterAPIKey)
+		if isVarRef(keyValue, openRouterAPIKeyVar) {
+			keyValue = ""
+		}
+	}
 	if keyValue == "" {
 		user, err := s.users.GetByID(ctx, cm.UserID)
 		if err != nil {
@@ -456,7 +491,7 @@ func (s *Service) Stop(
 	}
 
 	if cl.ContainerID == "" {
-		return entities.Claw{}, fmt.Errorf("%s: claw container id is required", op)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, errContainerIDRequired)
 	}
 
 	if cl.ServerID == uuid.Nil {
@@ -491,6 +526,54 @@ func (s *Service) Stop(
 	}
 
 	return cl, nil
+}
+
+func (s *Service) ApprovePairing(
+	ctx context.Context,
+	cm commands.ApprovePairing,
+) error {
+	const op = "service.Claw.ApprovePairing"
+
+	if cm.UserID == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, errUserIDRequired)
+	}
+
+	if cm.ClawID == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, errClawIDRequired)
+	}
+
+	code := strings.TrimSpace(cm.Code)
+	if code == "" {
+		return fmt.Errorf("%s: %w", op, errPairingCodeRequired)
+	}
+
+	if s.hosting == nil {
+		return fmt.Errorf("%s: %w", op, errHostingMissing)
+	}
+
+	cl, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if cl.ContainerID == "" {
+		return fmt.Errorf("%s: %w", op, errContainerIDRequired)
+	}
+
+	if cl.ServerID == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, errServerIDRequired)
+	}
+
+	srv, err := s.servers.GetByID(ctx, cl.ServerID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := s.hosting.ApprovePairing(ctx, cl, srv, code); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
 }
 
 func (s *Service) Delete(
@@ -547,7 +630,7 @@ func (s *Service) backupConfigArchive(
 	const op = "service.Claw.backupConfigArchive"
 
 	if s.archivePath == "" {
-		return fmt.Errorf("%s: config archive path is required", op)
+		return fmt.Errorf("%s: %w", op, errConfigArchivePathRequired)
 	}
 
 	if s.hosting == nil {
@@ -626,7 +709,7 @@ func (s *Service) writeArchiveFromConfig(cl entities.Claw) error {
 	const op = "service.Claw.writeArchiveFromConfig"
 
 	if s.archivePath == "" {
-		return fmt.Errorf("%s: config archive path is required", op)
+		return fmt.Errorf("%s: %w", op, errConfigArchivePathRequired)
 	}
 
 	archiveFile, err := s.archiveFilePath(cl)
@@ -677,7 +760,7 @@ func (s *Service) restoreConfigArchive(
 	const op = "service.Claw.restoreConfigArchive"
 
 	if s.archivePath == "" {
-		return fmt.Errorf("%s: config archive path is required", op)
+		return fmt.Errorf("%s: %w", op, errConfigArchivePathRequired)
 	}
 
 	if s.hosting == nil {
@@ -707,37 +790,10 @@ func (s *Service) restoreConfigArchive(
 
 func (s *Service) archiveFilePath(cl entities.Claw) (string, error) {
 	if s.archivePath == "" {
-		return "", fmt.Errorf("config archive path is required")
+		return "", errConfigArchivePathRequired
 	}
 
 	return filepath.Join(s.archivePath, cl.UserID.String(), cl.ID.String()+".tar"), nil
-}
-
-func buildBaseConfig(
-	primaryModel string,
-	apiKey string,
-	channels []entities.Channel,
-	gatewayToken string,
-) entities.ClawConfig {
-	return entities.ClawConfig{
-		Env: entities.Env{
-			OpenRouterAPIKey: apiKey,
-		},
-		Meta:     newConfigMeta(time.Now()),
-		Channels: mergeChannelConfigs(channels),
-		Agents: entities.Agents{
-			Defaults: entities.AgentDefaults{
-				Model: entities.AgentModelSelection{Primary: primaryModel},
-			},
-		},
-		Gateway: entities.GatewayConfig{
-			Mode: "local",
-			Auth: entities.GatewayAuth{
-				Mode:  "token",
-				Token: gatewayToken,
-			},
-		},
-	}
 }
 
 func applyBaseUpdates(
@@ -747,15 +803,9 @@ func applyBaseUpdates(
 ) entities.ClawConfig {
 	cfg := existing
 
-	if apiKey != "" {
-		cfg.Env.OpenRouterAPIKey = apiKey
-	}
+	ensureConfigVars(&cfg, apiKey, "")
 
 	cfg.Agents.Defaults.Model.Primary = primaryModel
-
-	if cfg.Gateway.Auth.Token == "" {
-		cfg.Gateway.Auth.Token = generateGatewayToken()
-	}
 
 	if cfg.Gateway.Mode == "" {
 		cfg.Gateway.Mode = "local"
@@ -768,22 +818,72 @@ func applyBaseUpdates(
 	return cfg
 }
 
-func newConfigMeta(now time.Time) entities.ConfigMeta {
-	return entities.ConfigMeta{
+func ensureConfigVars(cfg *entities.ClawConfig, apiKey string, gatewayToken string) {
+	if cfg == nil {
+		return
+	}
+
+	if cfg.Env.Vars == nil {
+		cfg.Env.Vars = map[string]string{}
+	}
+
+	if apiKey != "" {
+		cfg.Env.Vars[openRouterAPIKeyVar] = apiKey
+	}
+
+	if cfg.Env.Vars[openRouterAPIKeyVar] == "" {
+		key := strings.TrimSpace(cfg.Env.OpenRouterAPIKey)
+		if key != "" && !isVarRef(key, openRouterAPIKeyVar) {
+			cfg.Env.Vars[openRouterAPIKeyVar] = key
+		}
+	}
+
+	if cfg.Env.Vars[openRouterAPIKeyVar] != "" {
+		cfg.Env.OpenRouterAPIKey = varRef(openRouterAPIKeyVar)
+	}
+
+	if gatewayToken != "" {
+		cfg.Env.Vars[openClawGatewayTokenVar] = gatewayToken
+	}
+
+	if cfg.Env.Vars[openClawGatewayTokenVar] == "" {
+		token := strings.TrimSpace(cfg.Gateway.Auth.Token)
+		if token != "" && !isVarRef(token, openClawGatewayTokenVar) {
+			cfg.Env.Vars[openClawGatewayTokenVar] = token
+		}
+	}
+
+	if cfg.Env.Vars[openClawGatewayTokenVar] == "" {
+		cfg.Env.Vars[openClawGatewayTokenVar] = generateGatewayToken()
+	}
+
+	cfg.Gateway.Auth.Token = varRef(openClawGatewayTokenVar)
+}
+
+func varRef(name string) string {
+	return "${" + name + "}"
+}
+
+func isVarRef(value string, name string) bool {
+	return strings.TrimSpace(value) == varRef(name)
+}
+
+func newConfigMeta(now time.Time) *entities.ConfigMeta {
+	return &entities.ConfigMeta{
 		LastTouchedVersion: openClawConfigVersion,
 		LastTouchedAt:      now.UTC().Format("2006-01-02T15:04:05.000Z"),
 	}
 }
 
 func isConfigChanged(before, after entities.ClawConfig) bool {
-	before.Meta = entities.ConfigMeta{}
-	after.Meta = entities.ConfigMeta{}
+	before.Meta = &entities.ConfigMeta{}
+	after.Meta = &entities.ConfigMeta{}
 
 	return !reflect.DeepEqual(before, after)
 }
 
-func mergeChannelConfigs(chs []entities.Channel) entities.ClawChannels {
-	var cfg entities.ClawChannels
+func mergeChannelConfigs(chs []entities.Channel) *entities.ClawChannels {
+	cfg := &entities.ClawChannels{}
 
 	for _, ch := range chs {
 		switch ch.ChannelType {

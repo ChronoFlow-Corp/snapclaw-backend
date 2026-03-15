@@ -5,10 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
+	"strings"
 
 	"simpleClaw/internal/entities"
 
 	"github.com/google/uuid"
+)
+
+const (
+	openRouterAPIKeyVar     = "OPENROUTER_API_KEY"
+	openClawGatewayTokenVar = "OPENCLAW_GATEWAY_TOKEN"
 )
 
 // Manager orchestrates container lifecycle interactions with containerManager over HTTP.
@@ -41,14 +48,19 @@ func (m *Manager) Create(
 		return Container{}, fmt.Errorf("%s: server url is required", op)
 	}
 
+	fmt.Println(cl.Config.Agents, "AGENTS")
+
 	configFiles, err := buildConfigFiles(cl.Config)
 	if err != nil {
 		return Container{}, fmt.Errorf("%s: %w", op, err)
 	}
 
+	vars := buildVars(cl.Config)
+
 	resp, err := m.client.createClaw(ctx, server.URL, createClawRequest{
 		UserID:     cl.UserID.String(),
 		ClawID:     cl.ID.String(),
+		Vars:       vars,
 		ClawConfig: configFiles,
 	})
 	if err != nil {
@@ -204,9 +216,12 @@ func (m *Manager) Update(
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
+	vars := buildVars(cl.Config)
+
 	if err := m.client.updateClaw(ctx, server.URL, updateClawRequest{
 		UserID:     cl.UserID.String(),
 		ClawID:     cl.ID.String(),
+		Vars:       vars,
 		ClawConfig: configFiles,
 	}); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
@@ -235,7 +250,13 @@ func (m *Manager) ConfigArchive(
 		return nil, fmt.Errorf("%s: server url is required", op)
 	}
 
-	body, err := m.client.configArchive(ctx, server.URL, cl.UserID.String(), cl.ID.String(), deleteAfter)
+	body, err := m.client.configArchive(
+		ctx,
+		server.URL,
+		cl.UserID.String(),
+		cl.ID.String(),
+		deleteAfter,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
@@ -270,8 +291,43 @@ func (m *Manager) RestoreConfigArchive(
 	return nil
 }
 
+func (m *Manager) ApprovePairing(
+	ctx context.Context,
+	cl entities.Claw,
+	server entities.Server,
+	code string,
+) error {
+	const op = "infra.hosting.Manager.ApprovePairing"
+
+	if m == nil || m.client == nil {
+		return fmt.Errorf("%s: http client is not configured", op)
+	}
+
+	if cl.UserID == uuid.Nil {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if cl.ID == uuid.Nil {
+		return fmt.Errorf("%s: claw id is required", op)
+	}
+
+	if server.URL == "" {
+		return fmt.Errorf("%s: server url is required", op)
+	}
+
+	if code == "" {
+		return fmt.Errorf("%s: code is required", op)
+	}
+
+	if err := m.client.approvePairing(ctx, server.URL, cl.UserID.String(), cl.ID.String(), code); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
 func buildConfigFiles(cfg entities.ClawConfig) ([]clawConfigFile, error) {
-	data, err := json.Marshal(buildOpenClawConfig(cfg))
+	data, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("marshal openclaw config: %w", err)
 	}
@@ -283,4 +339,51 @@ func buildConfigFiles(cfg entities.ClawConfig) ([]clawConfigFile, error) {
 			Data:     string(data),
 		},
 	}, nil
+}
+
+func buildVars(cfg entities.ClawConfig) []string {
+	vars := make(map[string]string, len(cfg.Env.Vars))
+	for key, value := range cfg.Env.Vars {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		vars[key] = value
+	}
+
+	openRouterKey := strings.TrimSpace(cfg.Env.OpenRouterAPIKey)
+	if openRouterKey != "" && !isVarRef(openRouterKey) {
+		if _, ok := vars[openRouterAPIKeyVar]; !ok {
+			vars[openRouterAPIKeyVar] = openRouterKey
+		}
+	}
+
+	gatewayToken := strings.TrimSpace(cfg.Gateway.Auth.Token)
+	if gatewayToken != "" && !isVarRef(gatewayToken) {
+		if _, ok := vars[openClawGatewayTokenVar]; !ok {
+			vars[openClawGatewayTokenVar] = gatewayToken
+		}
+	}
+
+	if len(vars) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(vars))
+	for key := range vars {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	result := make([]string, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, fmt.Sprintf("%s=%s", key, vars[key]))
+	}
+
+	return result
+}
+
+func isVarRef(value string) bool {
+	value = strings.TrimSpace(value)
+	return strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}")
 }

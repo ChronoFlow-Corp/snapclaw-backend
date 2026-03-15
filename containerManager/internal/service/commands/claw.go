@@ -7,6 +7,7 @@ import (
 type CreateClaw struct {
 	UserID string
 	ClawID string
+	Vars   []string
 	Config []entities.ClawConfig
 }
 
@@ -29,6 +30,7 @@ type DeleteClaw struct {
 type UpdateClaw struct {
 	UserID string
 	ClawID string
+	Vars   []string
 	Config []entities.ClawConfig
 }
 

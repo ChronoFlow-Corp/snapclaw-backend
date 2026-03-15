@@ -2,12 +2,14 @@ package configurer
 
 import (
 	"archive/tar"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"containermanager/internal/entities"
@@ -156,7 +158,11 @@ func (c *ClawConfigurer) RestoreClawConfig(userID, clawID string, r io.Reader) e
 
 		target := filepath.Join(basePath, name)
 		cleanTargetPath := filepath.Clean(target)
-		if cleanTargetPath == basePath || !strings.HasPrefix(cleanTargetPath+string(os.PathSeparator), basePath+string(os.PathSeparator)) {
+		if cleanTargetPath == basePath ||
+			!strings.HasPrefix(
+				cleanTargetPath+string(os.PathSeparator),
+				basePath+string(os.PathSeparator),
+			) {
 			return fmt.Errorf("%s: invalid tar path %q", op, hdr.Name)
 		}
 
@@ -165,12 +171,16 @@ func (c *ClawConfigurer) RestoreClawConfig(userID, clawID string, r io.Reader) e
 			if err := os.MkdirAll(cleanTargetPath, os.FileMode(hdr.Mode)); err != nil {
 				return fmt.Errorf("%s: %w", op, err)
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(cleanTargetPath), 0o755); err != nil {
 				return fmt.Errorf("%s: %w", op, err)
 			}
 
-			f, err := os.OpenFile(cleanTargetPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(hdr.Mode))
+			f, err := os.OpenFile(
+				cleanTargetPath,
+				os.O_CREATE|os.O_TRUNC|os.O_WRONLY,
+				os.FileMode(hdr.Mode),
+			)
 			if err != nil {
 				return fmt.Errorf("%s: %w", op, err)
 			}
@@ -186,6 +196,95 @@ func (c *ClawConfigurer) RestoreClawConfig(userID, clawID string, r io.Reader) e
 		default:
 			return fmt.Errorf("%s: unsupported tar entry %q", op, hdr.Name)
 		}
+	}
+
+	return nil
+}
+
+func (c *ClawConfigurer) ApprovePair(userID, clawID, code string) error {
+	const op = "configurer.ClawConfigurer.ApprovePair"
+
+	if userID == "" {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+	if clawID == "" {
+		return fmt.Errorf("%s: claw id is required", op)
+	}
+
+	basePath, err := c.configPath(userID, clawID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	basePath = path.Join(basePath, "/.openclaw/credentials")
+
+	fd, err := os.OpenFile(
+		path.Join(basePath, pendingPairingFileName),
+		os.O_RDWR,
+		os.FileMode(0o644),
+	)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer fd.Close()
+
+	var p PairingTelegramConfig
+
+	err = json.NewDecoder(fd).Decode(&p)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	var approvedID string
+	for i := range p.Requests {
+		if p.Requests[i].Code == code {
+			approvedID = p.Requests[i].ID
+			p.Requests = slices.Delete(p.Requests, i, i+1)
+			break
+		}
+	}
+
+	if approvedID == "" {
+		return fmt.Errorf("%s: %w", op, ErrInvalidCode)
+	}
+
+	approved := TelegramPairedAllowFrom{
+		Version:   p.Version,
+		AllowFrom: []string{approvedID},
+	}
+
+	fStat, err := fd.Stat()
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	fdAllowed, err := os.OpenFile(
+		path.Join(basePath, allowedFileNameTelegram),
+		os.O_CREATE|os.O_WRONLY,
+		fStat.Mode(),
+	)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer fdAllowed.Close()
+
+	err = json.NewEncoder(fdAllowed).Encode(approved)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	_, err = fd.Seek(0, io.SeekStart)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	err = fd.Truncate(0)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	err = json.NewEncoder(fd).Encode(p)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	return nil
