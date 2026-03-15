@@ -28,10 +28,12 @@ type User struct {
 	CreatedAt        time.Time
 }
 
-func NewUser(name string, email string, role string) User {
+func NewUser(name string, nickname, avatarUrl, email string, role string) User {
 	return User{
 		ID:        uuid.New(),
 		Name:      name,
+		Nickname:  nickname,
+		AvatarURL: avatarUrl,
 		Email:     email,
 		Role:      role,
 		CreatedAt: time.Now(),

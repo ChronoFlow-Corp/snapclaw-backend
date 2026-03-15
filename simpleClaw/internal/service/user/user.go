@@ -43,7 +43,7 @@ func (s *Service) SignIn(
 	}
 
 	if errors.Is(err, sql.ErrNotFound) {
-		u = entities.NewUser(cm.Name, cm.Email, entities.UserRole)
+		u = entities.NewUser(cm.Name, cm.NickName, cm.AvatarURL, cm.Email, entities.UserRole)
 
 		key, keyErr := s.keys.Create(ctx, u.ID, u.Name, 0)
 		if keyErr != nil {
