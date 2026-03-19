@@ -368,6 +368,58 @@ func (m *Manager) ApprovePairing(
 	return nil
 }
 
+func (m *Manager) Connect(
+	ctx context.Context,
+	cl entities.Claw,
+	server entities.Server,
+	provider string,
+	token []byte,
+) error {
+	const op = "infra.hosting.Manager.Connect"
+
+	if m == nil || m.client == nil {
+		return fmt.Errorf("%s: http client is not configured", op)
+	}
+
+	if cl.UserID == uuid.Nil {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if cl.ID == uuid.Nil {
+		return fmt.Errorf("%s: claw id is required", op)
+	}
+
+	if cl.ContainerID == "" {
+		return nil
+	}
+
+	if server.URL == "" {
+		return fmt.Errorf("%s: server url is required", op)
+	}
+
+	if provider == "" {
+		return fmt.Errorf("%s: provider is required", op)
+	}
+
+	if len(token) == 0 {
+		return fmt.Errorf("%s: token is required", op)
+	}
+
+	if err := m.client.connect(
+		ctx,
+		server.URL,
+		map[string]string{"Authorization": server.SecretKey},
+		cl.UserID.String(),
+		cl.ID.String(),
+		provider,
+		token,
+	); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
 func buildConfigFiles(cfg entities.ClawConfig) ([]clawConfigFile, error) {
 	data, err := json.Marshal(cfg)
 	if err != nil {

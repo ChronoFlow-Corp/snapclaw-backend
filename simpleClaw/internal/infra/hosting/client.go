@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"shared/pkg/observability"
 	"strings"
 	"time"
 )
@@ -23,9 +24,7 @@ func newClient(timeout time.Duration) *client {
 	}
 
 	return &client{
-		http: &http.Client{
-			Timeout: timeout,
-		},
+		http: observability.NewHTTPClient(timeout),
 	}
 }
 
@@ -567,6 +566,95 @@ func (c *client) approvePairing(
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
+	req.Header.Set("Accept", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = resp.Status
+		}
+		if resp.StatusCode == http.StatusBadRequest && strings.EqualFold(msg, ErrInvalidCode.Error()) {
+			return fmt.Errorf("%s: %w", op, ErrInvalidCode)
+		}
+
+		return fmt.Errorf(
+			"%s: unexpected status %d: %s",
+			op,
+			resp.StatusCode,
+			msg,
+		)
+	}
+
+	return nil
+}
+
+func (c *client) connect(
+	ctx context.Context,
+	baseURL string,
+	headers map[string]string,
+	userID string,
+	clawID string,
+	provider string,
+	token []byte,
+) error {
+	const op = "infra.hosting.client.connect"
+
+	if c == nil || c.http == nil {
+		return fmt.Errorf("%s: http client is not initialized", op)
+	}
+
+	rawURL := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if rawURL == "" {
+		return fmt.Errorf("%s: base url is required", op)
+	}
+
+	if userID == "" {
+		return fmt.Errorf("%s: user id is required", op)
+	}
+
+	if clawID == "" {
+		return fmt.Errorf("%s: claw id is required", op)
+	}
+
+	if provider == "" {
+		return fmt.Errorf("%s: provider is required", op)
+	}
+
+	if len(token) == 0 {
+		return fmt.Errorf("%s: token is required", op)
+	}
+
+	u, err := url.Parse(rawURL + connectEndpoint)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	q := u.Query()
+	q.Set("userId", userID)
+	q.Set("clawId", clawID)
+	q.Set("provider", provider)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(token))
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	for k, v := range headers {
 		req.Header.Set(k, v)

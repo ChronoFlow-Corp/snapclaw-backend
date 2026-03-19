@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
+	"shared/pkg/observability"
 	"strings"
 
 	"containermanager/config"
@@ -25,6 +27,22 @@ import (
 func main() {
 	cfg := config.MustLoadConfig()
 	logger := setupLogger()
+	shutdownTracing, err := observability.SetupTracing(context.Background(), observability.TracingConfig{
+		ServiceName: "containermanager",
+		Environment: cfg.Environment,
+		Enabled:     cfg.Observability.Tracing.Enabled,
+		Endpoint:    cfg.Observability.Tracing.Endpoint,
+		Insecure:    cfg.Observability.Tracing.Insecure,
+		SampleRatio: cfg.Observability.Tracing.SampleRatio,
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		if err := shutdownTracing(context.Background()); err != nil {
+			logger.Error("failed to shutdown tracing provider", slog.Any("err", err))
+		}
+	}()
 
 	ctx := context.Background()
 
@@ -41,33 +59,66 @@ func main() {
 
 	st := storage.NewContainer(pool)
 
-	c := configurer.NewClawConfigurer(cfg.Image.BasePath)
+	c := configurer.NewClawConfigurer(cfg.Image.BasePath, cfg.Image.CredentialsPath)
 
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		panic(err)
 	}
 
-	m := docker.NewManager(ctx, cli)
-
-	err = m.Build(ctx, cfg.Image.BuildCtx)
+	m, err := docker.NewManager(ctx, cli)
 	if err != nil {
 		panic(err)
 	}
 
-	s := service.NewContainer(c, st, m)
+	err = m.Build(ctx, cfg.Image.Dockerfile, cfg.Image.BuildCtx)
+	if err != nil {
+		panic(err)
+	}
 
-	cl := controllers.NewClaw(s, cfg.Http.ApiKey)
+	s, err := service.NewContainer(c, st, m, service.GogConfig{
+		KeyringBackend:  cfg.Gog.KeyringBackend,
+		KeyringPassword: cfg.Gog.KeyringPassword,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	metricsRegistry := observability.NewPrometheusRegistry()
+	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
+	if err != nil {
+		panic(err)
+	}
+	pubSubMetrics, err := observability.NewPubSubFanoutMetrics(metricsRegistry, "containermanager")
+	if err != nil {
+		panic(err)
+	}
+
+	cl := controllers.NewClaw(s, cfg.Http.ApiKey, controllers.ClawOptions{
+		PubSubForwardTimeout: cfg.PubSub.ForwardTimeout,
+		PubSubWorkers:        cfg.PubSub.Workers,
+		PubSubDedupTTL:       cfg.PubSub.DedupTTL,
+		Metrics:              pubSubMetrics,
+	})
 
 	mux := chi.NewRouter()
 	mux.Use(middleware.RequestID)
 	mux.Use(middleware.RealIP)
 	mux.Use(restmw.Logger())
 	mux.Use(middleware.Recoverer)
+	mux.Use(httpMetrics.Middleware(restmw.ClassifyActionFlow, restmw.RoutePattern))
+	if cfg.Observability.Metrics.Enabled {
+		mux.Handle(cfg.Observability.Metrics.Path, observability.Handler(metricsRegistry))
+	}
 
 	cl.Register(mux)
 
-	server := rest.NewServer(cfg.Http.Addr, mux)
+	var handler http.Handler = mux
+	if cfg.Observability.Tracing.Enabled {
+		handler = observability.WrapHTTPHandler(handler, "containermanager.http")
+	}
+
+	server := rest.NewServer(cfg.Http.Addr, handler)
 
 	logger.Info("containerManager server starting", slog.String("addr", cfg.Http.Addr))
 

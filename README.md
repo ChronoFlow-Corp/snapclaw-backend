@@ -54,6 +54,8 @@ docker compose up --build
 
 - Grafana: http://localhost:3000 (admin/admin)
 - Loki: http://localhost:3100
+- Prometheus: http://localhost:9090
+- Tempo: http://localhost:3200
 - simpleClaw API: http://localhost:1337
 - containerManager API: http://localhost:8080
 

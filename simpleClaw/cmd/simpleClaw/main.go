@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"shared/pkg/jwt"
+	"shared/pkg/observability"
 	"strings"
 
 	"simpleClaw/internal/api/rest"
@@ -19,6 +22,7 @@ import (
 	"simpleClaw/internal/infra/storages/servers"
 	"simpleClaw/internal/infra/storages/users"
 	"simpleClaw/internal/service/claw"
+	serverservice "simpleClaw/internal/service/server"
 	"simpleClaw/internal/service/user"
 
 	"github.com/go-chi/chi/v5"
@@ -33,14 +37,50 @@ import (
 func main() {
 	cfg := config.New()
 	logger := setupLogger(cfg.Environment)
+	shutdownTracing, err := observability.SetupTracing(context.Background(), observability.TracingConfig{
+		ServiceName: "simpleclaw",
+		Environment: cfg.Environment,
+		Enabled:     cfg.Observability.Tracing.Enabled,
+		Endpoint:    cfg.Observability.Tracing.Endpoint,
+		Insecure:    cfg.Observability.Tracing.Insecure,
+		SampleRatio: cfg.Observability.Tracing.SampleRatio,
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		if err := shutdownTracing(context.Background()); err != nil {
+			logger.Error("failed to shutdown tracing provider", slog.Any("err", err))
+		}
+	}()
 
-	goth.UseProviders(
-		google.New(
-			cfg.Auth.Google.ClientID,
-			cfg.Auth.Google.ClientSecret,
-			cfg.Auth.Google.CallbackURL,
-		),
+	gAuth := google.New(
+		cfg.Auth.Google.ClientID,
+		cfg.Auth.Google.ClientSecret,
+		cfg.Auth.Google.CallbackURL,
+		"https://www.googleapis.com/auth/userinfo.profile",
+		"https://www.googleapis.com/auth/userinfo.email",
+		"openid",
 	)
+
+	gmailConnect := google.New(
+		cfg.Connect.Gmail.ClientID,
+		cfg.Connect.Gmail.ClientSecret,
+		cfg.Connect.Gmail.CallbackURL,
+		"https://www.googleapis.com/auth/userinfo.profile",
+		"https://www.googleapis.com/auth/userinfo.email",
+		"openid",
+		"https://www.googleapis.com/auth/gmail.send",
+		"https://www.googleapis.com/auth/gmail.readonly",
+		"https://www.googleapis.com/auth/gmail.modify",
+		"https://www.googleapis.com/auth/gmail.labels",
+	)
+
+	gmailConnect.SetName("gmail")
+	gmailConnect.SetPrompt("consent")
+	gAuth.SetName("google")
+
+	goth.UseProviders(gAuth, gmailConnect)
 
 	db, err := gorm.Open(
 		postgres.Open(cfg.Database.Dsn),
@@ -69,16 +109,24 @@ func main() {
 	)
 
 	orManager, err := openrouter.NewApiKeyManager(openrouter.Options{
-		BaseURL:  cfg.OpenRouter.BaseURL,
-		APIToken: cfg.OpenRouter.APIToken,
-		Timeout:  cfg.OpenRouter.Timeout,
+		BaseURL:    cfg.OpenRouter.BaseURL,
+		APIToken:   cfg.OpenRouter.APIToken,
+		Timeout:    cfg.OpenRouter.Timeout,
+		HTTPClient: observability.NewHTTPClient(cfg.OpenRouter.Timeout),
 	})
 	if err != nil {
 		panic(err)
 	}
 
-	uService := user.NewUser(j, userStorage, channelsStorage, orManager)
 	hostingManager := hosting.NewManager()
+	uService := user.NewUser(
+		j,
+		userStorage,
+		channelsStorage,
+		orManager,
+		cfg.Auth.Admins,
+	)
+	serverService := serverservice.New(serversStorage)
 	clawService := claw.NewClaw(
 		clawStorage,
 		channelsStorage,
@@ -87,15 +135,33 @@ func main() {
 		hostingManager,
 		orManager,
 		cfg.Hosting.ContainerManager.BackupPath,
+		claw.GmailWatchConfig{
+			Topic:  cfg.Connect.Gmail.Watch.Topic,
+			Labels: cfg.Connect.Gmail.Watch.Labels,
+		},
 	)
+	metricsRegistry := observability.NewPrometheusRegistry()
+	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
+	if err != nil {
+		panic(err)
+	}
+	pubSubMetrics, err := observability.NewPubSubFanoutMetrics(metricsRegistry, "simpleclaw")
+	if err != nil {
+		panic(err)
+	}
 
 	api := chi.NewRouter()
 
 	uController := controllers.NewUser(cfg.Environment, uService, j, cfg.Auth.Google.FrontendURL)
 	clawController := controllers.NewClaw(clawService, j)
-
-	uController.Register(api)
-	clawController.Register(api)
+	serverController := controllers.NewServer(serverService, uService, j)
+	proxyController := controllers.NewPubSubProxy(serverService, controllers.PubSubProxyOptions{
+		Token:          cfg.Proxy.Token,
+		ForwardTimeout: cfg.Proxy.ForwardTimeout,
+		RetryCount:     cfg.Proxy.RetryCount,
+		RetryBackoff:   cfg.Proxy.RetryBackoff,
+		Metrics:        pubSubMetrics,
+	})
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -103,10 +169,23 @@ func main() {
 	r.Use(appmw.Logger())
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(corsOptions(cfg)))
+	r.Use(httpMetrics.Middleware(appmw.ClassifyActionFlow, appmw.RoutePattern))
+	if cfg.Observability.Metrics.Enabled {
+		r.Handle(cfg.Observability.Metrics.Path, observability.Handler(metricsRegistry))
+	}
 
+	uController.Register(api)
+	clawController.Register(api)
+	serverController.Register(api)
+	proxyController.Register(r)
 	r.Mount("/api", api)
 
-	s := rest.NewServer(cfg.Http.Addr, r)
+	var handler http.Handler = r
+	if cfg.Observability.Tracing.Enabled {
+		handler = observability.WrapHTTPHandler(handler, "simpleclaw.http")
+	}
+
+	s := rest.NewServer(cfg.Http.Addr, handler)
 
 	logger.Info("simpleClaw server starting", slog.String("addr", cfg.Http.Addr))
 

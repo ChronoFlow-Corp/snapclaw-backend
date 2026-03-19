@@ -3,6 +3,8 @@ package users
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"simpleClaw/internal/infra/sql"
 
@@ -11,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Storage struct {
@@ -78,7 +81,9 @@ func (s *Storage) CreateSession(ctx context.Context, session entities.Session) e
 func (s *Storage) GetByEmail(ctx context.Context, email string) (entities.User, error) {
 	const op = "storages.Users.GetByEmail"
 
-	uDB, err := gorm.G[models.User](s.db).Where("email = ?", email).First(ctx)
+	email = strings.ToLower(strings.TrimSpace(email))
+
+	uDB, err := gorm.G[models.User](s.db).Where("LOWER(email) = ?", email).First(ctx)
 	if err != nil {
 		return entities.User{}, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
@@ -94,6 +99,23 @@ func (s *Storage) GetByEmail(ctx context.Context, email string) (entities.User, 
 		OpenRouterKeyID:  uDB.OpenRouterKeyID,
 		CreatedAt:        uDB.CreatedAt,
 	}, nil
+}
+
+func (s *Storage) UpdateRole(ctx context.Context, id uuid.UUID, role string) error {
+	const op = "storages.Users.UpdateRole"
+
+	tx := s.db.WithContext(ctx).Model(&models.User{}).
+		Where("id = ?", id).
+		Update("role", role)
+	if err := tx.Error; err != nil {
+		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
+	}
+
+	if tx.RowsAffected == 0 {
+		return fmt.Errorf("%s: %w", op, sql.ErrNotFound)
+	}
+
+	return nil
 }
 
 func (s *Storage) GetByID(ctx context.Context, id uuid.UUID) (entities.User, error) {
@@ -216,4 +238,76 @@ func (s *Storage) UpdateOpenRouterKey(
 	}
 
 	return nil
+}
+
+func (s *Storage) GetGmailToken(ctx context.Context, userID uuid.UUID) (entities.GmailToken, error) {
+	const op = "storages.Users.GetGmailToken"
+
+	tDB, err := gorm.G[models.GmailToken](s.db).Where("user_id = ?", userID).First(ctx)
+	if err != nil {
+		return entities.GmailToken{}, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
+	}
+
+	expiry := ""
+	if !tDB.ExpiresAt.IsZero() {
+		expiry = tDB.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+
+	return entities.GmailToken{
+		Email:  tDB.Email,
+		Client: tDB.Client,
+		Token: entities.Token{
+			AccessToken:  tDB.AccessToken,
+			RefreshToken: tDB.RefreshToken,
+			TokenType:    tDB.TokenType,
+			Expiry:       expiry,
+		},
+	}, nil
+}
+
+func (s *Storage) UpsertGmailToken(ctx context.Context, userID uuid.UUID, token entities.GmailToken) error {
+	const op = "storages.Users.UpsertGmailToken"
+
+	expiresAt, err := parseExpiry(token.Token.Expiry)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	model := models.GmailToken{
+		UserID:       userID,
+		Email:        token.Email,
+		Client:       token.Client,
+		AccessToken:  token.Token.AccessToken,
+		RefreshToken: token.Token.RefreshToken,
+		TokenType:    token.Token.TokenType,
+		ExpiresAt:    expiresAt,
+	}
+
+	tx := s.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "user_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"access_token",
+			"refresh_token",
+			"expires_at",
+			"updated_at",
+		}),
+	}).Create(&model)
+	if err := tx.Error; err != nil {
+		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
+	}
+
+	return nil
+}
+
+func parseExpiry(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
+	}
+
+	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return t, nil
+	}
+
+	return time.Parse(time.RFC3339, value)
 }

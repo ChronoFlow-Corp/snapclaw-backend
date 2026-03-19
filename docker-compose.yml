@@ -1,6 +1,27 @@
 name: snapclaw
 
 services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./deploy/prometheus/config.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    command: ["-config.file=/etc/tempo/config.yaml"]
+    volumes:
+      - ./deploy/tempo/config.yaml:/etc/tempo/config.yaml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "127.0.0.1:3200:3200"
+      - "127.0.0.1:4318:4318"
+
   loki:
     image: grafana/loki:2.9.4
     command: -config.file=/etc/loki/config.yaml
@@ -8,7 +29,7 @@ services:
       - ./deploy/loki/config.yaml:/etc/loki/config.yaml:ro
       - loki_data:/loki
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
 
   grafana:
     image: grafana/grafana:10.4.3
@@ -23,6 +44,8 @@ services:
       - "3000:3000"
     depends_on:
       - loki
+      - prometheus
+      - tempo
 
   promtail:
     image: grafana/promtail:2.9.4
@@ -44,7 +67,7 @@ services:
     volumes:
       - simpleclaw_db:/var/lib/postgresql/data
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
 
   containermanager-db:
     image: postgres:16-alpine
@@ -55,7 +78,7 @@ services:
     volumes:
       - containermanager_db:/var/lib/postgresql/data
     ports:
-      - "5434:5432"
+      - "127.0.0.1:5434:5432"
 
   simpleclaw:
     user: "0"
@@ -66,11 +89,11 @@ services:
       CONFIG_PATH: /config/dev-config.yaml
       LOG_LEVEL: info
     volumes:
-      - ./deploy/simpleClaw/dev-config.yaml:/config/dev-config.yaml:ro
+      - ./deploy/simpleClaw/config.yaml:/config/dev-config.yaml:ro
       - ./deploy/simpleClaw/keys:/config/keys:ro
       - simpleclaw_backups:/data/simpleclaw/backups
     ports:
-      - "1337:1337"
+      - "127.0.0.1:1337:1337"
     depends_on:
       - simpleclaw-db
       - containermanager
@@ -84,10 +107,10 @@ services:
       LOG_LEVEL: info
     user: "0"
     volumes:
-      - ./deploy/containerManager/dev-config.yaml:/config/dev-config.yaml:ro
+      - ./deploy/containerManager/config.yaml:/config/dev-config.yaml:ro
       - ./:/workspace:ro
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./claw-configs:/claw-configs
+      - ./claw-configs:/claw-configs:rw
     ports:
       - "8080:8080"
     depends_on:
@@ -97,6 +120,8 @@ volumes:
   grafana_data:
   promtail_positions:
   loki_data:
+  prometheus_data:
+  tempo_data:
   simpleclaw_db:
   containermanager_db:
   claw_configs:

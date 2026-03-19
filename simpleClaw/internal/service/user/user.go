@@ -5,29 +5,37 @@ import (
 	"errors"
 	"fmt"
 	"shared/pkg/jwt"
-
-	"simpleClaw/internal/infra/sql"
+	"strings"
+	"time"
 
 	"simpleClaw/internal/entities"
-
+	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/service/user/commands"
 
 	"github.com/google/uuid"
 )
 
 type Service struct {
-	j    jwt.JWT
-	uSt  UStorage
-	chSt ChannelStorage
-	keys apiKeyManager
+	j      jwt.JWT
+	uSt    UStorage
+	chSt   ChannelStorage
+	keys   apiKeyManager
+	admins map[string]struct{}
 }
 
-func NewUser(j jwt.JWT, uSt UStorage, chSt ChannelStorage, keys apiKeyManager) *Service {
+func NewUser(
+	j jwt.JWT,
+	uSt UStorage,
+	chSt ChannelStorage,
+	keys apiKeyManager,
+	admins []string,
+) *Service {
 	return &Service{
-		j:    j,
-		uSt:  uSt,
-		chSt: chSt,
-		keys: keys,
+		j:      j,
+		uSt:    uSt,
+		chSt:   chSt,
+		keys:   keys,
+		admins: buildAdminSet(admins),
 	}
 }
 
@@ -37,13 +45,16 @@ func (s *Service) SignIn(
 ) (access jwt.AccessToken, refresh jwt.RefreshToken, err error) {
 	const op = "service.Service.Sign"
 
-	u, err := s.uSt.GetByEmail(ctx, cm.Email)
+	email := normalizeEmail(cm.Email)
+	role := s.roleForEmail(email)
+
+	u, err := s.uSt.GetByEmail(ctx, email)
 	if err != nil && !errors.Is(err, sql.ErrNotFound) {
 		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
 	}
 
 	if errors.Is(err, sql.ErrNotFound) {
-		u = entities.NewUser(cm.Name, cm.NickName, cm.AvatarURL, cm.Email, entities.UserRole)
+		u = entities.NewUser(cm.Name, cm.NickName, cm.AvatarURL, email, role)
 
 		key, keyErr := s.keys.Create(ctx, u.ID, u.Name, 0)
 		if keyErr != nil {
@@ -57,6 +68,12 @@ func (s *Service) SignIn(
 		if err != nil {
 			return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
 		}
+	} else if u.Role != role {
+		if err := s.uSt.UpdateRole(ctx, u.ID, role); err != nil {
+			return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
+		}
+
+		u.Role = role
 	}
 
 	session := entities.NewSession(u.ID)
@@ -219,4 +236,81 @@ func (s *Service) GetChannels(ctx context.Context, userID uuid.UUID) ([]entities
 	}
 
 	return chs, nil
+}
+
+func (s *Service) Connect(ctx context.Context, cm commands.ConnectCommand) error {
+	const op = "service.Service.Connect"
+
+	provider := strings.ToLower(strings.TrimSpace(cm.Provider))
+	if provider != "gmail" {
+		return fmt.Errorf("%s: %w", op, ErrProviderUnsupported)
+	}
+
+	if cm.UserID == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	if cm.AccessToken == "" {
+		return fmt.Errorf("%s: %w", op, ErrAccessTokenRequired)
+	}
+
+	expiry := ""
+	if !cm.ExpiresAt.IsZero() {
+		expiry = cm.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+
+	token := entities.GmailToken{
+		Email:  strings.TrimSpace(cm.Email),
+		Client: "default",
+		Token: entities.Token{
+			AccessToken:  cm.AccessToken,
+			RefreshToken: cm.RefreshToken,
+			TokenType:    "Bearer",
+			Expiry:       expiry,
+		},
+	}
+
+	existing, err := s.uSt.GetGmailToken(ctx, cm.UserID)
+	switch {
+	case err == nil:
+		if token.Email == "" {
+			token.Email = existing.Email
+		}
+		if token.Client == "" {
+			token.Client = existing.Client
+		}
+		if token.Token.RefreshToken == "" {
+			token.Token.RefreshToken = existing.Token.RefreshToken
+		}
+		if token.Token.TokenType == "" {
+			token.Token.TokenType = existing.Token.TokenType
+		}
+		if token.Token.Expiry == "" {
+			token.Token.Expiry = existing.Token.Expiry
+		}
+	case err != nil && !errors.Is(err, sql.ErrNotFound):
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if token.Email == "" {
+		user, err := s.uSt.GetByID(ctx, cm.UserID)
+		if err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+		token.Email = user.Email
+	}
+
+	if token.Client == "" {
+		token.Client = "default"
+	}
+
+	if token.Token.TokenType == "" {
+		token.Token.TokenType = "Bearer"
+	}
+
+	if err := s.uSt.UpsertGmailToken(ctx, cm.UserID, token); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
 }

@@ -8,10 +8,12 @@ func Auth(key string) func(next http.Handler) http.Handler {
 			h := r.Header.Get("Authorization")
 			if h == "" {
 				http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+				return
 			}
 
 			if h != key {
 				http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+				return
 			}
 
 			next.ServeHTTP(w, r)

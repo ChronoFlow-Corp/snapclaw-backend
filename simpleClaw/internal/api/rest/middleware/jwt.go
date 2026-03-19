@@ -42,6 +42,7 @@ func AuthJwt(j jwtProvider) func(next http.Handler) http.Handler {
 					Code:    http.StatusUnauthorized,
 					Message: "Access token is invalid",
 				})
+				return
 			}
 
 			raw := accessCookie.Value
@@ -76,9 +77,7 @@ func AuthJwt(j jwtProvider) func(next http.Handler) http.Handler {
 					)
 				}
 
-				slctx.Logger(r.Context()).Error("Token parse error",
-					slog.String("token", raw),
-					slog.Any("err", err))
+				slctx.Logger(r.Context()).Error("Token parse error", slog.Any("err", err))
 
 				return
 			}

@@ -44,3 +44,10 @@ type RestoreConfig struct {
 	UserID string
 	ClawID string
 }
+
+type ConnectCommand struct {
+	Provider string
+	UserID   string
+	ClawID   string
+	Token    []byte
+}

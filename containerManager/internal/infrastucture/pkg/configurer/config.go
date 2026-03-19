@@ -17,11 +17,15 @@ import (
 )
 
 type ClawConfigurer struct {
-	basePath string
+	basePath        string
+	credentialsPath string
 }
 
-func NewClawConfigurer(basePath string) *ClawConfigurer {
-	return &ClawConfigurer{basePath: basePath}
+func NewClawConfigurer(basePath string, credentialsPath string) *ClawConfigurer {
+	return &ClawConfigurer{
+		basePath:        basePath,
+		credentialsPath: strings.TrimSpace(credentialsPath),
+	}
 }
 
 func (c *ClawConfigurer) Configure(cm commands.CreateClaw) (string, error) {
@@ -43,6 +47,10 @@ func (c *ClawConfigurer) Configure(cm commands.CreateClaw) (string, error) {
 	}
 
 	return basePath, nil
+}
+
+func (c *ClawConfigurer) GetCredentialsPath() string {
+	return c.credentialsPath
 }
 
 func (c *ClawConfigurer) Update(cm commands.UpdateClaw) (string, error) {

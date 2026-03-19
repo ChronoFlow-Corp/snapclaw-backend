@@ -27,6 +27,7 @@ type clawService interface {
 	Stop(ctx context.Context, cm commands.StopClaw) (entities.Claw, error)
 	Delete(ctx context.Context, cm commands.DeleteClaw) error
 	ApprovePairing(ctx context.Context, cm commands.ApprovePairing) error
+	Connect(ctx context.Context, cm commands.ConnectClaw) error
 }
 
 type Claw struct {
@@ -51,6 +52,7 @@ func (c *Claw) Register(r chi.Router) {
 		r.Post("/claws/{id}/start", c.Start)
 		r.Post("/claws/{id}/stop", c.Stop)
 		r.Post("/claws/{id}/approve", c.ApprovePairing)
+		r.Post("/claws/{id}/connect", c.Connect)
 		r.Delete("/claws/{id}", c.Delete)
 	})
 }
@@ -398,4 +400,43 @@ func (c *Claw) ApprovePairing(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.RespondOK(w, map[string]any{"approved": true})
+}
+
+func (c *Claw) Connect(w http.ResponseWriter, r *http.Request) {
+	rawID := chi.URLParam(r, "id")
+	id, err := uuid.Parse(rawID)
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid claw id",
+		})
+
+		return
+	}
+
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	provider := strings.TrimSpace(r.URL.Query().Get("provider"))
+	if provider == "" {
+		provider = "gmail"
+	}
+
+	if err := c.service.Connect(r.Context(), commands.ConnectClaw{
+		UserID:   userID,
+		ClawID:   id,
+		Provider: provider,
+	}); err != nil {
+		respondServiceError(w, err)
+		return
+	}
+
+	response.RespondOK(w, map[string]any{"connected": true})
 }

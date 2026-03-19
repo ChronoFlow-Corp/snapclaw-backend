@@ -10,6 +10,7 @@ const (
 	fileTypeJSON        = "json"
 	openClawConfigName  = "openclaw"
 	clawsEndpoint       = "/claws"
+	connectEndpoint     = "/connect"
 	approveEndpoint     = "/approve"
 	clawsStartEndpoint  = "/claws/start"
 	clawsStopEndpoint   = "/claws/stop"

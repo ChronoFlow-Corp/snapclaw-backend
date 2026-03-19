@@ -44,3 +44,9 @@ type ApprovePairing struct {
 	ClawID uuid.UUID
 	Code   string
 }
+
+type ConnectClaw struct {
+	UserID   uuid.UUID
+	ClawID   uuid.UUID
+	Provider string
+}

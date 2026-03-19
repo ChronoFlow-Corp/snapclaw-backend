@@ -11,6 +11,7 @@ type Server struct {
 	Name      string    `gorm:"type:varchar(255)"`
 	Ip        string    `gorm:"type:varchar(255)"`
 	Url       string    `gorm:"type:varchar(255)"`
+	ProxyUrl  string    `gorm:"type:varchar(255)"`
 	Status    string    `gorm:"type:varchar(255)"`
 	SecretKey string    `gorm:"type:varchar(255)"`
 	Claws     []Claw

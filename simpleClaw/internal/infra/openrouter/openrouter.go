@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"shared/pkg/observability"
 	"strings"
 	"time"
 
@@ -51,9 +52,7 @@ func NewApiKeyManager(opts Options) (*ApiKeyManager, error) {
 			timeout = 15 * time.Second
 		}
 
-		cfg.HTTPClient = &http.Client{
-			Timeout: timeout,
-		}
+		cfg.HTTPClient = observability.NewHTTPClient(timeout)
 	}
 
 	if opts.Referer != "" {

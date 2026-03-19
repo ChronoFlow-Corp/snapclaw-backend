@@ -8,6 +8,7 @@ import (
 	"simpleClaw/internal/infra/openrouter"
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/service/claw"
+	"simpleClaw/internal/service/server"
 	"simpleClaw/internal/service/user"
 )
 
@@ -33,13 +34,23 @@ var serviceErrorMappings = []serviceErrorMapping{
 	{err: sql.ErrInvalid, code: http.StatusBadRequest, message: "invalid data"},
 
 	{err: user.ErrChannelUnsupported, code: http.StatusBadRequest, message: "channel type is not supported"},
+	{err: user.ErrProviderUnsupported, code: http.StatusBadRequest, message: "provider is not supported"},
+	{err: user.ErrAccessTokenRequired, code: http.StatusBadRequest, message: "access token is required"},
 	{err: claw.ErrUserIDRequired, code: http.StatusBadRequest, message: "user id is required"},
 	{err: claw.ErrClawIDRequired, code: http.StatusBadRequest, message: "claw id is required"},
 	{err: claw.ErrNameRequired, code: http.StatusBadRequest, message: "name is required"},
 	{err: claw.ErrModelRequired, code: http.StatusBadRequest, message: "model is required"},
+	{err: server.ErrServerIDRequired, code: http.StatusBadRequest, message: "server id is required"},
+	{err: server.ErrNameRequired, code: http.StatusBadRequest, message: "name is required"},
+	{err: server.ErrURLRequired, code: http.StatusBadRequest, message: "server url is required"},
+	{err: server.ErrProxyURLInvalid, code: http.StatusBadRequest, message: "server proxy url is invalid"},
+	{err: server.ErrSecretKeyRequired, code: http.StatusBadRequest, message: "server secret key is required"},
 	{err: claw.ErrServerIDRequired, code: http.StatusBadRequest, message: "server id is required"},
 	{err: claw.ErrContainerIDRequired, code: http.StatusBadRequest, message: "container id is required"},
 	{err: claw.ErrPairingCodeRequired, code: http.StatusBadRequest, message: "code is required"},
+	{err: claw.ErrPairingCodeInvalid, code: http.StatusBadRequest, message: "invalid code"},
+	{err: claw.ErrProviderUnsupported, code: http.StatusBadRequest, message: "provider is not supported"},
+	{err: claw.ErrGmailTokenRequired, code: http.StatusBadRequest, message: "gmail token is required"},
 	{err: openrouter.ErrModelRequired, code: http.StatusBadRequest, message: "model is required"},
 	{err: openrouter.ErrModelNotFound, code: http.StatusBadRequest, message: "model not found"},
 	{err: openrouter.ErrBadRequest, code: http.StatusBadRequest, message: "openrouter request is invalid"},
@@ -50,6 +61,7 @@ var serviceErrorMappings = []serviceErrorMapping{
 	{err: claw.ErrHostingMissing, code: http.StatusServiceUnavailable, message: "hosting is not configured"},
 	{err: claw.ErrOpenRouterClient, code: http.StatusServiceUnavailable, message: "openrouter is not configured"},
 	{err: claw.ErrConfigArchivePathRequired, code: http.StatusServiceUnavailable, message: "config archive path is not configured"},
+	{err: claw.ErrGmailWatchTopicRequired, code: http.StatusServiceUnavailable, message: "gmail watch topic is not configured"},
 	{err: openrouter.ErrMissingBaseURL, code: http.StatusServiceUnavailable, message: "openrouter is not configured"},
 	{err: openrouter.ErrMissingAPIToken, code: http.StatusServiceUnavailable, message: "openrouter is not configured"},
 	{err: openrouter.ErrUnavailable, code: http.StatusServiceUnavailable, message: "openrouter is unavailable"},

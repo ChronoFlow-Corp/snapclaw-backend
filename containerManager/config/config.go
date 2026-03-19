@@ -3,15 +3,21 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/ilyakaznacheev/cleanenv"
 )
 
 type Config struct {
-	Postgres   Postgres   `yaml:"postgres"`
-	Http       Http       `yaml:"http"`
-	Image      Image      `yaml:"image"`
-	Migrations Migrations `yaml:"migrations"`
+	Environment   string        `yaml:"environment" env:"ENVIRONMENT" env-default:"development"`
+	Postgres      Postgres      `yaml:"postgres"`
+	Http          Http          `yaml:"http"`
+	Image         Image         `yaml:"image"`
+	Gog           gog           `yaml:"gog"`
+	PubSub        pubSub        `yaml:"pubsub"`
+	Migrations    Migrations    `yaml:"migrations"`
+	Observability observability `yaml:"observability"`
 }
 
 type Http struct {
@@ -26,13 +32,43 @@ type Postgres struct {
 }
 
 type Image struct {
-	BuildCtx []string `yaml:"build_context"`
-	BasePath string   `yaml:"base_path"`
+	BuildCtx        []string `yaml:"build_context"`
+	BasePath        string   `yaml:"base_path"`
+	Dockerfile      string   `yaml:"dockerfile"`
+	CredentialsPath string   `yaml:"credentials_path" env:"GOG_CREDENTIALS_PATH"`
+}
+
+type gog struct {
+	KeyringBackend  string `yaml:"keyring_backend" env:"GOG_KEYRING_BACKEND" env-default:"file"`
+	KeyringPassword string `yaml:"keyring_password" env:"GOG_KEYRING_PASSWORD"`
+}
+
+type pubSub struct {
+	ForwardTimeout time.Duration `yaml:"forward_timeout" env:"PUBSUB_FORWARD_TIMEOUT" env-default:"5s"`
+	Workers        int           `yaml:"workers" env:"PUBSUB_WORKERS" env-default:"32"`
+	DedupTTL       time.Duration `yaml:"dedup_ttl" env:"PUBSUB_DEDUP_TTL" env-default:"10m"`
 }
 
 type Migrations struct {
 	Auto bool   `env:"MIGRATIONS_AUTO" env-default:"true"       yaml:"auto"`
 	Path string `env:"MIGRATIONS_PATH" env-default:"migrations" yaml:"path"`
+}
+
+type observability struct {
+	Metrics metrics `yaml:"metrics"`
+	Tracing tracing `yaml:"tracing"`
+}
+
+type metrics struct {
+	Enabled bool   `yaml:"enabled" env:"OBS_METRICS_ENABLED" env-default:"true"`
+	Path    string `yaml:"path" env:"OBS_METRICS_PATH" env-default:"/metrics"`
+}
+
+type tracing struct {
+	Enabled     bool    `yaml:"enabled" env:"OBS_TRACING_ENABLED" env-default:"false"`
+	Endpoint    string  `yaml:"endpoint" env:"OBS_TRACING_ENDPOINT"`
+	Insecure    bool    `yaml:"insecure" env:"OBS_TRACING_INSECURE" env-default:"true"`
+	SampleRatio float64 `yaml:"sample_ratio" env:"OBS_TRACING_SAMPLE_RATIO" env-default:"1"`
 }
 
 func MustLoadConfig() Config {
@@ -50,5 +86,24 @@ func MustLoadConfig() Config {
 		panic(fmt.Sprintf("%s: %v", op, err))
 	}
 
+	cfg.normalize()
+
 	return cfg
+}
+
+func (c *Config) normalize() {
+	c.Observability.Metrics.Path = normalizeMetricsPath(c.Observability.Metrics.Path)
+}
+
+func normalizeMetricsPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "/metrics"
+	}
+
+	if strings.HasPrefix(path, "/") {
+		return path
+	}
+
+	return "/" + path
 }

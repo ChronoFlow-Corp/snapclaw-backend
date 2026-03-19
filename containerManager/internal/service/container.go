@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"shared/consts"
+	"strings"
 	"time"
 
 	"containermanager/internal/entities"
@@ -21,20 +24,37 @@ type Container struct {
 	manager *docker.Manager
 	p       *Porter
 	cfg     *configurer.ClawConfigurer
+	gog     GogConfig
+}
+
+type GogConfig struct {
+	KeyringBackend  string
+	KeyringPassword string
 }
 
 var errForbidden = errors.New("container belongs to another user")
+
+var ErrInvalidCode = errors.New("invalid code")
 
 func NewContainer(
 	cfg *configurer.ClawConfigurer,
 	clRepo ClawRepository,
 	manager *docker.Manager,
-) *Container {
+	gog GogConfig,
+) (*Container, error) {
 	c := &Container{
 		cfg:     cfg,
 		clRepo:  clRepo,
 		manager: manager,
 		p:       NewPorter(),
+		gog: GogConfig{
+			KeyringBackend:  strings.TrimSpace(gog.KeyringBackend),
+			KeyringPassword: strings.TrimSpace(gog.KeyringPassword),
+		},
+	}
+
+	if c.gog.KeyringBackend == "" {
+		c.gog.KeyringBackend = "file"
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -42,10 +62,10 @@ func NewContainer(
 
 	err := c.onStart(ctx)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	return c
+	return c, nil
 }
 
 func (c *Container) Start(ctx context.Context, cm commands.StartClaw) error {
@@ -224,6 +244,12 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
 
+	gogWatchPort, err := GogWatchPortFromGateway(cPort)
+	if err != nil {
+		c.p.Release(cPort)
+		return "", fmt.Errorf("%s: %w", op, err)
+	}
+
 	releasePort := func() {
 		if cPort != "" {
 			c.p.Release(cPort)
@@ -232,10 +258,12 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 	}
 
 	cID, err := c.manager.Create(ctx, docker.CreateOptions{
-		HostPort:      cPort,
-		HostIP:        "127.0.0.1",
-		ContainerPort: cPort,
-		Volumes:       []string{fmt.Sprintf("%s:/app/:rw", cfgPath)},
+		HostPort:               cPort,
+		HostIP:                 "127.0.0.1",
+		ContainerPort:          cPort,
+		SecondaryHostPort:      gogWatchPort,
+		SecondaryContainerPort: gogWatchPort,
+		Volumes:                c.containerVolumes(cfgPath),
 		Env: append([]string{
 			"OPENCLAW_HOME=/app/",
 			"NODE_ENV=production",
@@ -341,9 +369,82 @@ func (c *Container) RestoreConfig(
 func (c *Container) Approve(clawID, userID, code string) error {
 	const op = "container.Manager.Approve"
 
+	if c.cfg == nil {
+		return fmt.Errorf("%s: configurer is not configured", op)
+	}
+
 	err := c.cfg.ApprovePair(userID, clawID, code)
 	if err != nil {
+		if errors.Is(err, configurer.ErrInvalidCode) {
+			return fmt.Errorf("%s: %w", op, ErrInvalidCode)
+		}
 		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (c *Container) Connect(ctx context.Context, cm commands.ConnectCommand) error {
+	const op = "service.Container.Connect"
+
+	cont, err := c.clRepo.GetByUserClawID(ctx, cm.UserID, cm.ClawID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	switch cm.Provider {
+	case consts.GmailProvider:
+		importPayload, normalizeErr := normalizeGogImportPayload(cm.Token)
+		if normalizeErr != nil {
+			return fmt.Errorf("%s: %w", op, normalizeErr)
+		}
+
+		var payload gogImportPayload
+		if err := json.Unmarshal(importPayload, &payload); err != nil {
+			return fmt.Errorf("%s: parse normalized payload: %w", op, err)
+		}
+
+		if strings.EqualFold(c.gog.KeyringBackend, "file") && c.gog.KeyringPassword == "" {
+			return fmt.Errorf("%s: gog keyring password is required for file backend", op)
+		}
+
+		gogWatchPort, err := GogWatchPortFromGateway(cont.Port)
+		if err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+
+		err = c.manager.ExecGmail(ctx, cont.ContainerID, importPayload, docker.ExecGmailOptions{
+			KeyringBackend:  c.gog.KeyringBackend,
+			KeyringPassword: c.gog.KeyringPassword,
+		})
+		if err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+
+		err = c.manager.StartGmailWatch(ctx, cont.ContainerID, docker.ExecGmailWatchStartOptions{
+			Account:         payload.Email,
+			Topic:           payload.Topic,
+			Labels:          payload.Labels,
+			KeyringBackend:  c.gog.KeyringBackend,
+			KeyringPassword: c.gog.KeyringPassword,
+		})
+		if err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+
+		err = c.manager.StartGmailWatcher(ctx, cont.ContainerID, docker.ExecGmailWatcherOptions{
+			Account:         payload.Email,
+			WatchPort:       gogWatchPort,
+			WatchPath:       "/gmail-pubsub",
+			HookURL:         fmt.Sprintf("http://127.0.0.1:%s/hooks/gmail", cont.Port),
+			KeyringBackend:  c.gog.KeyringBackend,
+			KeyringPassword: c.gog.KeyringPassword,
+		})
+		if err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+	default:
+		return fmt.Errorf("%s: %w", op, fmt.Errorf("unknown provider: %s", cm.Provider))
 	}
 
 	return nil
@@ -362,4 +463,40 @@ func (c *Container) onStart(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (c *Container) ListRunning(ctx context.Context) ([]entities.Container, error) {
+	const op = "service.Container.ListRunning"
+
+	containers, err := c.clRepo.GetAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	running := make([]entities.Container, 0, len(containers))
+	for _, cc := range containers {
+		if cc.Status == entities.ContainerStatusRunning && strings.TrimSpace(cc.Port) != "" {
+			running = append(running, cc)
+		}
+	}
+
+	return running, nil
+}
+
+func (c *Container) containerVolumes(cfgPath string) []string {
+	volumes := []string{fmt.Sprintf("%s:/app/:rw", cfgPath)}
+
+	credentialsPath := strings.TrimSpace(c.cfg.GetCredentialsPath())
+	if credentialsPath == "" {
+		return volumes
+	}
+
+	return append(
+		volumes,
+		fmt.Sprintf(
+			"%s:%s:ro",
+			credentialsPath,
+			docker.GogBootstrapCredentialsPath,
+		),
+	)
 }

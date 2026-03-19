@@ -2,7 +2,7 @@ FROM golang:1.25 AS build
 
 WORKDIR /src
 
-COPY go.work go.work.sum ./
+COPY go.work ./
 COPY shared ./shared
 COPY simpleClaw ./simpleClaw
 COPY containerManager ./containerManager

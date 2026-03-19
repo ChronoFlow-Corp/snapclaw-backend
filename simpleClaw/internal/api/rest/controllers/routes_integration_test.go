@@ -22,6 +22,7 @@ import (
 	entitychannels "simpleClaw/internal/entities/channels"
 	"simpleClaw/internal/infra/sql"
 	clawcommands "simpleClaw/internal/service/claw/commands"
+	servercommands "simpleClaw/internal/service/server/commands"
 	usercommands "simpleClaw/internal/service/user/commands"
 
 	"github.com/go-chi/chi/v5"
@@ -29,13 +30,14 @@ import (
 )
 
 type testEnv struct {
-	router       http.Handler
-	user         entities.User
-	sessionID    uuid.UUID
-	accessToken  string
-	refreshToken string
-	userService  *fakeUserService
-	clawService  *fakeClawService
+	router        http.Handler
+	user          entities.User
+	sessionID     uuid.UUID
+	accessToken   string
+	refreshToken  string
+	userService   *fakeUserService
+	clawService   *fakeClawService
+	serverService *fakeServerService
 }
 
 func TestRoutesIntegration(t *testing.T) {
@@ -362,14 +364,199 @@ func TestRoutesIntegration(t *testing.T) {
 			t.Fatalf("claw %s should be deleted", cl.ID)
 		}
 	})
+
+	t.Run("GET /api/servers requires admin", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		rr := env.request(t, http.MethodGet, "/api/servers", nil, accessCookie(env.accessToken))
+
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("unexpected status: %d, body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("POST /api/servers", func(t *testing.T) {
+		env := newAdminTestEnv(t)
+
+		body := map[string]any{
+			"name":      "alpha",
+			"ip":        "10.0.0.5",
+			"url":       "http://alpha.internal",
+			"proxyUrl":  "http://alpha.internal/gmail-pubsub",
+			"status":    "ready",
+			"secretKey": "top-secret",
+		}
+
+		rr := env.request(t, http.MethodPost, "/api/servers", body, accessCookie(env.accessToken))
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d, body=%s", rr.Code, rr.Body.String())
+		}
+
+		var payload struct {
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			IP        string `json:"ip"`
+			URL       string `json:"url"`
+			ProxyURL  string `json:"proxyUrl"`
+			Status    string `json:"status"`
+			SecretKey string `json:"secretKey"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if payload.ID == "" {
+			t.Fatalf("expected non-empty server ID")
+		}
+		if payload.Name != "alpha" || payload.URL != "http://alpha.internal" {
+			t.Fatalf("unexpected payload: %+v", payload)
+		}
+		if payload.ProxyURL != "http://alpha.internal/gmail-pubsub" {
+			t.Fatalf("unexpected payload: %+v", payload)
+		}
+	})
+
+	t.Run("GET /api/servers", func(t *testing.T) {
+		env := newAdminTestEnv(t)
+		env.serverService.seed("first")
+		env.serverService.seed("second")
+
+		rr := env.request(t, http.MethodGet, "/api/servers", nil, accessCookie(env.accessToken))
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d, body=%s", rr.Code, rr.Body.String())
+		}
+
+		var payload []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if len(payload) != 2 {
+			t.Fatalf("expected 2 servers, got %d", len(payload))
+		}
+	})
+
+	t.Run("GET /api/servers/{id}", func(t *testing.T) {
+		env := newAdminTestEnv(t)
+		srv := env.serverService.seed("single")
+
+		rr := env.request(
+			t,
+			http.MethodGet,
+			"/api/servers/"+srv.ID.String(),
+			nil,
+			accessCookie(env.accessToken),
+		)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d, body=%s", rr.Code, rr.Body.String())
+		}
+
+		var payload struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if payload.ID != srv.ID.String() || payload.Name != "single" {
+			t.Fatalf("unexpected payload: %+v", payload)
+		}
+	})
+
+	t.Run("PUT /api/servers/{id}", func(t *testing.T) {
+		env := newAdminTestEnv(t)
+		srv := env.serverService.seed("before-update")
+
+		body := map[string]any{
+			"name":      "after-update",
+			"ip":        "10.0.0.44",
+			"url":       "http://updated.internal",
+			"proxyUrl":  "http://updated.internal/gmail-pubsub",
+			"status":    "busy",
+			"secretKey": "updated-secret",
+		}
+
+		rr := env.request(
+			t,
+			http.MethodPut,
+			"/api/servers/"+srv.ID.String(),
+			body,
+			accessCookie(env.accessToken),
+		)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d, body=%s", rr.Code, rr.Body.String())
+		}
+
+		var payload struct {
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			URL       string `json:"url"`
+			ProxyURL  string `json:"proxyUrl"`
+			SecretKey string `json:"secretKey"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if payload.ID != srv.ID.String() || payload.Name != "after-update" {
+			t.Fatalf("unexpected payload: %+v", payload)
+		}
+		if payload.URL != "http://updated.internal" || payload.SecretKey != "updated-secret" {
+			t.Fatalf("unexpected payload: %+v", payload)
+		}
+		if payload.ProxyURL != "http://updated.internal/gmail-pubsub" {
+			t.Fatalf("unexpected payload: %+v", payload)
+		}
+	})
+
+	t.Run("DELETE /api/servers/{id}", func(t *testing.T) {
+		env := newAdminTestEnv(t)
+		srv := env.serverService.seed("to-delete")
+
+		rr := env.request(
+			t,
+			http.MethodDelete,
+			"/api/servers/"+srv.ID.String(),
+			nil,
+			accessCookie(env.accessToken),
+		)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d, body=%s", rr.Code, rr.Body.String())
+		}
+
+		var payload map[string]bool
+		decodeJSON(t, rr, &payload)
+
+		if !payload["deleted"] {
+			t.Fatalf("expected deleted=true, got payload=%v", payload)
+		}
+		if env.serverService.exists(srv.ID) {
+			t.Fatalf("server %s should be deleted", srv.ID)
+		}
+	})
 }
 
 func newTestEnv(t *testing.T) *testEnv {
+	return newTestEnvWithRole(t, entities.UserRole)
+}
+
+func newAdminTestEnv(t *testing.T) *testEnv {
+	return newTestEnvWithRole(t, entities.AdminRole)
+}
+
+func newTestEnvWithRole(t *testing.T, role string) *testEnv {
 	t.Helper()
 
 	j := newTestJWT(t)
 
-	user := entities.NewUser("integration-user", "integration@example.com", entities.UserRole)
+	user := entities.NewUser(
+		"integration-user",
+		"integration-user",
+		"",
+		"integration@example.com",
+		role,
+	)
 	sessionID := uuid.New()
 
 	access, refresh, err := j.GeneratePair(user.ID, sessionID)
@@ -379,22 +566,26 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	uService := newFakeUserService(user, j, sessionID, refresh.Raw)
 	cService := newFakeClawService()
+	sService := newFakeServerService()
 
 	api := chi.NewRouter()
-	controllers.NewUser(config.EnvDevelopment, uService, j).Register(api)
+	controllers.NewUser(config.EnvDevelopment, uService, j, "http://example.com").Register(api)
 	controllers.NewClaw(cService, j).Register(api)
+	controllers.NewServer(sService, uService, j).Register(api)
 
 	root := chi.NewRouter()
+	controllers.NewPubSubProxy(sService, controllers.PubSubProxyOptions{}).Register(root)
 	root.Mount("/api", api)
 
 	return &testEnv{
-		router:       root,
-		user:         user,
-		sessionID:    sessionID,
-		accessToken:  access.Raw,
-		refreshToken: refresh.Raw,
-		userService:  uService,
-		clawService:  cService,
+		router:        root,
+		user:          user,
+		sessionID:     sessionID,
+		accessToken:   access.Raw,
+		refreshToken:  refresh.Raw,
+		userService:   uService,
+		clawService:   cService,
+		serverService: sService,
 	}
 }
 
@@ -567,6 +758,13 @@ func (s *fakeUserService) AddChannel(
 	return ch, nil
 }
 
+func (s *fakeUserService) Connect(
+	_ context.Context,
+	_ usercommands.ConnectCommand,
+) error {
+	return errors.New("oauth routes are not covered in this suite")
+}
+
 type fakeClawService struct {
 	claws map[uuid.UUID]entities.Claw
 }
@@ -695,6 +893,20 @@ func (s *fakeClawService) Stop(
 	return existing, nil
 }
 
+func (s *fakeClawService) ApprovePairing(
+	_ context.Context,
+	_ clawcommands.ApprovePairing,
+) error {
+	return errors.New("approve pairing is not covered in this suite")
+}
+
+func (s *fakeClawService) Connect(
+	_ context.Context,
+	_ clawcommands.ConnectClaw,
+) error {
+	return errors.New("connect is not covered in this suite")
+}
+
 func (s *fakeClawService) Delete(
 	_ context.Context,
 	cm clawcommands.DeleteClaw,
@@ -705,6 +917,101 @@ func (s *fakeClawService) Delete(
 	}
 
 	delete(s.claws, cm.ClawID)
+
+	return nil
+}
+
+type fakeServerService struct {
+	servers map[uuid.UUID]entities.Server
+}
+
+func newFakeServerService() *fakeServerService {
+	return &fakeServerService{
+		servers: map[uuid.UUID]entities.Server{},
+	}
+}
+
+func (s *fakeServerService) seed(name string) entities.Server {
+	srv := entities.NewServer(
+		name,
+		"10.0.0.1",
+		"http://"+name+".internal",
+		"http://"+name+".internal/gmail-pubsub",
+		"ready",
+		"secret-"+name,
+	)
+	s.servers[srv.ID] = srv
+
+	return srv
+}
+
+func (s *fakeServerService) exists(id uuid.UUID) bool {
+	_, ok := s.servers[id]
+
+	return ok
+}
+
+func (s *fakeServerService) Create(
+	_ context.Context,
+	cm servercommands.CreateServer,
+) (entities.Server, error) {
+	srv := entities.NewServer(cm.Name, cm.IP, cm.URL, cm.ProxyURL, cm.Status, cm.SecretKey)
+	s.servers[srv.ID] = srv
+
+	return srv, nil
+}
+
+func (s *fakeServerService) GetAll(_ context.Context) ([]entities.Server, error) {
+	result := make([]entities.Server, 0, len(s.servers))
+	for _, srv := range s.servers {
+		result = append(result, srv)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].ID.String() < result[j].ID.String()
+	})
+
+	return result, nil
+}
+
+func (s *fakeServerService) GetByID(
+	_ context.Context,
+	id uuid.UUID,
+) (entities.Server, error) {
+	srv, ok := s.servers[id]
+	if !ok {
+		return entities.Server{}, sql.ErrNotFound
+	}
+
+	return srv, nil
+}
+
+func (s *fakeServerService) Update(
+	_ context.Context,
+	cm servercommands.UpdateServer,
+) (entities.Server, error) {
+	srv, ok := s.servers[cm.ID]
+	if !ok {
+		return entities.Server{}, sql.ErrNotFound
+	}
+
+	srv.Name = cm.Name
+	srv.IP = cm.IP
+	srv.URL = cm.URL
+	srv.ProxyURL = cm.ProxyURL
+	srv.Status = cm.Status
+	srv.SecretKey = cm.SecretKey
+	s.servers[srv.ID] = srv
+
+	return srv, nil
+}
+
+func (s *fakeServerService) Delete(_ context.Context, id uuid.UUID) error {
+	if _, ok := s.servers[id]; !ok {
+		return sql.ErrNotFound
+	}
+
+	delete(s.servers, id)
 
 	return nil
 }

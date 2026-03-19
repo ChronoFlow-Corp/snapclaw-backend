@@ -2,6 +2,7 @@ package claw
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,8 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"shared/consts"
+
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/hosting"
+	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/service/claw/commands"
 
 	"github.com/google/uuid"
@@ -36,6 +40,10 @@ var (
 	ErrContainerIDRequired       = errors.New("claw container id is required")
 	ErrConfigArchivePathRequired = errors.New("config archive path is required")
 	ErrPairingCodeRequired       = errors.New("pairing code is required")
+	ErrPairingCodeInvalid        = errors.New("invalid code")
+	ErrProviderUnsupported       = errors.New("provider is not supported")
+	ErrGmailTokenRequired        = errors.New("gmail token is required")
+	ErrGmailWatchTopicRequired   = errors.New("gmail watch topic is required")
 
 	errUserIDRequired            = ErrUserIDRequired
 	errClawIDRequired            = ErrClawIDRequired
@@ -48,6 +56,10 @@ var (
 	errContainerIDRequired       = ErrContainerIDRequired
 	errConfigArchivePathRequired = ErrConfigArchivePathRequired
 	errPairingCodeRequired       = ErrPairingCodeRequired
+	errPairingCodeInvalid        = ErrPairingCodeInvalid
+	errProviderUnsupported       = ErrProviderUnsupported
+	errGmailTokenRequired        = ErrGmailTokenRequired
+	errGmailWatchTopicRequired   = ErrGmailWatchTopicRequired
 )
 
 type Service struct {
@@ -58,6 +70,12 @@ type Service struct {
 	hosting     hostingManager
 	keys        apiKeyManager
 	archivePath string
+	watch       GmailWatchConfig
+}
+
+type GmailWatchConfig struct {
+	Topic  string
+	Labels []string
 }
 
 func NewClaw(
@@ -68,6 +86,7 @@ func NewClaw(
 	hosting hostingManager,
 	keys apiKeyManager,
 	archivePath string,
+	watch GmailWatchConfig,
 ) *Service {
 	return &Service{
 		claws:       claws,
@@ -77,6 +96,10 @@ func NewClaw(
 		hosting:     hosting,
 		keys:        keys,
 		archivePath: archivePath,
+		watch: GmailWatchConfig{
+			Topic:  strings.TrimSpace(watch.Topic),
+			Labels: normalizeWatchLabels(watch.Labels),
+		},
 	}
 }
 
@@ -570,6 +593,114 @@ func (s *Service) ApprovePairing(
 	}
 
 	if err := s.hosting.ApprovePairing(ctx, cl, srv, code); err != nil {
+		if errors.Is(err, hosting.ErrInvalidCode) {
+			return fmt.Errorf("%s: %w", op, errPairingCodeInvalid)
+		}
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Service) Connect(
+	ctx context.Context,
+	cm commands.ConnectClaw,
+) error {
+	const op = "service.Claw.Connect"
+
+	if cm.UserID == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, errUserIDRequired)
+	}
+
+	if cm.ClawID == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, errClawIDRequired)
+	}
+
+	if s.hosting == nil {
+		return fmt.Errorf("%s: %w", op, errHostingMissing)
+	}
+
+	provider := strings.TrimSpace(cm.Provider)
+	if provider == "" {
+		provider = "gmail"
+	}
+
+	if !strings.EqualFold(provider, "gmail") {
+		return fmt.Errorf("%s: %w", op, errProviderUnsupported)
+	}
+
+	token, err := s.users.GetGmailToken(ctx, cm.UserID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNotFound) {
+			return fmt.Errorf("%s: %w", op, errGmailTokenRequired)
+		}
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if token.Client == "" {
+		token.Client = "default"
+	}
+
+	if token.Token.TokenType == "" {
+		token.Token.TokenType = "Bearer"
+	}
+
+	if token.Token.RefreshToken == "" {
+		return fmt.Errorf("%s: %w", op, errGmailTokenRequired)
+	}
+
+	cl, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if cl.ContainerID == "" {
+		return fmt.Errorf("%s: %w", op, errContainerIDRequired)
+	}
+
+	if cl.ServerID == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, errServerIDRequired)
+	}
+
+	srv, err := s.servers.GetByID(ctx, cl.ServerID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	watchTopic := strings.TrimSpace(s.watch.Topic)
+	watchLabels := append([]string(nil), s.watch.Labels...)
+	if cl.Config.Hooks != nil {
+		if hookTopic := strings.TrimSpace(cl.Config.Hooks.Gmail.Topic); hookTopic != "" {
+			watchTopic = hookTopic
+		}
+
+		if hookLabel := strings.TrimSpace(cl.Config.Hooks.Gmail.Label); hookLabel != "" {
+			watchLabels = []string{hookLabel}
+		}
+	}
+
+	if watchTopic == "" {
+		return fmt.Errorf("%s: %w", op, errGmailWatchTopicRequired)
+	}
+
+	payload, err := json.Marshal(struct {
+		Email        string   `json:"email"`
+		Client       string   `json:"client,omitempty"`
+		RefreshToken string   `json:"refresh_token"`
+		Topic        string   `json:"topic"`
+		Labels       []string `json:"labels,omitempty"`
+	}{
+		Email:        token.Email,
+		Client:       token.Client,
+		RefreshToken: token.Token.RefreshToken,
+		Topic:        watchTopic,
+		Labels:       watchLabels,
+	})
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := s.hosting.Connect(ctx, cl, srv, consts.GmailProvider, payload); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -950,4 +1081,27 @@ func deduplicateUUIDs(ids []uuid.UUID) []uuid.UUID {
 
 func generateGatewayToken() string {
 	return uuid.NewString()
+}
+
+func normalizeWatchLabels(labels []string) []string {
+	if len(labels) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(labels))
+	out := make([]string, 0, len(labels))
+	for _, raw := range labels {
+		label := strings.TrimSpace(raw)
+		if label == "" {
+			continue
+		}
+
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		out = append(out, label)
+	}
+
+	return out
 }

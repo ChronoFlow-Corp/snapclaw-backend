@@ -39,6 +39,7 @@ type service interface {
 		ctx context.Context,
 		cm commands.AddChannel,
 	) (entities.Channel, error)
+	Connect(ctx context.Context, cm commands.ConnectCommand) error
 }
 type User struct {
 	env         string
@@ -63,10 +64,12 @@ func (u *User) Register(r chi.Router) {
 		r.Post("/refresh", u.Refresh)
 	})
 
-	r.Group(func(r chi.Router) {
+	r.Route("/me", func(r chi.Router) {
 		r.Use(middleware.AuthJwt(u.j))
-		r.Get("/auth/user-info", u.UserInfo)
+		r.Get("/user-info", u.UserInfo)
 		r.Post("/channel", u.AddChannel)
+		r.Get("/connect/{provider}", u.Connect)
+		r.Get("/connect/{provider}/callback", u.Connect)
 	})
 }
 
@@ -94,6 +97,10 @@ func (u *User) Login(w http.ResponseWriter, r *http.Request) {
 func (u *User) Callback(w http.ResponseWriter, r *http.Request) {
 	gothUser, err := gothic.CompleteUserAuth(w, r)
 	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "oauth callback failed",
+		})
 		return
 	}
 
@@ -224,6 +231,38 @@ func (u *User) UserInfo(w http.ResponseWriter, r *http.Request) {
 		Role:      user.Role,
 		CreatedAt: user.CreatedAt,
 	})
+}
+
+func (u *User) Connect(w http.ResponseWriter, r *http.Request) {
+	gothUser, err := gothic.CompleteUserAuth(w, r)
+	if err != nil {
+		gothic.BeginAuthHandler(w, r)
+		return
+	}
+
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	if err := u.service.Connect(r.Context(), commands.ConnectCommand{
+		Provider:     gothUser.Provider,
+		UserID:       userID,
+		Email:        gothUser.Email,
+		AccessToken:  gothUser.AccessToken,
+		RefreshToken: gothUser.RefreshToken,
+		ExpiresAt:    gothUser.ExpiresAt,
+	}); err != nil {
+		respondServiceError(w, err)
+		return
+	}
+
+	http.Redirect(w, r, u.frontendURL, http.StatusFound)
 }
 
 func (u *User) setCookie(w http.ResponseWriter, path, name, value string, expires time.Time) {

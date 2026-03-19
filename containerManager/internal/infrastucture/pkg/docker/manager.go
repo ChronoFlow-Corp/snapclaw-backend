@@ -14,11 +14,14 @@ import (
 	"strings"
 	"time"
 
+	"containermanager/internal/pkg/logctx"
+
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/build"
 	dcontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 )
 
@@ -31,7 +34,7 @@ type Manager struct {
 	cl     *client.Client
 }
 
-func NewManager(ctx context.Context, cl *client.Client) *Manager {
+func NewManager(ctx context.Context, cl *client.Client) (*Manager, error) {
 	m := &Manager{
 		images: make(map[string]imageInfo),
 		cl:     cl,
@@ -41,13 +44,13 @@ func NewManager(ctx context.Context, cl *client.Client) *Manager {
 
 	err := m.getImages(ctx)
 	if err != nil {
-		panic(fmt.Sprintf("unable to get images: %v", err))
+		return nil, fmt.Errorf("container.Manager.NewManager: unable to get images: %w", err)
 	}
 
-	return m
+	return m, nil
 }
 
-func (m *Manager) Build(ctx context.Context, buildCtxPaths []string) error {
+func (m *Manager) Build(ctx context.Context, dockerfile string, buildCtxPaths []string) error {
 	const op = "container.Manager.Build"
 
 	err := m.getImages(ctx)
@@ -72,20 +75,23 @@ func (m *Manager) Build(ctx context.Context, buildCtxPaths []string) error {
 
 	err = tarDir(buildCtx, buildCtxPaths...)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("%s: build context: %w", op, err)
 	}
 
-	rs, err := m.cl.ImageBuild(context.Background(), buildCtx, build.ImageBuildOptions{
-		Dockerfile: "images/openclaw/Dockerfile",
+	rs, err := m.cl.ImageBuild(ctx, buildCtx, build.ImageBuildOptions{
+		Dockerfile: dockerfile,
 		Context:    buildCtx,
 		Remove:     true,
 		Tags:       []string{imageName},
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: image build: %w", op, err)
 	}
+	defer rs.Body.Close()
 
-	io.Copy(os.Stdout, rs.Body)
+	if _, err := io.Copy(os.Stdout, rs.Body); err != nil {
+		return fmt.Errorf("%s: stream build output: %w", op, err)
+	}
 
 	return nil
 }
@@ -93,17 +99,32 @@ func (m *Manager) Build(ctx context.Context, buildCtxPaths []string) error {
 func (m *Manager) Create(ctx context.Context, opts CreateOptions) (string, error) {
 	const op = "container.Manager.Create"
 
-	p := nat.Port(fmt.Sprintf("%s/tcp", opts.ContainerPort))
+	primaryPort := nat.Port(fmt.Sprintf("%s/tcp", opts.ContainerPort))
+	exposedPorts := nat.PortSet{
+		primaryPort: struct{}{},
+	}
+	portBindings := nat.PortMap{
+		primaryPort: []nat.PortBinding{{
+			HostPort: opts.HostPort,
+			HostIP:   opts.HostIP,
+		}},
+	}
+
+	if opts.SecondaryContainerPort != "" && opts.SecondaryHostPort != "" {
+		secondaryPort := nat.Port(fmt.Sprintf("%s/tcp", opts.SecondaryContainerPort))
+		exposedPorts[secondaryPort] = struct{}{}
+		portBindings[secondaryPort] = []nat.PortBinding{{
+			HostPort: opts.SecondaryHostPort,
+			HostIP:   opts.HostIP,
+		}}
+	}
 
 	rs, err := m.cl.ContainerCreate(ctx, &dcontainer.Config{
 		Image:        m.images[imageName].id,
 		Env:          opts.Env,
-		ExposedPorts: nat.PortSet{p: struct{}{}},
+		ExposedPorts: exposedPorts,
 	}, &dcontainer.HostConfig{
-		PortBindings: nat.PortMap{p: []nat.PortBinding{{
-			HostPort: opts.HostPort,
-			HostIP:   opts.HostIP,
-		}}},
+		PortBindings:  portBindings,
 		Binds:         opts.Volumes,
 		RestartPolicy: dcontainer.RestartPolicy{Name: "unless-stopped"},
 		NetworkMode:   "bridge",
@@ -171,6 +192,224 @@ func (m *Manager) Stat(ctx context.Context, containerID string) error {
 	return nil
 }
 
+func (m *Manager) ExecGmail(
+	ctx context.Context,
+	containerID string,
+	token []byte,
+	opts ExecGmailOptions,
+) error {
+	const op = "container.Manager.ExecGmail"
+	log := logctx.Logger(ctx).With(slog.String("container_id", containerID))
+
+	if containerID == "" {
+		err := fmt.Errorf("%s: container id is required", op)
+		log.Error("gmail exec failed", slog.Any("err", err))
+		return err
+	}
+
+	if len(bytes.TrimSpace(token)) == 0 {
+		err := fmt.Errorf("%s: token is required", op)
+		log.Error("gmail exec failed", slog.Any("err", err))
+		return err
+	}
+
+	if strings.TrimSpace(opts.KeyringBackend) == "" {
+		opts.KeyringBackend = "file"
+	}
+
+	createRs, err := m.cl.ContainerExecCreate(ctx, containerID, execConnectGmail(opts))
+	if err != nil {
+		log.Error("gmail exec create failed", slog.Any("err", err))
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	hjr, err := m.cl.ContainerExecAttach(ctx, createRs.ID, dcontainer.ExecAttachOptions{})
+	if err != nil {
+		log.Error("gmail exec attach failed", slog.Any("err", err))
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer hjr.Close()
+
+	if _, err := io.Copy(hjr.Conn, bytes.NewReader(token)); err != nil {
+		log.Error("gmail exec write failed", slog.Any("err", err))
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := hjr.CloseWrite(); err != nil {
+		log.Error("gmail exec close write failed", slog.Any("err", err))
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	if _, err := stdcopy.StdCopy(&stdoutBuf, &stderrBuf, hjr.Reader); err != nil {
+		log.Error("gmail exec read failed", slog.Any("err", err))
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	inspect, err := m.cl.ContainerExecInspect(ctx, createRs.ID)
+	if err != nil {
+		log.Error("gmail exec inspect failed", slog.Any("err", err))
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if inspect.ExitCode != 0 {
+		stdoutStr := strings.TrimSpace(stdoutBuf.String())
+		stderrStr := strings.TrimSpace(stderrBuf.String())
+		errText := stderrStr
+		if errText == "" {
+			errText = stdoutStr
+		}
+		if errText == "" {
+			errText = "unknown error"
+		}
+
+		trim := func(s string) string {
+			const maxLen = 2048
+			if len(s) <= maxLen {
+				return s
+			}
+			return s[:maxLen] + "...(truncated)"
+		}
+
+		log.Error(
+			"gmail exec failed",
+			slog.Int("exit_code", inspect.ExitCode),
+			slog.String("stderr", trim(stderrStr)),
+			slog.String("stdout", trim(stdoutStr)),
+		)
+
+		return fmt.Errorf("%s: exec failed with exit code %d: %s", op, inspect.ExitCode, errText)
+	}
+
+	return nil
+}
+
+func (m *Manager) StartGmailWatch(
+	ctx context.Context,
+	containerID string,
+	opts ExecGmailWatchStartOptions,
+) error {
+	const op = "container.Manager.StartGmailWatch"
+	log := logctx.Logger(ctx).With(slog.String("container_id", containerID))
+
+	if containerID == "" {
+		err := fmt.Errorf("%s: container id is required", op)
+		log.Error("start gmail watch failed", slog.Any("err", err))
+		return err
+	}
+
+	createRs, err := m.cl.ContainerExecCreate(ctx, containerID, execStartGmailWatch(opts))
+	if err != nil {
+		log.Error("start gmail watch exec create failed", slog.Any("err", err))
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	hjr, err := m.cl.ContainerExecAttach(ctx, createRs.ID, dcontainer.ExecAttachOptions{})
+	if err != nil {
+		log.Error("start gmail watch exec attach failed", slog.Any("err", err))
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer hjr.Close()
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	if _, err := stdcopy.StdCopy(&stdoutBuf, &stderrBuf, hjr.Reader); err != nil {
+		log.Error("start gmail watch exec read failed", slog.Any("err", err))
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	inspect, err := m.cl.ContainerExecInspect(ctx, createRs.ID)
+	if err != nil {
+		log.Error("start gmail watch exec inspect failed", slog.Any("err", err))
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if inspect.ExitCode != 0 {
+		stdoutStr := strings.TrimSpace(stdoutBuf.String())
+		stderrStr := strings.TrimSpace(stderrBuf.String())
+		errText := stderrStr
+		if errText == "" {
+			errText = stdoutStr
+		}
+		if errText == "" {
+			errText = "unknown error"
+		}
+
+		log.Error(
+			"start gmail watch failed",
+			slog.Int("exit_code", inspect.ExitCode),
+			slog.String("stderr", stderrStr),
+			slog.String("stdout", stdoutStr),
+		)
+
+		return fmt.Errorf("%s: exec failed with exit code %d: %s", op, inspect.ExitCode, errText)
+	}
+
+	return nil
+}
+
+func (m *Manager) StartGmailWatcher(
+	ctx context.Context,
+	containerID string,
+	opts ExecGmailWatcherOptions,
+) error {
+	const op = "container.Manager.StartGmailWatcher"
+	log := logctx.Logger(ctx).With(slog.String("container_id", containerID))
+
+	if containerID == "" {
+		err := fmt.Errorf("%s: container id is required", op)
+		log.Error("start gmail watcher failed", slog.Any("err", err))
+		return err
+	}
+
+	createRs, err := m.cl.ContainerExecCreate(ctx, containerID, execStartGmailWatcher(opts))
+	if err != nil {
+		log.Error("start gmail watcher exec create failed", slog.Any("err", err))
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	hjr, err := m.cl.ContainerExecAttach(ctx, createRs.ID, dcontainer.ExecAttachOptions{})
+	if err != nil {
+		log.Error("start gmail watcher exec attach failed", slog.Any("err", err))
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer hjr.Close()
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	if _, err := stdcopy.StdCopy(&stdoutBuf, &stderrBuf, hjr.Reader); err != nil {
+		log.Error("start gmail watcher exec read failed", slog.Any("err", err))
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	inspect, err := m.cl.ContainerExecInspect(ctx, createRs.ID)
+	if err != nil {
+		log.Error("start gmail watcher exec inspect failed", slog.Any("err", err))
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if inspect.ExitCode != 0 {
+		stdoutStr := strings.TrimSpace(stdoutBuf.String())
+		stderrStr := strings.TrimSpace(stderrBuf.String())
+		errText := stderrStr
+		if errText == "" {
+			errText = stdoutStr
+		}
+		if errText == "" {
+			errText = "unknown error"
+		}
+
+		log.Error(
+			"start gmail watcher failed",
+			slog.Int("exit_code", inspect.ExitCode),
+			slog.String("stderr", stderrStr),
+			slog.String("stdout", stdoutStr),
+		)
+
+		return fmt.Errorf("%s: exec failed with exit code %d: %s", op, inspect.ExitCode, errText)
+	}
+
+	return nil
+}
+
 func (m *Manager) getImages(ctx context.Context) error {
 	const op = "container.Manager.getImages"
 
@@ -197,13 +436,14 @@ func (m *Manager) getImages(ctx context.Context) error {
 
 func (m *Manager) ping(ctx context.Context) error {
 	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
 
 	for {
 		select {
 		case <-t.C:
 			_, err := m.cl.Ping(ctx)
 			if err != nil {
-				panic(err)
+				slog.Error("docker ping failed", slog.Any("err", err))
 			}
 		case <-ctx.Done():
 			return nil

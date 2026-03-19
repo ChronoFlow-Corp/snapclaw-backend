@@ -32,6 +32,7 @@ type channelStorage interface {
 type userStorage interface {
 	GetByID(ctx context.Context, id uuid.UUID) (entities.User, error)
 	UpdateOpenRouterKey(ctx context.Context, id uuid.UUID, key entities.OpenRouterKey) error
+	GetGmailToken(ctx context.Context, userID uuid.UUID) (entities.GmailToken, error)
 }
 
 type serverStorage interface {
@@ -56,6 +57,7 @@ type hostingManager interface {
 	Delete(ctx context.Context, cl entities.Claw, server entities.Server, deleteConfig bool) error
 	Update(ctx context.Context, cl entities.Claw, server entities.Server) error
 	ApprovePairing(ctx context.Context, cl entities.Claw, server entities.Server, code string) error
+	Connect(ctx context.Context, cl entities.Claw, server entities.Server, provider string, token []byte) error
 	ConfigArchive(
 		ctx context.Context,
 		cl entities.Claw,
