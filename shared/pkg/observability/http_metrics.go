@@ -41,16 +41,16 @@ func NewHTTPMetrics(reg prometheus.Registerer) (*HTTPMetrics, error) {
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "http_requests_total",
 			Help: "Total number of HTTP requests.",
-		}, []string{"method", "route", "status", "action", "flow"}),
+		}, []string{"method", "route", "status", "action", "flow", "component", "result"}),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "http_request_duration_seconds",
 			Help:    "HTTP request duration in seconds.",
 			Buckets: prometheus.DefBuckets,
-		}, []string{"method", "route", "action", "flow"}),
+		}, []string{"method", "route", "action", "flow", "component", "result"}),
 		inflight: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "http_inflight_requests",
 			Help: "Current number of in-flight HTTP requests.",
-		}, []string{"method", "action", "flow"}),
+		}, []string{"method", "action", "flow", "component"}),
 	}
 
 	if err := reg.Register(m.requests); err != nil {
@@ -84,13 +84,19 @@ func (m *HTTPMetrics) Middleware(classifier HTTPClassifier, routeResolver RouteR
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isMetricsPath(r.URL.Path) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			startedAt := time.Now()
 
 			action, flow := classifier(r.Method, r.URL.Path)
 			action = normalizeLabel(action, "unknown")
 			flow = normalizeLabel(flow, "unknown")
+			component := "http.server"
 
-			inflight := m.inflight.WithLabelValues(r.Method, action, flow)
+			inflight := m.inflight.WithLabelValues(r.Method, action, flow, component)
 			inflight.Inc()
 			defer inflight.Dec()
 
@@ -99,10 +105,26 @@ func (m *HTTPMetrics) Middleware(classifier HTTPClassifier, routeResolver RouteR
 
 			route := normalizeLabel(routeResolver(r), "unknown")
 			status := strconv.Itoa(rec.status)
+			result := resultFromHTTPStatus(rec.status)
 
-			m.requests.WithLabelValues(r.Method, route, status, action, flow).Inc()
-			m.duration.WithLabelValues(r.Method, route, action, flow).Observe(time.Since(startedAt).Seconds())
+			m.requests.WithLabelValues(r.Method, route, status, action, flow, component, result).Inc()
+			m.duration.WithLabelValues(r.Method, route, action, flow, component, result).Observe(time.Since(startedAt).Seconds())
 		})
+	}
+}
+
+func resultFromHTTPStatus(status int) string {
+	switch {
+	case status >= http.StatusOK && status < http.StatusMultipleChoices:
+		return ResultSuccess
+	case status == http.StatusNotFound:
+		return ResultNotFound
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return ResultDenied
+	case status >= http.StatusBadRequest && status < http.StatusInternalServerError:
+		return ResultValidationError
+	default:
+		return ResultError
 	}
 }
 
@@ -131,4 +153,18 @@ func normalizeLabel(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func isMetricsPath(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+
+	path = strings.TrimSuffix(path, "/")
+	if path == "" {
+		path = "/"
+	}
+
+	return path == "/metrics"
 }

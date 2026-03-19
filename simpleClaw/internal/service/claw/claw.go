@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
+	"shared/pkg/observability"
 	"strings"
 	"time"
 
@@ -26,6 +28,13 @@ const (
 	openClawConfigVersion   = "2026.2.16"
 	openRouterAPIKeyVar     = "OPENROUTER_API_KEY"
 	openClawGatewayTokenVar = "OPENCLAW_GATEWAY_TOKEN"
+)
+
+const (
+	updateStageValidate      = "validate"
+	updateStageHostingUpdate = "hosting_update"
+	updateStageDBUpdate      = "db_update"
+	updateStageArchiveSync   = "archive_sync"
 )
 
 var (
@@ -62,6 +71,27 @@ var (
 	errGmailWatchTopicRequired   = ErrGmailWatchTopicRequired
 )
 
+type UpdateStageError struct {
+	Stage string
+	Err   error
+}
+
+func (e *UpdateStageError) Error() string {
+	if e == nil {
+		return ""
+	}
+
+	return fmt.Sprintf("%s: %v", e.Stage, e.Err)
+}
+
+func (e *UpdateStageError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+
+	return e.Err
+}
+
 type Service struct {
 	claws       clawStorage
 	channels    channelStorage
@@ -71,6 +101,7 @@ type Service struct {
 	keys        apiKeyManager
 	archivePath string
 	watch       GmailWatchConfig
+	metrics     *observability.OperationMetrics
 }
 
 type GmailWatchConfig struct {
@@ -87,7 +118,13 @@ func NewClaw(
 	keys apiKeyManager,
 	archivePath string,
 	watch GmailWatchConfig,
+	metrics ...*observability.OperationMetrics,
 ) *Service {
+	var opMetrics *observability.OperationMetrics
+	if len(metrics) > 0 {
+		opMetrics = metrics[0]
+	}
+
 	return &Service{
 		claws:       claws,
 		channels:    channels,
@@ -100,6 +137,7 @@ func NewClaw(
 			Topic:  strings.TrimSpace(watch.Topic),
 			Labels: normalizeWatchLabels(watch.Labels),
 		},
+		metrics: opMetrics,
 	}
 }
 
@@ -108,6 +146,16 @@ func (s *Service) Create(
 	cm commands.CreateClaw,
 ) (entities.Claw, error) {
 	const op = "service.Claw.Create"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.claw",
+		"claw.create",
+		"claw_lifecycle",
+	)
+	var err error
+	defer func() { finish(err) }()
 
 	if cm.UserID == uuid.Nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, errUserIDRequired)
@@ -231,6 +279,16 @@ func (s *Service) GetByID(
 	userID uuid.UUID,
 ) (entities.Claw, error) {
 	const op = "service.Claw.GetByID"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.claw",
+		"claw.get",
+		"claw_lifecycle",
+	)
+	var err error
+	defer func() { finish(err) }()
 
 	if userID == uuid.Nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, errUserIDRequired)
@@ -253,6 +311,16 @@ func (s *Service) GetByUserID(
 	userID uuid.UUID,
 ) ([]entities.Claw, error) {
 	const op = "service.Claw.GetByUserID"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.claw",
+		"claw.list",
+		"claw_lifecycle",
+	)
+	var err error
+	defer func() { finish(err) }()
 
 	if userID == uuid.Nil {
 		return nil, fmt.Errorf("%s: %w", op, errUserIDRequired)
@@ -271,25 +339,23 @@ func (s *Service) Update(
 	cm commands.UpdateClaw,
 ) (entities.Claw, error) {
 	const op = "service.Claw.Update"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.claw",
+		"claw.update",
+		"claw_lifecycle",
+	)
+	var err error
+	defer func() { finish(err) }()
 
 	if cm.UserID == uuid.Nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errUserIDRequired)
+		return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errUserIDRequired)
 	}
 
 	if cm.ClawID == uuid.Nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errClawIDRequired)
-	}
-
-	if cm.Name == "" {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errNameRequired)
-	}
-
-	if cm.Model == "" {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errModelRequired)
-	}
-
-	if s.keys == nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errOpenRouterClient)
+		return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errClawIDRequired)
 	}
 
 	existing, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
@@ -297,25 +363,36 @@ func (s *Service) Update(
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	channelIDs := deduplicateUUIDs(cm.ChannelIDs)
-	var chs []entities.Channel
-	if len(channelIDs) > 0 {
-		chs, err = s.channels.GetByIDs(ctx, channelIDs, cm.UserID)
-		if err != nil {
-			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	desired := existing
+	name := desired.Name
+	if cm.Name != nil {
+		name = strings.TrimSpace(*cm.Name)
+		if name == "" {
+			return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errNameRequired)
 		}
+	}
 
-		if len(chs) != len(channelIDs) {
-			return entities.Claw{}, fmt.Errorf("%s: %w", op, errChannelNotFound)
+	channelUpdate := normalizeChannelUpdate(cm.ChannelIDs)
+	var chs []entities.Channel
+	if channelUpdate.Replace {
+		if len(channelUpdate.ChannelIDs) > 0 {
+			chs, err = s.channels.GetByIDs(ctx, channelUpdate.ChannelIDs, cm.UserID)
+			if err != nil {
+				return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, err)
+			}
+
+			if len(chs) != len(channelUpdate.ChannelIDs) {
+				return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errChannelNotFound)
+			}
 		}
 	}
 
 	keyValue := ""
-	if existing.Config.Env.Vars != nil {
-		keyValue = existing.Config.Env.Vars[openRouterAPIKeyVar]
+	if desired.Config.Env.Vars != nil {
+		keyValue = desired.Config.Env.Vars[openRouterAPIKeyVar]
 	}
 	if keyValue == "" {
-		keyValue = strings.TrimSpace(existing.Config.Env.OpenRouterAPIKey)
+		keyValue = strings.TrimSpace(desired.Config.Env.OpenRouterAPIKey)
 		if isVarRef(keyValue, openRouterAPIKeyVar) {
 			keyValue = ""
 		}
@@ -323,76 +400,89 @@ func (s *Service) Update(
 	if keyValue == "" {
 		user, err := s.users.GetByID(ctx, cm.UserID)
 		if err != nil {
-			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+			return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, err)
 		}
 
 		keyValue = user.OpenRouterApiKey
 		if keyValue == "" || user.OpenRouterKeyID == "" {
+			if s.keys == nil {
+				return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errOpenRouterClient)
+			}
+
 			monthly := normalizeLimits(cm.ApiKeyLimit)
-			apiKey, err := s.keys.Create(ctx, user.ID, cm.Name, monthly)
+			apiKey, err := s.keys.Create(ctx, user.ID, name, monthly)
 			if err != nil {
-				return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+				return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, err)
 			}
 
 			err = s.users.UpdateOpenRouterKey(ctx, user.ID, apiKey)
 			if err != nil {
-				return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+				return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, err)
 			}
 
 			keyValue = apiKey.Secret
 		}
 	}
 
-	primaryModel, err := s.keys.ResolveModel(ctx, cm.Model)
-	if err != nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	primaryModel := currentPrimaryModel(desired.Config)
+	if cm.Model != nil {
+		model := strings.TrimSpace(*cm.Model)
+		if model == "" {
+			return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errModelRequired)
+		}
+
+		if s.keys == nil {
+			return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errOpenRouterClient)
+		}
+
+		primaryModel, err = s.keys.ResolveModel(ctx, model)
+		if err != nil {
+			return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, err)
+		}
 	}
 
-	updatedCfg := applyBaseUpdates(existing.Config, primaryModel, keyValue)
-	if cm.ChannelIDs != nil {
+	if primaryModel == "" {
+		return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errModelRequired)
+	}
+
+	updatedCfg := applyBaseUpdates(desired.Config, primaryModel, keyValue)
+	if channelUpdate.Replace {
 		updatedCfg.Channels = mergeChannelConfigs(chs)
 	}
 
-	updatedCfg.Meta = existing.Config.Meta
-	if isConfigChanged(existing.Config, updatedCfg) {
+	updatedCfg.Meta = desired.Config.Meta
+	if isConfigChanged(desired.Config, updatedCfg) {
 		updatedCfg.Meta = newConfigMeta(time.Now())
 	}
 
-	existing.Name = cm.Name
-	existing.Config = updatedCfg
-	existing.UpdatedAt = time.Now()
+	desired.Name = name
+	desired.Config = updatedCfg
+	desired.UpdatedAt = time.Now()
 
-	if err := s.claws.Update(ctx, existing, channelIDs); err != nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-	}
-
-	var srv *entities.Server
-	var updateErr error
-	if existing.ContainerID != "" && existing.ServerID != uuid.Nil {
+	if desired.ContainerID != "" && desired.ServerID != uuid.Nil {
 		if s.hosting == nil {
-			return entities.Claw{}, fmt.Errorf("%s: %w", op, errHostingMissing)
+			return entities.Claw{}, wrapUpdateStage(op, updateStageHostingUpdate, errHostingMissing)
 		}
 
-		availableSrv, err := s.servers.GetByID(ctx, existing.ServerID)
+		availableSrv, err := s.servers.GetByID(ctx, desired.ServerID)
 		if err != nil {
-			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+			return entities.Claw{}, wrapUpdateStage(op, updateStageHostingUpdate, err)
 		}
 
-		srv = &availableSrv
-		if err := s.hosting.Update(ctx, existing, availableSrv); err != nil {
-			updateErr = fmt.Errorf("%s: %w", op, err)
+		if err := s.hosting.Update(ctx, desired, availableSrv); err != nil {
+			return entities.Claw{}, wrapUpdateStage(op, updateStageHostingUpdate, err)
 		}
 	}
 
-	if err := s.syncConfigArchive(ctx, existing, srv); err != nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	if err := s.claws.Update(ctx, desired, channelUpdate.ChannelIDs, channelUpdate.Replace); err != nil {
+		return entities.Claw{}, wrapUpdateStage(op, updateStageDBUpdate, err)
 	}
 
-	if updateErr != nil {
-		return entities.Claw{}, updateErr
+	if err := s.writeArchiveFromConfig(desired); err != nil {
+		return entities.Claw{}, wrapUpdateStage(op, updateStageArchiveSync, err)
 	}
 
-	return existing, nil
+	return desired, nil
 }
 
 func (s *Service) DeleteByID(
@@ -421,6 +511,16 @@ func (s *Service) Start(
 	cm commands.StartClaw,
 ) (entities.Claw, error) {
 	const op = "service.Claw.Start"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.claw",
+		"claw.start",
+		"claw_lifecycle",
+	)
+	var err error
+	defer func() { finish(err) }()
 
 	if cm.UserID == uuid.Nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, errUserIDRequired)
@@ -495,6 +595,16 @@ func (s *Service) Stop(
 	cm commands.StopClaw,
 ) (entities.Claw, error) {
 	const op = "service.Claw.Stop"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.claw",
+		"claw.stop",
+		"claw_lifecycle",
+	)
+	var err error
+	defer func() { finish(err) }()
 
 	if cm.UserID == uuid.Nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, errUserIDRequired)
@@ -554,8 +664,17 @@ func (s *Service) Stop(
 func (s *Service) ApprovePairing(
 	ctx context.Context,
 	cm commands.ApprovePairing,
-) error {
+) (err error) {
 	const op = "service.Claw.ApprovePairing"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.claw",
+		"claw.approve",
+		"claw_pairing",
+	)
+	defer func() { finish(err) }()
 
 	if cm.UserID == uuid.Nil {
 		return fmt.Errorf("%s: %w", op, errUserIDRequired)
@@ -605,8 +724,17 @@ func (s *Service) ApprovePairing(
 func (s *Service) Connect(
 	ctx context.Context,
 	cm commands.ConnectClaw,
-) error {
+) (err error) {
 	const op = "service.Claw.Connect"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.claw",
+		"claw.connect",
+		"claw_pairing",
+	)
+	defer func() { finish(err) }()
 
 	if cm.UserID == uuid.Nil {
 		return fmt.Errorf("%s: %w", op, errUserIDRequired)
@@ -622,10 +750,10 @@ func (s *Service) Connect(
 
 	provider := strings.TrimSpace(cm.Provider)
 	if provider == "" {
-		provider = "gmail"
+		provider = consts.ProviderGmail
 	}
 
-	if !strings.EqualFold(provider, "gmail") {
+	if !strings.EqualFold(provider, consts.ProviderGmail) {
 		return fmt.Errorf("%s: %w", op, errProviderUnsupported)
 	}
 
@@ -700,7 +828,7 @@ func (s *Service) Connect(
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
-	if err := s.hosting.Connect(ctx, cl, srv, consts.GmailProvider, payload); err != nil {
+	if err := s.hosting.Connect(ctx, cl, srv, consts.ProviderGmail, payload); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -710,8 +838,17 @@ func (s *Service) Connect(
 func (s *Service) Delete(
 	ctx context.Context,
 	cm commands.DeleteClaw,
-) error {
+) (err error) {
 	const op = "service.Claw.Delete"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.claw",
+		"claw.delete",
+		"claw_lifecycle",
+	)
+	defer func() { finish(err) }()
 
 	if cm.UserID == uuid.Nil {
 		return fmt.Errorf("%s: %w", op, errUserIDRequired)
@@ -1046,6 +1183,70 @@ func mergeChannelConfigs(chs []entities.Channel) *entities.ClawChannels {
 	return cfg
 }
 
+func currentPrimaryModel(cfg entities.ClawConfig) string {
+	if cfg.Agents.Defaults != nil {
+		if model := strings.TrimSpace(cfg.Agents.Defaults.Model.Primary); model != "" {
+			return model
+		}
+	}
+
+	for _, agent := range cfg.Agents.List {
+		if agent.Model == nil {
+			continue
+		}
+
+		model := strings.TrimSpace(agent.Model.Primary)
+		if model == "" {
+			continue
+		}
+
+		if agent.Default {
+			return model
+		}
+	}
+
+	for _, agent := range cfg.Agents.List {
+		if agent.Model == nil {
+			continue
+		}
+
+		model := strings.TrimSpace(agent.Model.Primary)
+		if model != "" {
+			return model
+		}
+	}
+
+	return ""
+}
+
+type channelUpdate struct {
+	ChannelIDs []uuid.UUID
+	Replace    bool
+}
+
+func normalizeChannelUpdate(ids []uuid.UUID) channelUpdate {
+	if ids == nil {
+		return channelUpdate{
+			ChannelIDs: nil,
+			Replace:    false,
+		}
+	}
+
+	normalized := deduplicateUUIDs(ids)
+
+	return channelUpdate{
+		ChannelIDs: normalized,
+		Replace:    true,
+	}
+}
+
+func wrapUpdateStage(op string, stage string, err error) error {
+	return fmt.Errorf("%s: %w", op, &UpdateStageError{
+		Stage: stage,
+		Err:   err,
+	})
+}
+
 func normalizeLimits(l commands.ApiKeyLimits) float64 {
 	monthly := l.MonthlyBudgetUSD
 	if monthly <= 0 {
@@ -1056,8 +1257,12 @@ func normalizeLimits(l commands.ApiKeyLimits) float64 {
 }
 
 func deduplicateUUIDs(ids []uuid.UUID) []uuid.UUID {
-	if len(ids) == 0 {
+	if ids == nil {
 		return nil
+	}
+
+	if len(ids) == 0 {
+		return []uuid.UUID{}
 	}
 
 	seen := make(map[uuid.UUID]struct{}, len(ids))
@@ -1074,6 +1279,10 @@ func deduplicateUUIDs(ids []uuid.UUID) []uuid.UUID {
 
 		seen[id] = struct{}{}
 		result = append(result, id)
+	}
+
+	if len(result) == 0 {
+		return []uuid.UUID{}
 	}
 
 	return result

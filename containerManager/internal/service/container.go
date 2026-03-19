@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"shared/consts"
+	"log/slog"
+	"shared/pkg/hostingapi"
+	"shared/pkg/observability"
 	"strings"
 	"time"
 
@@ -25,6 +27,7 @@ type Container struct {
 	p       *Porter
 	cfg     *configurer.ClawConfigurer
 	gog     GogConfig
+	metrics *observability.OperationMetrics
 }
 
 type GogConfig struct {
@@ -41,12 +44,19 @@ func NewContainer(
 	clRepo ClawRepository,
 	manager *docker.Manager,
 	gog GogConfig,
+	metrics ...*observability.OperationMetrics,
 ) (*Container, error) {
+	var opMetrics *observability.OperationMetrics
+	if len(metrics) > 0 {
+		opMetrics = metrics[0]
+	}
+
 	c := &Container{
 		cfg:     cfg,
 		clRepo:  clRepo,
 		manager: manager,
 		p:       NewPorter(),
+		metrics: opMetrics,
 		gog: GogConfig{
 			KeyringBackend:  strings.TrimSpace(gog.KeyringBackend),
 			KeyringPassword: strings.TrimSpace(gog.KeyringPassword),
@@ -68,8 +78,17 @@ func NewContainer(
 	return c, nil
 }
 
-func (c *Container) Start(ctx context.Context, cm commands.StartClaw) error {
+func (c *Container) Start(ctx context.Context, cm commands.StartClaw) (err error) {
 	const op = "service.Container.Start"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		c.metrics,
+		"service.container",
+		"claw.start",
+		"claw_lifecycle",
+	)
+	defer func() { finish(err) }()
 
 	if cm.UserID == "" {
 		return fmt.Errorf("%s: user id is required", op)
@@ -103,8 +122,17 @@ func (c *Container) Start(ctx context.Context, cm commands.StartClaw) error {
 	return nil
 }
 
-func (c *Container) Stop(ctx context.Context, cm commands.StopClaw) error {
+func (c *Container) Stop(ctx context.Context, cm commands.StopClaw) (err error) {
 	const op = "service.Container.Stop"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		c.metrics,
+		"service.container",
+		"claw.stop",
+		"claw_lifecycle",
+	)
+	defer func() { finish(err) }()
 
 	if cm.UserID == "" {
 		return fmt.Errorf("%s: user id is required", op)
@@ -138,8 +166,17 @@ func (c *Container) Stop(ctx context.Context, cm commands.StopClaw) error {
 	return nil
 }
 
-func (c *Container) Update(ctx context.Context, cm commands.UpdateClaw) error {
+func (c *Container) Update(ctx context.Context, cm commands.UpdateClaw) (err error) {
 	const op = "service.Container.Update"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		c.metrics,
+		"service.container",
+		"claw.update",
+		"claw_lifecycle",
+	)
+	defer func() { finish(err) }()
 
 	if cm.UserID == "" {
 		return fmt.Errorf("%s: user id is required", op)
@@ -169,8 +206,17 @@ func (c *Container) Restart() error {
 	return nil
 }
 
-func (c *Container) Delete(ctx context.Context, cm commands.DeleteClaw) error {
+func (c *Container) Delete(ctx context.Context, cm commands.DeleteClaw) (err error) {
 	const op = "service.Container.Delete"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		c.metrics,
+		"service.container",
+		"claw.delete",
+		"claw_lifecycle",
+	)
+	defer func() { finish(err) }()
 
 	if cm.UserID == "" {
 		return fmt.Errorf("%s: user id is required", op)
@@ -216,6 +262,16 @@ func (c *Container) Delete(ctx context.Context, cm commands.DeleteClaw) error {
 
 func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string, error) {
 	const op = "service.Container.CreateClaw"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		c.metrics,
+		"service.container",
+		"claw.create",
+		"claw_lifecycle",
+	)
+	var err error
+	defer func() { finish(err) }()
 
 	if cm.UserID == "" {
 		return "", fmt.Errorf("%s: user id is required", op)
@@ -392,8 +448,13 @@ func (c *Container) Connect(ctx context.Context, cm commands.ConnectCommand) err
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
-	switch cm.Provider {
-	case consts.GmailProvider:
+	provider, err := hostingapi.NormalizeProvider(cm.Provider)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	switch provider {
+	case hostingapi.ProviderGmail:
 		importPayload, normalizeErr := normalizeGogImportPayload(cm.Token)
 		if normalizeErr != nil {
 			return fmt.Errorf("%s: %w", op, normalizeErr)
@@ -444,7 +505,7 @@ func (c *Container) Connect(ctx context.Context, cm commands.ConnectCommand) err
 			return fmt.Errorf("%s: %w", op, err)
 		}
 	default:
-		return fmt.Errorf("%s: %w", op, fmt.Errorf("unknown provider: %s", cm.Provider))
+		return fmt.Errorf("%s: %w", op, fmt.Errorf("unknown provider: %s", provider))
 	}
 
 	return nil

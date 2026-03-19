@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"shared/pkg/hostingapi"
+	"shared/pkg/observability"
 	"sort"
 	"strings"
 
@@ -20,12 +23,19 @@ const (
 
 // Manager orchestrates container lifecycle interactions with containerManager over HTTP.
 type Manager struct {
-	client *client
+	client  *client
+	metrics *observability.OperationMetrics
 }
 
-func NewManager() *Manager {
+func NewManager(metrics ...*observability.OperationMetrics) *Manager {
+	var opMetrics *observability.OperationMetrics
+	if len(metrics) > 0 {
+		opMetrics = metrics[0]
+	}
+
 	return &Manager{
-		client: newClient(defaultHTTPTimeout),
+		client:  newClient(defaultHTTPTimeout),
+		metrics: opMetrics,
 	}
 }
 
@@ -35,6 +45,9 @@ func (m *Manager) Create(
 	server entities.Server,
 ) (Container, error) {
 	const op = "infra.hosting.Manager.Create"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.create", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
 
 	if m == nil || m.client == nil {
 		return Container{}, fmt.Errorf("%s: http client is not configured", op)
@@ -59,7 +72,7 @@ func (m *Manager) Create(
 		ctx,
 		server.URL,
 		map[string]string{"Authorization": server.SecretKey},
-		createClawRequest{
+		hostingapi.CreateClawRequest{
 			UserID:     cl.UserID.String(),
 			ClawID:     cl.ID.String(),
 			Vars:       vars,
@@ -103,8 +116,10 @@ func (m *Manager) Delete(
 	cl entities.Claw,
 	server entities.Server,
 	deleteConfig bool,
-) error {
+) (err error) {
 	const op = "infra.hosting.Manager.Delete"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.delete", "claw_lifecycle")
+	defer func() { finish(err) }()
 
 	if m == nil || m.client == nil {
 		return fmt.Errorf("%s: http client is not configured", op)
@@ -142,8 +157,10 @@ func (m *Manager) Start(
 	ctx context.Context,
 	cl entities.Claw,
 	server entities.Server,
-) error {
+) (err error) {
 	const op = "infra.hosting.Manager.Start"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.start", "claw_lifecycle")
+	defer func() { finish(err) }()
 
 	if m == nil || m.client == nil {
 		return fmt.Errorf("%s: http client is not configured", op)
@@ -178,8 +195,10 @@ func (m *Manager) Stop(
 	ctx context.Context,
 	cl entities.Claw,
 	server entities.Server,
-) error {
+) (err error) {
 	const op = "infra.hosting.Manager.Stop"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.stop", "claw_lifecycle")
+	defer func() { finish(err) }()
 
 	if m == nil || m.client == nil {
 		return fmt.Errorf("%s: http client is not configured", op)
@@ -214,8 +233,10 @@ func (m *Manager) Update(
 	ctx context.Context,
 	cl entities.Claw,
 	server entities.Server,
-) error {
+) (err error) {
 	const op = "infra.hosting.Manager.Update"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.update", "claw_lifecycle")
+	defer func() { finish(err) }()
 
 	if m == nil || m.client == nil {
 		return fmt.Errorf("%s: http client is not configured", op)
@@ -244,7 +265,7 @@ func (m *Manager) Update(
 		ctx,
 		server.URL,
 		map[string]string{"Authorization": server.SecretKey},
-		updateClawRequest{
+		hostingapi.UpdateClawRequest{
 			UserID:     cl.UserID.String(),
 			ClawID:     cl.ID.String(),
 			Vars:       vars,
@@ -264,6 +285,9 @@ func (m *Manager) ConfigArchive(
 	deleteAfter bool,
 ) (io.ReadCloser, error) {
 	const op = "infra.hosting.Manager.ConfigArchive"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.config_archive", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
 
 	if m == nil || m.client == nil {
 		return nil, fmt.Errorf("%s: http client is not configured", op)
@@ -297,8 +321,10 @@ func (m *Manager) RestoreConfigArchive(
 	cl entities.Claw,
 	server entities.Server,
 	body io.Reader,
-) error {
+) (err error) {
 	const op = "infra.hosting.Manager.RestoreConfigArchive"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.config_restore", "claw_lifecycle")
+	defer func() { finish(err) }()
 
 	if m == nil || m.client == nil {
 		return fmt.Errorf("%s: http client is not configured", op)
@@ -420,13 +446,13 @@ func (m *Manager) Connect(
 	return nil
 }
 
-func buildConfigFiles(cfg entities.ClawConfig) ([]clawConfigFile, error) {
+func buildConfigFiles(cfg entities.ClawConfig) ([]hostingapi.ClawConfigFile, error) {
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("marshal openclaw config: %w", err)
 	}
 
-	return []clawConfigFile{
+	return []hostingapi.ClawConfigFile{
 		{
 			Name:     openClawConfigName,
 			FileType: fileTypeJSON,

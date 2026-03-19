@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"shared/pkg/hostingapi"
 	"shared/pkg/observability"
 	"strings"
 	"time"
@@ -32,32 +33,32 @@ func (c *client) createClaw(
 	ctx context.Context,
 	baseURL string,
 	headers map[string]string,
-	payload createClawRequest,
-) (createClawResponse, error) {
+	payload hostingapi.CreateClawRequest,
+) (hostingapi.CreateClawResponse, error) {
 	const op = "infra.hosting.client.createClaw"
 
 	if c == nil || c.http == nil {
-		return createClawResponse{}, fmt.Errorf("%s: http client is not initialized", op)
+		return hostingapi.CreateClawResponse{}, fmt.Errorf("%s: http client is not initialized", op)
 	}
 
 	url := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if url == "" {
-		return createClawResponse{}, fmt.Errorf("%s: base url is required", op)
+		return hostingapi.CreateClawResponse{}, fmt.Errorf("%s: base url is required", op)
 	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return createClawResponse{}, fmt.Errorf("%s: %w", op, err)
+		return hostingapi.CreateClawResponse{}, fmt.Errorf("%s: %w", op, err)
 	}
 
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
-		url+clawsEndpoint,
+		url+hostingapi.ClawsEndpoint,
 		bytes.NewReader(body),
 	)
 	if err != nil {
-		return createClawResponse{}, fmt.Errorf("%s: %w", op, err)
+		return hostingapi.CreateClawResponse{}, fmt.Errorf("%s: %w", op, err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -68,33 +69,23 @@ func (c *client) createClaw(
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return createClawResponse{}, fmt.Errorf("%s: %w", op, err)
+		return hostingapi.CreateClawResponse{}, fmt.Errorf("%s: %w", op, err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return createClawResponse{}, fmt.Errorf("%s: %w", op, err)
+		return hostingapi.CreateClawResponse{}, fmt.Errorf("%s: %w", op, err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		msg := strings.TrimSpace(string(respBody))
-		if msg == "" {
-			msg = resp.Status
-		}
-
-		return createClawResponse{}, fmt.Errorf(
-			"%s: unexpected status %d: %s",
-			op,
-			resp.StatusCode,
-			msg,
-		)
+		return hostingapi.CreateClawResponse{}, unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
 	}
 
-	var out createClawResponse
+	var out hostingapi.CreateClawResponse
 	if len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, &out); err != nil {
-			return createClawResponse{}, fmt.Errorf("%s: %w", op, err)
+			return hostingapi.CreateClawResponse{}, fmt.Errorf("%s: %w", op, err)
 		}
 	}
 
@@ -105,7 +96,7 @@ func (c *client) updateClaw(
 	ctx context.Context,
 	baseURL string,
 	headers map[string]string,
-	payload updateClawRequest,
+	payload hostingapi.UpdateClawRequest,
 ) error {
 	const op = "infra.hosting.client.updateClaw"
 
@@ -126,7 +117,7 @@ func (c *client) updateClaw(
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPut,
-		url+clawsEndpoint,
+		url+hostingapi.ClawsEndpoint,
 		bytes.NewReader(body),
 	)
 	if err != nil {
@@ -151,17 +142,7 @@ func (c *client) updateClaw(
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		msg := strings.TrimSpace(string(respBody))
-		if msg == "" {
-			msg = resp.Status
-		}
-
-		return fmt.Errorf(
-			"%s: unexpected status %d: %s",
-			op,
-			resp.StatusCode,
-			msg,
-		)
+		return unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
 	}
 
 	return nil
@@ -186,16 +167,16 @@ func (c *client) deleteClaw(
 		return fmt.Errorf("%s: base url is required", op)
 	}
 
-	u, err := url.Parse(rawURL + clawsEndpoint)
+	u, err := url.Parse(rawURL + hostingapi.ClawsEndpoint)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	q := u.Query()
-	q.Set("userId", userID)
-	q.Set("clawId", clawID)
+	q.Set(hostingapi.QueryUserID, userID)
+	q.Set(hostingapi.QueryClawID, clawID)
 	if deleteConfig {
-		q.Set("deleteConfig", "true")
+		q.Set(hostingapi.QueryDeleteConfig, "true")
 	}
 	u.RawQuery = q.Encode()
 
@@ -221,17 +202,7 @@ func (c *client) deleteClaw(
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		msg := strings.TrimSpace(string(respBody))
-		if msg == "" {
-			msg = resp.Status
-		}
-
-		return fmt.Errorf(
-			"%s: unexpected status %d: %s",
-			op,
-			resp.StatusCode,
-			msg,
-		)
+		return unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
 	}
 
 	return nil
@@ -264,16 +235,16 @@ func (c *client) configArchive(
 		return nil, fmt.Errorf("%s: claw id is required", op)
 	}
 
-	u, err := url.Parse(rawURL + clawsConfigEndpoint)
+	u, err := url.Parse(rawURL + hostingapi.ClawsConfigEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
 
 	q := u.Query()
-	q.Set("userId", userID)
-	q.Set("clawId", clawID)
+	q.Set(hostingapi.QueryUserID, userID)
+	q.Set(hostingapi.QueryClawID, clawID)
 	if deleteAfter {
-		q.Set("deleteAfter", "true")
+		q.Set(hostingapi.QueryDeleteAfter, "true")
 	}
 	u.RawQuery = q.Encode()
 
@@ -296,17 +267,7 @@ func (c *client) configArchive(
 		respBody, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 
-		msg := strings.TrimSpace(string(respBody))
-		if msg == "" {
-			msg = resp.Status
-		}
-
-		return nil, fmt.Errorf(
-			"%s: unexpected status %d: %s",
-			op,
-			resp.StatusCode,
-			msg,
-		)
+		return nil, unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
 	}
 
 	return resp.Body, nil
@@ -343,14 +304,14 @@ func (c *client) restoreConfigArchive(
 		return fmt.Errorf("%s: body is required", op)
 	}
 
-	u, err := url.Parse(rawURL + clawsConfigEndpoint)
+	u, err := url.Parse(rawURL + hostingapi.ClawsConfigEndpoint)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	q := u.Query()
-	q.Set("userId", userID)
-	q.Set("clawId", clawID)
+	q.Set(hostingapi.QueryUserID, userID)
+	q.Set(hostingapi.QueryClawID, clawID)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), body)
@@ -371,17 +332,7 @@ func (c *client) restoreConfigArchive(
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		respBody, _ := io.ReadAll(resp.Body)
-		msg := strings.TrimSpace(string(respBody))
-		if msg == "" {
-			msg = resp.Status
-		}
-
-		return fmt.Errorf(
-			"%s: unexpected status %d: %s",
-			op,
-			resp.StatusCode,
-			msg,
-		)
+		return unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
 	}
 
 	return nil
@@ -405,14 +356,14 @@ func (c *client) stopClaw(
 		return fmt.Errorf("%s: base url is required", op)
 	}
 
-	u, err := url.Parse(rawURL + clawsStopEndpoint)
+	u, err := url.Parse(rawURL + hostingapi.ClawsStopEndpoint)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	q := u.Query()
-	q.Set("userId", userID)
-	q.Set("clawId", clawID)
+	q.Set(hostingapi.QueryUserID, userID)
+	q.Set(hostingapi.QueryClawID, clawID)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -437,17 +388,7 @@ func (c *client) stopClaw(
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		msg := strings.TrimSpace(string(respBody))
-		if msg == "" {
-			msg = resp.Status
-		}
-
-		return fmt.Errorf(
-			"%s: unexpected status %d: %s",
-			op,
-			resp.StatusCode,
-			msg,
-		)
+		return unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
 	}
 
 	return nil
@@ -471,14 +412,14 @@ func (c *client) startClaw(
 		return fmt.Errorf("%s: base url is required", op)
 	}
 
-	u, err := url.Parse(rawURL + clawsStartEndpoint)
+	u, err := url.Parse(rawURL + hostingapi.ClawsStartEndpoint)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	q := u.Query()
-	q.Set("userId", userID)
-	q.Set("clawId", clawID)
+	q.Set(hostingapi.QueryUserID, userID)
+	q.Set(hostingapi.QueryClawID, clawID)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -503,17 +444,7 @@ func (c *client) startClaw(
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		msg := strings.TrimSpace(string(respBody))
-		if msg == "" {
-			msg = resp.Status
-		}
-
-		return fmt.Errorf(
-			"%s: unexpected status %d: %s",
-			op,
-			resp.StatusCode,
-			msg,
-		)
+		return unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
 	}
 
 	return nil
@@ -550,15 +481,15 @@ func (c *client) approvePairing(
 		return fmt.Errorf("%s: code is required", op)
 	}
 
-	u, err := url.Parse(rawURL + approveEndpoint)
+	u, err := url.Parse(rawURL + hostingapi.ApproveEndpoint)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	q := u.Query()
-	q.Set("userId", userID)
-	q.Set("clawId", clawID)
-	q.Set("code", code)
+	q.Set(hostingapi.QueryUserID, userID)
+	q.Set(hostingapi.QueryClawID, clawID)
+	q.Set(hostingapi.QueryCode, code)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -583,20 +514,7 @@ func (c *client) approvePairing(
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		msg := strings.TrimSpace(string(respBody))
-		if msg == "" {
-			msg = resp.Status
-		}
-		if resp.StatusCode == http.StatusBadRequest && strings.EqualFold(msg, ErrInvalidCode.Error()) {
-			return fmt.Errorf("%s: %w", op, ErrInvalidCode)
-		}
-
-		return fmt.Errorf(
-			"%s: unexpected status %d: %s",
-			op,
-			resp.StatusCode,
-			msg,
-		)
+		return unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
 	}
 
 	return nil
@@ -638,15 +556,15 @@ func (c *client) connect(
 		return fmt.Errorf("%s: token is required", op)
 	}
 
-	u, err := url.Parse(rawURL + connectEndpoint)
+	u, err := url.Parse(rawURL + hostingapi.ConnectEndpoint)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	q := u.Query()
-	q.Set("userId", userID)
-	q.Set("clawId", clawID)
-	q.Set("provider", provider)
+	q.Set(hostingapi.QueryUserID, userID)
+	q.Set(hostingapi.QueryClawID, clawID)
+	q.Set(hostingapi.QueryProvider, provider)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(token))
@@ -672,18 +590,25 @@ func (c *client) connect(
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		msg := strings.TrimSpace(string(respBody))
-		if msg == "" {
-			msg = resp.Status
-		}
-
-		return fmt.Errorf(
-			"%s: unexpected status %d: %s",
-			op,
-			resp.StatusCode,
-			msg,
-		)
+		return unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
 	}
 
 	return nil
+}
+
+func unexpectedStatusError(op string, statusCode int, status string, body []byte) error {
+	if payload, ok := hostingapi.ParseErrorResponse(body); ok {
+		if statusCode == http.StatusBadRequest && payload.Code == hostingapi.ErrCodeInvalidCode {
+			return fmt.Errorf("%s: %w", op, ErrInvalidCode)
+		}
+
+		return fmt.Errorf("%s: unexpected status %d: %s", op, statusCode, payload.Message)
+	}
+
+	msg := strings.TrimSpace(string(body))
+	if msg == "" {
+		msg = status
+	}
+
+	return fmt.Errorf("%s: unexpected status %d: %s", op, statusCode, msg)
 }

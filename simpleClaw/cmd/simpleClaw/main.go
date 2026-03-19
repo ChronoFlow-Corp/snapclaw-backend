@@ -37,14 +37,17 @@ import (
 func main() {
 	cfg := config.New()
 	logger := setupLogger(cfg.Environment)
-	shutdownTracing, err := observability.SetupTracing(context.Background(), observability.TracingConfig{
-		ServiceName: "simpleclaw",
-		Environment: cfg.Environment,
-		Enabled:     cfg.Observability.Tracing.Enabled,
-		Endpoint:    cfg.Observability.Tracing.Endpoint,
-		Insecure:    cfg.Observability.Tracing.Insecure,
-		SampleRatio: cfg.Observability.Tracing.SampleRatio,
-	})
+	shutdownTracing, err := observability.SetupTracing(
+		context.Background(),
+		observability.TracingConfig{
+			ServiceName: "simpleclaw",
+			Environment: cfg.Environment,
+			Enabled:     cfg.Observability.Tracing.Enabled,
+			Endpoint:    cfg.Observability.Tracing.Endpoint,
+			Insecure:    cfg.Observability.Tracing.Insecure,
+			SampleRatio: cfg.Observability.Tracing.SampleRatio,
+		},
+	)
 	if err != nil {
 		panic(err)
 	}
@@ -95,10 +98,24 @@ func main() {
 		panic(err)
 	}
 
-	userStorage := users.NewStorage(db)
+	metricsRegistry := observability.NewPrometheusRegistry()
+	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
+	if err != nil {
+		panic(err)
+	}
+	operationMetrics, err := observability.NewOperationMetrics(metricsRegistry, "simpleclaw")
+	if err != nil {
+		panic(err)
+	}
+	pubSubMetrics, err := observability.NewPubSubFanoutMetrics(metricsRegistry, "simpleclaw")
+	if err != nil {
+		panic(err)
+	}
+
+	userStorage := users.NewStorage(db, operationMetrics)
 	channelsStorage := channels.NewStorage(db)
-	clawStorage := claws.NewStorage(db)
-	serversStorage := servers.NewStorage(db)
+	clawStorage := claws.NewStorage(db, operationMetrics)
+	serversStorage := servers.NewStorage(db, operationMetrics)
 
 	j := jwt.New(
 		[]byte(cfg.Auth.Jwt.AccessSecretPrivate),
@@ -109,24 +126,27 @@ func main() {
 	)
 
 	orManager, err := openrouter.NewApiKeyManager(openrouter.Options{
-		BaseURL:    cfg.OpenRouter.BaseURL,
-		APIToken:   cfg.OpenRouter.APIToken,
-		Timeout:    cfg.OpenRouter.Timeout,
-		HTTPClient: observability.NewHTTPClient(cfg.OpenRouter.Timeout),
+		BaseURL:          cfg.OpenRouter.BaseURL,
+		APIToken:         cfg.OpenRouter.APIToken,
+		Timeout:          cfg.OpenRouter.Timeout,
+		HTTPClient:       observability.NewHTTPClient(cfg.OpenRouter.Timeout),
+		OperationMetrics: operationMetrics,
 	})
 	if err != nil {
 		panic(err)
 	}
 
-	hostingManager := hosting.NewManager()
+	hostingManager := hosting.NewManager(operationMetrics)
+
 	uService := user.NewUser(
 		j,
 		userStorage,
 		channelsStorage,
 		orManager,
 		cfg.Auth.Admins,
+		operationMetrics,
 	)
-	serverService := serverservice.New(serversStorage)
+	serverService := serverservice.New(serversStorage, operationMetrics)
 	clawService := claw.NewClaw(
 		clawStorage,
 		channelsStorage,
@@ -139,18 +159,8 @@ func main() {
 			Topic:  cfg.Connect.Gmail.Watch.Topic,
 			Labels: cfg.Connect.Gmail.Watch.Labels,
 		},
+		operationMetrics,
 	)
-	metricsRegistry := observability.NewPrometheusRegistry()
-	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
-	if err != nil {
-		panic(err)
-	}
-	pubSubMetrics, err := observability.NewPubSubFanoutMetrics(metricsRegistry, "simpleclaw")
-	if err != nil {
-		panic(err)
-	}
-
-	api := chi.NewRouter()
 
 	uController := controllers.NewUser(cfg.Environment, uService, j, cfg.Auth.Google.FrontendURL)
 	clawController := controllers.NewClaw(clawService, j)
@@ -174,11 +184,10 @@ func main() {
 		r.Handle(cfg.Observability.Metrics.Path, observability.Handler(metricsRegistry))
 	}
 
-	uController.Register(api)
-	clawController.Register(api)
-	serverController.Register(api)
+	uController.Register(r)
+	clawController.Register(r)
+	serverController.Register(r)
 	proxyController.Register(r)
-	r.Mount("/api", api)
 
 	var handler http.Handler = r
 	if cfg.Observability.Tracing.Enabled {

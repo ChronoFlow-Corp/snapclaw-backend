@@ -72,13 +72,13 @@ func TestRoutesIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("GET /api/auth/user-info", func(t *testing.T) {
+	t.Run("GET /api/me/user-info", func(t *testing.T) {
 		env := newTestEnv(t)
 
 		rr := env.request(
 			t,
 			http.MethodGet,
-			"/api/auth/user-info",
+			"/api/me/user-info",
 			nil,
 			accessCookie(env.accessToken),
 		)
@@ -103,7 +103,7 @@ func TestRoutesIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("POST /api/channel", func(t *testing.T) {
+	t.Run("POST /api/me/channel", func(t *testing.T) {
 		env := newTestEnv(t)
 
 		body := map[string]any{
@@ -115,7 +115,7 @@ func TestRoutesIntegration(t *testing.T) {
 			},
 		}
 
-		rr := env.request(t, http.MethodPost, "/api/channel", body, accessCookie(env.accessToken))
+		rr := env.request(t, http.MethodPost, "/api/me/channel", body, accessCookie(env.accessToken))
 
 		if rr.Code != http.StatusOK {
 			t.Fatalf("unexpected status: %d", rr.Code)
@@ -217,7 +217,7 @@ func TestRoutesIntegration(t *testing.T) {
 		var payload struct {
 			ID     string `json:"ID"`
 			Name   string `json:"Name"`
-			UserID string `json:"UserID"`
+			Status string `json:"Status"`
 		}
 		decodeJSON(t, rr, &payload)
 
@@ -227,8 +227,8 @@ func TestRoutesIntegration(t *testing.T) {
 		if payload.Name != "new-claw" {
 			t.Fatalf("unexpected claw name: %s", payload.Name)
 		}
-		if payload.UserID != env.user.ID.String() {
-			t.Fatalf("unexpected user id: %s", payload.UserID)
+		if payload.Status != entities.StatusStop {
+			t.Fatalf("unexpected claw status: %s", payload.Status)
 		}
 	})
 
@@ -268,6 +268,41 @@ func TestRoutesIntegration(t *testing.T) {
 			t.Fatalf("unexpected claw id: %s", payload.ID)
 		}
 		if payload.Name != "after-update" {
+			t.Fatalf("unexpected claw name: %s", payload.Name)
+		}
+	})
+
+	t.Run("PUT /api/claws/{id} partial without name/model", func(t *testing.T) {
+		env := newTestEnv(t)
+		cl := env.clawService.seed(env.user.ID, "before-partial-update")
+
+		body := map[string]any{
+			"channelIds": []string{},
+		}
+
+		rr := env.request(
+			t,
+			http.MethodPut,
+			"/api/claws/"+cl.ID.String(),
+			body,
+			accessCookie(env.accessToken),
+		)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		var payload struct {
+			ID   string `json:"ID"`
+			Name string `json:"Name"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if payload.ID != cl.ID.String() {
+			t.Fatalf("unexpected claw id: %s", payload.ID)
+		}
+
+		if payload.Name != "before-partial-update" {
 			t.Fatalf("unexpected claw name: %s", payload.Name)
 		}
 	})
@@ -854,7 +889,9 @@ func (s *fakeClawService) Update(
 		return entities.Claw{}, sql.ErrNotFound
 	}
 
-	existing.Name = cm.Name
+	if cm.Name != nil {
+		existing.Name = *cm.Name
+	}
 	existing.UpdatedAt = time.Now()
 	s.claws[existing.ID] = existing
 

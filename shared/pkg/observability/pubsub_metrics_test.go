@@ -19,6 +19,17 @@ func TestPubSubFanoutMetricsObserve(t *testing.T) {
 
 	m.Observe("gmail_pubsub_fanout", 5, 3, nil, 150*time.Millisecond)
 	m.Observe("gmail_pubsub_fanout", 4, 0, errors.New("all failed"), 210*time.Millisecond)
+	m.Observe(
+		"gmail_pubsub_fanout",
+		4,
+		2,
+		DecorateError(errors.New("partial failure"), ErrorAttrs{
+			Result: ResultPartialSuccess,
+			Kind:   ErrorKindUnexpected,
+			Source: ErrorSourceExternal,
+		}),
+		120*time.Millisecond,
+	)
 
 	body := scrapeMetricsBody(t, Handler(reg))
 
@@ -26,6 +37,7 @@ func TestPubSubFanoutMetricsObserve(t *testing.T) {
 	assertContainsMetric(t, body, `flow="gmail_pubsub_fanout"`)
 	assertContainsMetric(t, body, `result="success"`)
 	assertContainsMetric(t, body, `result="error"`)
+	assertContainsMetric(t, body, `result="partial_success"`)
 	assertContainsMetric(t, body, "simpleclaw_pubsub_fanout_duration_seconds")
 	assertContainsMetric(t, body, "simpleclaw_pubsub_fanout_targets")
 	assertContainsMetric(t, body, "simpleclaw_pubsub_fanout_success_targets")

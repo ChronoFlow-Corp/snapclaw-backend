@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
+	"shared/pkg/observability"
 	"strings"
 
 	"simpleClaw/internal/entities"
@@ -14,14 +16,30 @@ import (
 
 type Service struct {
 	storage storage
+	metrics *observability.OperationMetrics
 }
 
-func New(storage storage) *Service {
-	return &Service{storage: storage}
+func New(storage storage, metrics ...*observability.OperationMetrics) *Service {
+	var opMetrics *observability.OperationMetrics
+	if len(metrics) > 0 {
+		opMetrics = metrics[0]
+	}
+
+	return &Service{storage: storage, metrics: opMetrics}
 }
 
 func (s *Service) Create(ctx context.Context, cm commands.CreateServer) (entities.Server, error) {
 	const op = "service.server.Create"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.server",
+		"server.create",
+		"server_registry",
+	)
+	var err error
+	defer func() { finish(err) }()
 
 	srv, err := newServer(cm)
 	if err != nil {
@@ -37,6 +55,16 @@ func (s *Service) Create(ctx context.Context, cm commands.CreateServer) (entitie
 
 func (s *Service) GetAll(ctx context.Context) ([]entities.Server, error) {
 	const op = "service.server.GetAll"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.server",
+		"server.list",
+		"server_registry",
+	)
+	var err error
+	defer func() { finish(err) }()
 
 	servers, err := s.storage.GetAll(ctx)
 	if err != nil {
@@ -48,6 +76,16 @@ func (s *Service) GetAll(ctx context.Context) ([]entities.Server, error) {
 
 func (s *Service) GetByID(ctx context.Context, id uuid.UUID) (entities.Server, error) {
 	const op = "service.server.GetByID"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.server",
+		"server.get",
+		"server_registry",
+	)
+	var err error
+	defer func() { finish(err) }()
 
 	if id == uuid.Nil {
 		return entities.Server{}, fmt.Errorf("%s: %w", op, ErrServerIDRequired)
@@ -63,6 +101,16 @@ func (s *Service) GetByID(ctx context.Context, id uuid.UUID) (entities.Server, e
 
 func (s *Service) Update(ctx context.Context, cm commands.UpdateServer) (entities.Server, error) {
 	const op = "service.server.Update"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.server",
+		"server.update",
+		"server_registry",
+	)
+	var err error
+	defer func() { finish(err) }()
 
 	if cm.ID == uuid.Nil {
 		return entities.Server{}, fmt.Errorf("%s: %w", op, ErrServerIDRequired)
@@ -99,8 +147,17 @@ func (s *Service) Update(ctx context.Context, cm commands.UpdateServer) (entitie
 	return existing, nil
 }
 
-func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
+func (s *Service) Delete(ctx context.Context, id uuid.UUID) (err error) {
 	const op = "service.server.Delete"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.server",
+		"server.delete",
+		"server_registry",
+	)
+	defer func() { finish(err) }()
 
 	if id == uuid.Nil {
 		return fmt.Errorf("%s: %w", op, ErrServerIDRequired)

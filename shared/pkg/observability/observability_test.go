@@ -38,6 +38,14 @@ func TestWithActionFlow(t *testing.T) {
 	}
 }
 
+func TestComponentContext(t *testing.T) {
+	ctx := WithComponent(context.Background(), "service.claw")
+
+	if got := Component(ctx); got != "service.claw" {
+		t.Fatalf("Component() = %q, want %q", got, "service.claw")
+	}
+}
+
 func TestEnrichLoggerAddsActionFlowAndTraceIDs(t *testing.T) {
 	spanCtx := trace.NewSpanContext(trace.SpanContextConfig{
 		TraceID:    trace.TraceID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
@@ -47,6 +55,7 @@ func TestEnrichLoggerAddsActionFlowAndTraceIDs(t *testing.T) {
 
 	ctx := trace.ContextWithSpanContext(context.Background(), spanCtx)
 	ctx = WithActionFlow(ctx, "claw.create", "claw_lifecycle")
+	ctx = WithComponent(ctx, "service.claw")
 
 	var buf bytes.Buffer
 	base := slog.New(slog.NewJSONHandler(&buf, nil))
@@ -61,6 +70,10 @@ func TestEnrichLoggerAddsActionFlowAndTraceIDs(t *testing.T) {
 
 	if got := entry["flow"]; got != "claw_lifecycle" {
 		t.Fatalf("flow = %#v, want %q", got, "claw_lifecycle")
+	}
+
+	if got := entry["component"]; got != "service.claw" {
+		t.Fatalf("component = %#v, want %q", got, "service.claw")
 	}
 
 	if got := entry["trace_id"]; got == "" {
@@ -125,8 +138,13 @@ func TestStartFlowLifecycleError(t *testing.T) {
 	var buf bytes.Buffer
 	base := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	_, _, finish := StartFlow(context.Background(), base, "claw_lifecycle", "claw.start")
-	finish(errors.New("timeout"))
+	ctx := WithComponent(context.Background(), "service.claw")
+	_, _, finish := StartFlow(ctx, base, "claw_lifecycle", "claw.start")
+	finish(DecorateError(errors.New("timeout"), ErrorAttrs{
+		Result: ResultError,
+		Kind:   ErrorKindTimeout,
+		Source: ErrorSourceExternal,
+	}))
 
 	lines := splitJSONLines(buf.String())
 	done := parseJSONLine(t, lines[len(lines)-1])
@@ -135,8 +153,16 @@ func TestStartFlowLifecycleError(t *testing.T) {
 		t.Fatalf("result = %#v, want %q", got, "error")
 	}
 
-	if got := done["error_kind"]; got != "*errors.errorString" {
-		t.Fatalf("error_kind = %#v, want %q", got, "*errors.errorString")
+	if got := done["error_kind"]; got != ErrorKindTimeout {
+		t.Fatalf("error_kind = %#v, want %q", got, ErrorKindTimeout)
+	}
+
+	if got := done["error_source"]; got != ErrorSourceExternal {
+		t.Fatalf("error_source = %#v, want %q", got, ErrorSourceExternal)
+	}
+
+	if got := done["component"]; got != "service.claw" {
+		t.Fatalf("component = %#v, want %q", got, "service.claw")
 	}
 }
 

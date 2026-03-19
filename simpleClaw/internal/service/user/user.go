@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"shared/consts"
 	"shared/pkg/jwt"
+	"shared/pkg/observability"
 	"strings"
 	"time"
 
@@ -16,11 +19,12 @@ import (
 )
 
 type Service struct {
-	j      jwt.JWT
-	uSt    UStorage
-	chSt   ChannelStorage
-	keys   apiKeyManager
-	admins map[string]struct{}
+	j       jwt.JWT
+	uSt     UStorage
+	chSt    ChannelStorage
+	keys    apiKeyManager
+	admins  map[string]struct{}
+	metrics *observability.OperationMetrics
 }
 
 func NewUser(
@@ -29,13 +33,20 @@ func NewUser(
 	chSt ChannelStorage,
 	keys apiKeyManager,
 	admins []string,
+	metrics ...*observability.OperationMetrics,
 ) *Service {
+	var opMetrics *observability.OperationMetrics
+	if len(metrics) > 0 {
+		opMetrics = metrics[0]
+	}
+
 	return &Service{
-		j:      j,
-		uSt:    uSt,
-		chSt:   chSt,
-		keys:   keys,
-		admins: buildAdminSet(admins),
+		j:       j,
+		uSt:     uSt,
+		chSt:    chSt,
+		keys:    keys,
+		admins:  buildAdminSet(admins),
+		metrics: opMetrics,
 	}
 }
 
@@ -44,6 +55,15 @@ func (s *Service) SignIn(
 	cm commands.SignIn,
 ) (access jwt.AccessToken, refresh jwt.RefreshToken, err error) {
 	const op = "service.Service.Sign"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"auth.sign_in",
+		"auth",
+	)
+	defer func() { finish(err) }()
 
 	email := normalizeEmail(cm.Email)
 	role := s.roleForEmail(email)
@@ -102,6 +122,15 @@ func (s *Service) Refresh(
 	rawRefresh string,
 ) (access jwt.AccessToken, refresh jwt.RefreshToken, err error) {
 	const op = "service.Service.Refresh"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"auth.refresh",
+		"auth",
+	)
+	defer func() { finish(err) }()
 
 	t, err := s.j.ParseRefresh(rawRefresh)
 	if err != nil {
@@ -136,6 +165,16 @@ func (s *Service) Refresh(
 
 func (s *Service) UserInfo(ctx context.Context, userID uuid.UUID) (entities.User, error) {
 	const op = "service.Service.UserInfo"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"user.info.get",
+		"user_profile",
+	)
+	var err error
+	defer func() { finish(err) }()
 
 	user, err := s.uSt.GetByID(ctx, userID)
 	if err != nil {
@@ -150,6 +189,16 @@ func (s *Service) AddChannel(
 	cm commands.AddChannel,
 ) (entities.Channel, error) {
 	const op = "service.Service.AddChannel"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"channel.add",
+		"channel_connect",
+	)
+	var err error
+	defer func() { finish(err) }()
 
 	var ch entities.Channel
 
@@ -166,7 +215,7 @@ func (s *Service) AddChannel(
 		return entities.Channel{}, ErrChannelUnsupported
 	}
 
-	err := s.chSt.Create(ctx, ch)
+	err = s.chSt.Create(ctx, ch)
 	if err != nil {
 		return entities.Channel{}, fmt.Errorf("%s: %w", op, err)
 	}
@@ -174,10 +223,19 @@ func (s *Service) AddChannel(
 	return ch, nil
 }
 
-func (s *Service) RemoveChannel(ctx context.Context, cm commands.RemoveChannel) error {
+func (s *Service) RemoveChannel(ctx context.Context, cm commands.RemoveChannel) (err error) {
 	const op = "service.Service.RemoveChannel"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"channel.delete",
+		"channel_connect",
+	)
+	defer func() { finish(err) }()
 
-	err := s.chSt.Delete(ctx, cm.ChannelID, cm.UserID)
+	err = s.chSt.Delete(ctx, cm.ChannelID, cm.UserID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -185,8 +243,17 @@ func (s *Service) RemoveChannel(ctx context.Context, cm commands.RemoveChannel) 
 	return nil
 }
 
-func (s *Service) UpdateChannel(ctx context.Context, cm commands.UpdateChannel) error {
+func (s *Service) UpdateChannel(ctx context.Context, cm commands.UpdateChannel) (err error) {
 	const op = "service.Service.UpdateChannel"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"channel.update",
+		"channel_connect",
+	)
+	defer func() { finish(err) }()
 
 	var ch entities.Channel
 
@@ -205,7 +272,7 @@ func (s *Service) UpdateChannel(ctx context.Context, cm commands.UpdateChannel) 
 
 	ch.ID = cm.ChannelID
 
-	err := s.chSt.Update(ctx, ch)
+	err = s.chSt.Update(ctx, ch)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -218,6 +285,16 @@ func (s *Service) GetChannel(
 	channelID, userID uuid.UUID,
 ) (entities.Channel, error) {
 	const op = "service.Service.GetChannel"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"channel.get",
+		"channel_connect",
+	)
+	var err error
+	defer func() { finish(err) }()
 
 	ch, err := s.chSt.GetByID(ctx, channelID, userID)
 	if err != nil {
@@ -229,6 +306,16 @@ func (s *Service) GetChannel(
 
 func (s *Service) GetChannels(ctx context.Context, userID uuid.UUID) ([]entities.Channel, error) {
 	const op = "service.Service.GetChannels"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"channel.list",
+		"channel_connect",
+	)
+	var err error
+	defer func() { finish(err) }()
 
 	chs, err := s.chSt.GetByUserID(ctx, userID)
 	if err != nil {
@@ -238,11 +325,20 @@ func (s *Service) GetChannels(ctx context.Context, userID uuid.UUID) ([]entities
 	return chs, nil
 }
 
-func (s *Service) Connect(ctx context.Context, cm commands.ConnectCommand) error {
+func (s *Service) Connect(ctx context.Context, cm commands.ConnectCommand) (err error) {
 	const op = "service.Service.Connect"
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"channel.connect",
+		"channel_connect",
+	)
+	defer func() { finish(err) }()
 
 	provider := strings.ToLower(strings.TrimSpace(cm.Provider))
-	if provider != "gmail" {
+	if provider != consts.ProviderGmail {
 		return fmt.Errorf("%s: %w", op, ErrProviderUnsupported)
 	}
 

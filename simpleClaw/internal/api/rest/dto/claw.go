@@ -12,9 +12,9 @@ type ApiLimitRequest struct {
 }
 
 type UpdateClawRequest struct {
-	Name       string           `json:"name"`
-	Model      string           `json:"model"`
-	ChannelIDs []string         `json:"channelIds"`
+	Name       *string          `json:"name,omitempty"`
+	Model      *string          `json:"model,omitempty"`
+	ChannelIDs []string         `json:"channelIds,omitempty"`
 	ApiLimits  *ApiLimitRequest `json:"apiLimits,omitempty"`
 }
 

@@ -39,8 +39,39 @@ func TestHTTPMetricsMiddlewareRecordsRequest(t *testing.T) {
 	assertContains(t, scrapeBody, "http_inflight_requests")
 	assertContains(t, scrapeBody, `action="claw.start"`)
 	assertContains(t, scrapeBody, `flow="claw_lifecycle"`)
+	assertContains(t, scrapeBody, `component="http.server"`)
+	assertContains(t, scrapeBody, `result="success"`)
 	assertContains(t, scrapeBody, `route="/api/claws/{id}/start"`)
 	assertContains(t, scrapeBody, `status="204"`)
+}
+
+func TestHTTPMetricsMiddlewareSkipsMetricsRoute(t *testing.T) {
+	reg := NewPrometheusRegistry()
+
+	metrics, err := NewHTTPMetrics(reg)
+	if err != nil {
+		t.Fatalf("NewHTTPMetrics() error = %v", err)
+	}
+
+	classifier := func(method, path string) (string, string) {
+		return "metrics.scrape", "metrics"
+	}
+	routeResolver := func(_ *http.Request) string {
+		return "/metrics"
+	}
+
+	h := metrics.Middleware(classifier, routeResolver)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	scrapeBody := scrapeMetrics(t, Handler(reg))
+	assertNotContains(t, scrapeBody, `route="/metrics"`)
+	assertNotContains(t, scrapeBody, `action="metrics.scrape"`)
 }
 
 func scrapeMetrics(t *testing.T, handler http.Handler) string {
@@ -66,5 +97,12 @@ func assertContains(t *testing.T, body, needle string) {
 	t.Helper()
 	if !strings.Contains(body, needle) {
 		t.Fatalf("metrics body does not contain %q\nbody:\n%s", needle, body)
+	}
+}
+
+func assertNotContains(t *testing.T, body, needle string) {
+	t.Helper()
+	if strings.Contains(body, needle) {
+		t.Fatalf("metrics body unexpectedly contains %q\nbody:\n%s", needle, body)
 	}
 }

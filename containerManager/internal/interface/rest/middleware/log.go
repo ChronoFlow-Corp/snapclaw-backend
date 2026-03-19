@@ -18,9 +18,12 @@ func Logger() func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		fn := func(w http.ResponseWriter, r *http.Request) {
 			action, flow := classifyContainerManagerActionFlow(r.Method, r.URL.Path)
-			ctx := observability.WithActionFlow(r.Context(), action, flow)
+			ctx := observability.WithComponent(
+				observability.WithActionFlow(r.Context(), action, flow),
+				"http.server",
+			)
 
-			logger := observability.EnrichLogger(ctx, slog.Default()).With(
+			logger := slog.Default().With(
 				"request_id", middleware.GetReqID(r.Context()),
 			)
 
@@ -36,9 +39,15 @@ func Logger() func(next http.Handler) http.Handler {
 			if status == 0 {
 				status = http.StatusOK
 			}
+
+			if skipMetricsLog(r.URL.Path, status) {
+				return
+			}
+
 			route := RoutePattern(r)
 
 			attrs := []slog.Attr{
+				slog.String("result", observabilityResult(status)),
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.Path),
 				slog.String("route", route),
@@ -51,11 +60,15 @@ func Logger() func(next http.Handler) http.Handler {
 				attrs = append(attrs, slog.String("user_agent", ua))
 			}
 
-			logctx.Logger(r.Context()).Info("request completed", slog.GroupAttrs("attrs", attrs...))
+			logctx.Logger(r.Context()).LogAttrs(r.Context(), slog.LevelInfo, "request completed", attrs...)
 		}
 
 		return http.HandlerFunc(fn)
 	}
+}
+
+func skipMetricsLog(path string, status int) bool {
+	return normalizeActionPath(path) == "/metrics" && status == http.StatusOK
 }
 
 func RoutePattern(r *http.Request) string {
@@ -71,4 +84,19 @@ func RoutePattern(r *http.Request) string {
 	}
 
 	return normalizeActionPath(r.URL.Path)
+}
+
+func observabilityResult(status int) string {
+	switch {
+	case status >= http.StatusOK && status < http.StatusMultipleChoices:
+		return "success"
+	case status == http.StatusNotFound:
+		return "not_found"
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return "denied"
+	case status >= http.StatusBadRequest && status < http.StatusInternalServerError:
+		return "validation_error"
+	default:
+		return "error"
+	}
 }

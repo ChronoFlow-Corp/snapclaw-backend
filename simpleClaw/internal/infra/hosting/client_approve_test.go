@@ -24,7 +24,7 @@ func TestClientApprovePairing_InvalidCode(t *testing.T) {
 				return &http.Response{
 					StatusCode: http.StatusBadRequest,
 					Status:     "400 Bad Request",
-					Body:       io.NopCloser(strings.NewReader("invalid code\n")),
+					Body:       io.NopCloser(strings.NewReader(`{"code":"invalid_code","message":"invalid code"}`)),
 					Header:     make(http.Header),
 				}, nil
 			}),

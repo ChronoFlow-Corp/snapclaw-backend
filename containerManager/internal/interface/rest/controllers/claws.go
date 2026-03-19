@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"shared/pkg/hostingapi"
 	"shared/pkg/observability"
 	"strconv"
 	"strings"
@@ -21,7 +22,6 @@ import (
 	"containermanager/internal/interface/rest/middleware"
 
 	"containermanager/internal/entities"
-	"containermanager/internal/interface/rest/controllers/dto"
 	"containermanager/internal/pkg/logctx"
 	"containermanager/internal/service"
 	"containermanager/internal/service/commands"
@@ -90,22 +90,22 @@ func (c *Claw) Register(mux chi.Router) {
 }
 
 func (c *Claw) CreateClaw(w http.ResponseWriter, r *http.Request) {
-	var cfg dto.CreateClaw
+	var cfg hostingapi.CreateClawRequest
 
 	err := json.NewDecoder(r.Body).Decode(&cfg)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeValidationError(w, err.Error())
 
 		return
 	}
 
 	if cfg.UserID == "" {
-		http.Error(w, "userId is required", http.StatusBadRequest)
+		writeValidationError(w, "userId is required")
 		return
 	}
 
 	if cfg.ClawID == "" {
-		http.Error(w, "clawId is required", http.StatusBadRequest)
+		writeValidationError(w, "clawId is required")
 		return
 	}
 
@@ -119,7 +119,7 @@ func (c *Claw) CreateClaw(w http.ResponseWriter, r *http.Request) {
 	containerRecordID, err := c.s.Create(r.Context(), cm)
 	if err != nil {
 		log.Error("create claw failed", slog.Any("err", err))
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 
 		return
 	}
@@ -127,7 +127,7 @@ func (c *Claw) CreateClaw(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 
-	var res dto.CreateClawResponse
+	var res hostingapi.CreateClawResponse
 
 	res.ContainerID = containerRecordID
 
@@ -137,16 +137,16 @@ func (c *Claw) CreateClaw(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Claw) Start(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("userId")
+	q := r.URL.Query().Get(hostingapi.QueryUserID)
 	if q == "" {
-		http.Error(w, "userId is required", http.StatusBadRequest)
+		writeValidationError(w, "userId is required")
 
 		return
 	}
 
-	clawID := r.URL.Query().Get("clawId")
+	clawID := r.URL.Query().Get(hostingapi.QueryClawID)
 	if clawID == "" {
-		http.Error(w, "clawId is required", http.StatusBadRequest)
+		writeValidationError(w, "clawId is required")
 
 		return
 	}
@@ -159,7 +159,7 @@ func (c *Claw) Start(w http.ResponseWriter, r *http.Request) {
 	err := c.s.Start(r.Context(), commands.StartClaw{ClawID: clawID, UserID: q})
 	if err != nil {
 		log.Error("start claw failed", slog.Any("err", err))
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 
 		return
 	}
@@ -168,23 +168,23 @@ func (c *Claw) Start(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Claw) Approve(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("userId")
+	q := r.URL.Query().Get(hostingapi.QueryUserID)
 	if q == "" {
-		http.Error(w, "userId is required", http.StatusBadRequest)
+		writeValidationError(w, "userId is required")
 
 		return
 	}
 
-	clawID := r.URL.Query().Get("clawId")
+	clawID := r.URL.Query().Get(hostingapi.QueryClawID)
 	if clawID == "" {
-		http.Error(w, "clawId is required", http.StatusBadRequest)
+		writeValidationError(w, "clawId is required")
 
 		return
 	}
 
-	code := r.URL.Query().Get("code")
+	code := r.URL.Query().Get(hostingapi.QueryCode)
 	if code == "" {
-		http.Error(w, "code is required", http.StatusBadRequest)
+		writeValidationError(w, "code is required")
 
 		return
 	}
@@ -197,8 +197,8 @@ func (c *Claw) Approve(w http.ResponseWriter, r *http.Request) {
 	err := c.s.Approve(clawID, q, code)
 	if err != nil {
 		log.Error("approve failed", slog.Any("err", err))
-		statusCode, message := mapApproveError(err)
-		http.Error(w, message, statusCode)
+		statusCode, payload := mapApproveError(err)
+		hostingapi.WriteError(w, statusCode, payload.Code, payload.Message)
 
 		return
 	}
@@ -208,16 +208,16 @@ func (c *Claw) Approve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("userId")
+	q := r.URL.Query().Get(hostingapi.QueryUserID)
 	if q == "" {
-		http.Error(w, "userId is required", http.StatusBadRequest)
+		writeValidationError(w, "userId is required")
 
 		return
 	}
 
-	clawID := r.URL.Query().Get("clawId")
+	clawID := r.URL.Query().Get(hostingapi.QueryClawID)
 	if clawID == "" {
-		http.Error(w, "clawId is required", http.StatusBadRequest)
+		writeValidationError(w, "clawId is required")
 
 		return
 	}
@@ -230,7 +230,7 @@ func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
 	err := c.s.Stop(r.Context(), commands.StopClaw{ClawID: clawID, UserID: q})
 	if err != nil {
 		log.Error("stop claw failed", slog.Any("err", err))
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 		return
 	}
 
@@ -238,23 +238,23 @@ func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
-	var cfg dto.UpdateClaw
+	var cfg hostingapi.UpdateClawRequest
 
 	err := json.NewDecoder(r.Body).Decode(&cfg)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeValidationError(w, err.Error())
 
 		return
 	}
 
 	if cfg.UserID == "" {
-		http.Error(w, "userId is required", http.StatusBadRequest)
+		writeValidationError(w, "userId is required")
 
 		return
 	}
 
 	if cfg.ClawID == "" {
-		http.Error(w, "clawId is required", http.StatusBadRequest)
+		writeValidationError(w, "clawId is required")
 
 		return
 	}
@@ -269,7 +269,7 @@ func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
 	err = c.s.Update(r.Context(), cm)
 	if err != nil {
 		log.Error("update claw failed", slog.Any("err", err))
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 
 		return
 	}
@@ -279,16 +279,16 @@ func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("userId")
+	q := r.URL.Query().Get(hostingapi.QueryUserID)
 	if q == "" {
-		http.Error(w, "userId is required", http.StatusBadRequest)
+		writeValidationError(w, "userId is required")
 
 		return
 	}
 
-	clawID := r.URL.Query().Get("clawId")
+	clawID := r.URL.Query().Get(hostingapi.QueryClawID)
 	if clawID == "" {
-		http.Error(w, "clawId is required", http.StatusBadRequest)
+		writeValidationError(w, "clawId is required")
 
 		return
 	}
@@ -299,10 +299,10 @@ func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 	)
 
 	deleteConfig := false
-	if raw := r.URL.Query().Get("deleteConfig"); raw != "" {
+	if raw := r.URL.Query().Get(hostingapi.QueryDeleteConfig); raw != "" {
 		val, err := strconv.ParseBool(raw)
 		if err != nil {
-			http.Error(w, "deleteConfig must be a boolean", http.StatusBadRequest)
+			writeValidationError(w, "deleteConfig must be a boolean")
 			return
 		}
 		deleteConfig = val
@@ -315,7 +315,7 @@ func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		log.Error("delete claw failed", slog.Any("err", err))
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 		return
 	}
 
@@ -323,15 +323,15 @@ func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Claw) ConfigArchive(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("userId")
+	q := r.URL.Query().Get(hostingapi.QueryUserID)
 	if q == "" {
-		http.Error(w, "userId is required", http.StatusBadRequest)
+		writeValidationError(w, "userId is required")
 		return
 	}
 
-	clawID := r.URL.Query().Get("clawId")
+	clawID := r.URL.Query().Get(hostingapi.QueryClawID)
 	if clawID == "" {
-		http.Error(w, "clawId is required", http.StatusBadRequest)
+		writeValidationError(w, "clawId is required")
 		return
 	}
 
@@ -341,10 +341,10 @@ func (c *Claw) ConfigArchive(w http.ResponseWriter, r *http.Request) {
 	)
 
 	deleteAfter := false
-	if raw := r.URL.Query().Get("deleteAfter"); raw != "" {
+	if raw := r.URL.Query().Get(hostingapi.QueryDeleteAfter); raw != "" {
 		val, err := strconv.ParseBool(raw)
 		if err != nil {
-			http.Error(w, "deleteAfter must be a boolean", http.StatusBadRequest)
+			writeValidationError(w, "deleteAfter must be a boolean")
 			return
 		}
 		deleteAfter = val
@@ -366,11 +366,11 @@ func (c *Claw) ConfigArchive(w http.ResponseWriter, r *http.Request) {
 			slog.Bool("delete_after", deleteAfter),
 		)
 		if errors.Is(err, os.ErrNotExist) {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			hostingapi.WriteError(w, http.StatusNotFound, hostingapi.ErrCodeNotFound, err.Error())
 			return
 		}
 
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 		return
 	}
 
@@ -378,15 +378,15 @@ func (c *Claw) ConfigArchive(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Claw) RestoreConfig(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("userId")
+	q := r.URL.Query().Get(hostingapi.QueryUserID)
 	if q == "" {
-		http.Error(w, "userId is required", http.StatusBadRequest)
+		writeValidationError(w, "userId is required")
 		return
 	}
 
-	clawID := r.URL.Query().Get("clawId")
+	clawID := r.URL.Query().Get(hostingapi.QueryClawID)
 	if clawID == "" {
-		http.Error(w, "clawId is required", http.StatusBadRequest)
+		writeValidationError(w, "clawId is required")
 		return
 	}
 
@@ -398,7 +398,7 @@ func (c *Claw) RestoreConfig(w http.ResponseWriter, r *http.Request) {
 	err := c.s.RestoreConfig(r.Context(), commands.RestoreConfig{UserID: q, ClawID: clawID}, r.Body)
 	if err != nil {
 		log.Error("restore config failed", slog.Any("err", err))
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 		return
 	}
 
@@ -407,30 +407,36 @@ func (c *Claw) RestoreConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Claw) Connect(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("userId")
+	q := r.URL.Query().Get(hostingapi.QueryUserID)
 	if q == "" {
-		http.Error(w, "userId is required", http.StatusBadRequest)
+		writeValidationError(w, "userId is required")
 		return
 	}
-	clawID := r.URL.Query().Get("clawId")
+	clawID := r.URL.Query().Get(hostingapi.QueryClawID)
 	if clawID == "" {
-		http.Error(w, "clawId is required", http.StatusBadRequest)
+		writeValidationError(w, "clawId is required")
 		return
 	}
-	provider := r.URL.Query().Get("provider")
+	provider := r.URL.Query().Get(hostingapi.QueryProvider)
 	if provider == "" {
-		http.Error(w, "provider is required", http.StatusBadRequest)
+		writeValidationError(w, "provider is required")
+		return
+	}
+
+	normalizedProvider, err := hostingapi.NormalizeProvider(provider)
+	if err != nil {
+		writeValidationError(w, err.Error())
 		return
 	}
 
 	token, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "failed to read token", http.StatusBadRequest)
+		writeValidationError(w, "failed to read token")
 		return
 	}
 
 	if len(bytes.TrimSpace(token)) == 0 {
-		http.Error(w, "token is required", http.StatusBadRequest)
+		writeValidationError(w, "token is required")
 		return
 	}
 	log := logctx.Logger(r.Context()).With(
@@ -443,16 +449,16 @@ func (c *Claw) Connect(w http.ResponseWriter, r *http.Request) {
 			ClawID:   clawID,
 			UserID:   q,
 			Token:    token,
-			Provider: provider,
+			Provider: normalizedProvider,
 		},
 	)
 	if err != nil {
 		log.Error("connect failed", slog.Any("err", err))
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeInternalError(w, err)
 		return
 	}
 
-	log.Info("claw connected", slog.String("provider", provider))
+	log.Info("claw connected", slog.String("provider", normalizedProvider))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -461,9 +467,10 @@ func (c *Claw) GmailPubSub(w http.ResponseWriter, r *http.Request) {
 	targetCount := 0
 	successCount := 0
 	var flowErr error
+	ctxWithComponent := observability.WithComponent(r.Context(), "controller.gmail_pubsub")
 	ctx, log, finishFlow := observability.StartFlow(
-		r.Context(),
-		logctx.Logger(r.Context()),
+		ctxWithComponent,
+		logctx.Logger(ctxWithComponent),
 		"gmail_pubsub_fanout",
 		"pubsub.forward",
 	)
@@ -474,20 +481,37 @@ func (c *Claw) GmailPubSub(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(ctx)
 
 	if !isJSONContentType(r.Header.Get("Content-Type")) {
-		flowErr = errors.New("invalid content type")
-		http.Error(w, "content type must be application/json", http.StatusUnsupportedMediaType)
+		flowErr = observability.DecorateError(errors.New("invalid content type"), observability.ErrorAttrs{
+			Result: observability.ResultValidationError,
+			Kind:   observability.ErrorKindValidation,
+			Source: observability.ErrorSourceHTTP,
+		})
+		hostingapi.WriteError(
+			w,
+			http.StatusUnsupportedMediaType,
+			hostingapi.ErrCodeValidation,
+			"content type must be application/json",
+		)
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		flowErr = fmt.Errorf("read request body: %w", err)
-		http.Error(w, "failed to read request body", http.StatusBadRequest)
+		flowErr = observability.DecorateError(fmt.Errorf("read request body: %w", err), observability.ErrorAttrs{
+			Result: observability.ResultValidationError,
+			Kind:   observability.ErrorKindValidation,
+			Source: observability.ErrorSourceHTTP,
+		})
+		writeValidationError(w, "failed to read request body")
 		return
 	}
 	if len(bytes.TrimSpace(body)) == 0 {
-		flowErr = errors.New("empty request body")
-		http.Error(w, "request body is required", http.StatusBadRequest)
+		flowErr = observability.DecorateError(errors.New("empty request body"), observability.ErrorAttrs{
+			Result: observability.ResultValidationError,
+			Kind:   observability.ErrorKindValidation,
+			Source: observability.ErrorSourceHTTP,
+		})
+		writeValidationError(w, "request body is required")
 		return
 	}
 
@@ -502,7 +526,12 @@ func (c *Claw) GmailPubSub(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Error("failed to list running containers", slog.Any("err", err))
 		flowErr = fmt.Errorf("list running containers: %w", err)
-		http.Error(w, "failed to list running containers", http.StatusServiceUnavailable)
+		hostingapi.WriteError(
+			w,
+			http.StatusServiceUnavailable,
+			hostingapi.ErrCodeInternal,
+			"failed to list running containers",
+		)
 		return
 	}
 
@@ -552,9 +581,26 @@ func (c *Claw) GmailPubSub(w http.ResponseWriter, r *http.Request) {
 	successCount = okCount
 
 	if okCount == 0 {
-		flowErr = errors.New("all downstream requests failed")
-		http.Error(w, "all downstream requests failed", http.StatusBadGateway)
+		flowErr = observability.DecorateError(errors.New("all downstream requests failed"), observability.ErrorAttrs{
+			Result: observability.ResultError,
+			Kind:   observability.ErrorKindUnexpected,
+			Source: observability.ErrorSourceExternal,
+		})
+		hostingapi.WriteError(
+			w,
+			http.StatusBadGateway,
+			hostingapi.ErrCodeInternal,
+			"all downstream requests failed",
+		)
 		return
+	}
+
+	if okCount < len(containers) {
+		flowErr = observability.DecorateError(errors.New("partial downstream failure"), observability.ErrorAttrs{
+			Result: observability.ResultPartialSuccess,
+			Kind:   observability.ErrorKindUnexpected,
+			Source: observability.ErrorSourceExternal,
+		})
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -752,7 +798,7 @@ func isJSONContentType(raw string) bool {
 	return mediaType == "application/json"
 }
 
-func mapCreateClawToCommand(d dto.CreateClaw) commands.CreateClaw {
+func mapCreateClawToCommand(d hostingapi.CreateClawRequest) commands.CreateClaw {
 	cm := commands.CreateClaw{
 		Config: make([]entities.ClawConfig, 0),
 	}
@@ -767,7 +813,7 @@ func mapCreateClawToCommand(d dto.CreateClaw) commands.CreateClaw {
 	return cm
 }
 
-func mapUpdateClawToCommand(d dto.UpdateClaw) commands.UpdateClaw {
+func mapUpdateClawToCommand(d hostingapi.UpdateClawRequest) commands.UpdateClaw {
 	cm := commands.UpdateClaw{
 		Config: make([]entities.ClawConfig, 0),
 	}
@@ -780,7 +826,7 @@ func mapUpdateClawToCommand(d dto.UpdateClaw) commands.UpdateClaw {
 	return cm
 }
 
-func mapConfig(d []dto.ClawConfig) []entities.ClawConfig {
+func mapConfig(d []hostingapi.ClawConfigFile) []entities.ClawConfig {
 	cm := make([]entities.ClawConfig, len(d))
 
 	for i, c := range d {
@@ -805,4 +851,12 @@ func mapConfig(d []dto.ClawConfig) []entities.ClawConfig {
 	}
 
 	return cm
+}
+
+func writeValidationError(w http.ResponseWriter, message string) {
+	hostingapi.WriteError(w, http.StatusBadRequest, hostingapi.ErrCodeValidation, message)
+}
+
+func writeInternalError(w http.ResponseWriter, err error) {
+	hostingapi.WriteError(w, http.StatusInternalServerError, hostingapi.ErrCodeInternal, err.Error())
 }

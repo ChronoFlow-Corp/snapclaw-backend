@@ -2,12 +2,10 @@ package observability
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
-	"reflect"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -38,8 +36,8 @@ type TracingConfig struct {
 
 // WithAction sets action name in context for structured logging/metrics.
 func WithAction(ctx context.Context, action string) context.Context {
-	action = strings.TrimSpace(action)
-	if action == "" {
+	action = NormalizeAction(action)
+	if action == "unknown" {
 		return ctx
 	}
 
@@ -49,13 +47,13 @@ func WithAction(ctx context.Context, action string) context.Context {
 // Action returns action name from context.
 func Action(ctx context.Context) string {
 	v, _ := ctx.Value(ctxActionKey{}).(string)
-	return strings.TrimSpace(v)
+	return NormalizeAction(v)
 }
 
 // WithFlow sets flow name in context for structured logging/metrics.
 func WithFlow(ctx context.Context, flow string) context.Context {
-	flow = strings.TrimSpace(flow)
-	if flow == "" {
+	flow = NormalizeFlow(flow)
+	if flow == "unknown" {
 		return ctx
 	}
 
@@ -65,7 +63,7 @@ func WithFlow(ctx context.Context, flow string) context.Context {
 // Flow returns flow name from context.
 func Flow(ctx context.Context) string {
 	v, _ := ctx.Value(ctxFlowKey{}).(string)
-	return strings.TrimSpace(v)
+	return NormalizeFlow(v)
 }
 
 // WithActionFlow sets both action and flow.
@@ -75,13 +73,17 @@ func WithActionFlow(ctx context.Context, action, flow string) context.Context {
 	return ctx
 }
 
-// EnrichLogger injects action/flow/trace ids from context into logger.
+// EnrichLogger injects component/action/flow/trace ids from context into logger.
 func EnrichLogger(ctx context.Context, logger *slog.Logger) *slog.Logger {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	attrs := make([]any, 0, 8)
+	attrs := make([]any, 0, 10)
+
+	if component := Component(ctx); component != "" && component != "unknown" {
+		attrs = append(attrs, "component", component)
+	}
 
 	if action := Action(ctx); action != "" {
 		attrs = append(attrs, "action", action)
@@ -104,6 +106,64 @@ func EnrichLogger(ctx context.Context, logger *slog.Logger) *slog.Logger {
 	return logger.With(attrs...)
 }
 
+func StartOperation(
+	ctx context.Context,
+	logger *slog.Logger,
+	metrics *OperationMetrics,
+	component string,
+	action string,
+	flow string,
+) (context.Context, *slog.Logger, func(err error)) {
+	ctx = WithComponent(ctx, component)
+	ctx = WithActionFlow(ctx, action, flow)
+	logger = EnrichLogger(ctx, logger)
+
+	startedAt := time.Now()
+	logger.Info("operation_started")
+
+	var done int32
+	finish := func(err error) {
+		if !atomic.CompareAndSwapInt32(&done, 0, 1) {
+			return
+		}
+
+		errAttrs := ClassifyError(err)
+		result := errAttrs.Result
+		if result == "" {
+			result = ResultSuccess
+		}
+
+		loggerAttrs := []any{
+			"result", result,
+			"duration_ms", time.Since(startedAt).Milliseconds(),
+		}
+
+		if err != nil {
+			loggerAttrs = append(
+				loggerAttrs,
+				"error_kind", NormalizeErrorKind(errAttrs.Kind),
+				"error_source", NormalizeErrorSource(errAttrs.Source),
+				"err", err,
+			)
+		}
+
+		logger.Info("operation_finished", loggerAttrs...)
+		if metrics != nil {
+			metrics.Observe(OperationObservation{
+				Component:   Component(ctx),
+				Action:      Action(ctx),
+				Flow:        Flow(ctx),
+				Result:      result,
+				ErrorKind:   errAttrs.Kind,
+				ErrorSource: errAttrs.Source,
+				Duration:    time.Since(startedAt),
+			})
+		}
+	}
+
+	return ctx, logger, finish
+}
+
 // StartFlow marks flow start in logs and returns completion callback.
 func StartFlow(
 	ctx context.Context,
@@ -113,45 +173,34 @@ func StartFlow(
 ) (context.Context, *slog.Logger, func(err error)) {
 	ctx = WithActionFlow(ctx, action, flow)
 	logger = EnrichLogger(ctx, logger)
-
 	startedAt := time.Now()
+
 	logger.Info("flow_started")
 
 	var done int32
-	finish := func(err error) {
+	return ctx, logger, func(err error) {
 		if !atomic.CompareAndSwapInt32(&done, 0, 1) {
 			return
 		}
 
-		result := "success"
+		errAttrs := ClassifyError(err)
+		result := errAttrs.Result
+		if result == "" {
+			result = ResultSuccess
+		}
+
 		attrs := []any{
 			"result", result,
 			"duration_ms", time.Since(startedAt).Milliseconds(),
 		}
-
 		if err != nil {
-			result = "error"
-			attrs[1] = result
-			attrs = append(attrs, "error_kind", errorKind(err))
+			attrs = append(attrs, "error_kind", NormalizeErrorKind(errAttrs.Kind))
+			attrs = append(attrs, "error_source", NormalizeErrorSource(errAttrs.Source))
+			attrs = append(attrs, "err", err)
 		}
 
 		logger.Info("flow_finished", attrs...)
 	}
-
-	return ctx, logger, finish
-}
-
-func errorKind(err error) string {
-	if err == nil {
-		return ""
-	}
-
-	var target interface{ Kind() string }
-	if errors.As(err, &target) {
-		return target.Kind()
-	}
-
-	return reflect.TypeOf(err).String()
 }
 
 // SetupTracing configures global OTel tracer provider and returns shutdown callback.

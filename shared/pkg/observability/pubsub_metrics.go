@@ -72,9 +72,10 @@ func (m *PubSubFanoutMetrics) Observe(flow string, targets int, successTargets i
 	}
 
 	flow = normalizeLabel(flow, "unknown")
-	result := "success"
+	result := ResultSuccess
 	if err != nil {
-		result = "error"
+		classified := ClassifyError(err)
+		result = NormalizeResult(classified.Result)
 	}
 
 	m.total.WithLabelValues(flow, result).Inc()

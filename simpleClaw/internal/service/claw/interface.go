@@ -14,7 +14,12 @@ type clawStorage interface {
 	Create(ctx context.Context, cl entities.Claw, channelIDs []uuid.UUID) error
 	GetByID(ctx context.Context, id, userID uuid.UUID) (entities.Claw, error)
 	GetByUserID(ctx context.Context, userID uuid.UUID) ([]entities.Claw, error)
-	Update(ctx context.Context, cl entities.Claw, channelIDs []uuid.UUID) error
+	Update(
+		ctx context.Context,
+		cl entities.Claw,
+		channelIDs []uuid.UUID,
+		replaceChannels bool,
+	) error
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	UpdateRuntime(
 		ctx context.Context,

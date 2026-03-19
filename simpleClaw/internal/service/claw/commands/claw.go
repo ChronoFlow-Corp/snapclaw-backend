@@ -17,9 +17,9 @@ type ApiKeyLimits struct {
 type UpdateClaw struct {
 	UserID      uuid.UUID
 	ClawID      uuid.UUID
-	Name        string
+	Name        *string
 	ChannelIDs  []uuid.UUID
-	Model       string
+	Model       *string
 	ApiKeyLimit ApiKeyLimits
 }
 

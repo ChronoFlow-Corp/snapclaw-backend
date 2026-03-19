@@ -3,6 +3,7 @@ package openrouter
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"shared/pkg/observability"
 	"strings"
@@ -17,17 +18,19 @@ import (
 
 // ApiKeyManager manages OpenRouter API keys through the go-openrouter client.
 type ApiKeyManager struct {
-	client *gopenrouter.Client
+	client  *gopenrouter.Client
+	metrics *observability.OperationMetrics
 }
 
 // Options configure ApiKeyManager creation.
 type Options struct {
-	BaseURL    string
-	APIToken   string
-	Timeout    time.Duration
-	HTTPClient *http.Client
-	Referer    string
-	Title      string
+	BaseURL          string
+	APIToken         string
+	Timeout          time.Duration
+	HTTPClient       *http.Client
+	Referer          string
+	Title            string
+	OperationMetrics *observability.OperationMetrics
 }
 
 // NewApiKeyManager constructs a manager backed by github.com/revrost/go-openrouter.
@@ -64,7 +67,8 @@ func NewApiKeyManager(opts Options) (*ApiKeyManager, error) {
 	}
 
 	return &ApiKeyManager{
-		client: gopenrouter.NewClientWithConfig(*cfg),
+		client:  gopenrouter.NewClientWithConfig(*cfg),
+		metrics: opts.OperationMetrics,
 	}, nil
 }
 
@@ -75,6 +79,10 @@ func (m *ApiKeyManager) Create(
 	label string,
 	monthlyBudgetUSD float64,
 ) (entities.OpenRouterKey, error) {
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.openrouter", "openrouter.key.create", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
+
 	name := makeKeyName(userID, label)
 	limit := normalizeBudget(monthlyBudgetUSD)
 
@@ -100,26 +108,35 @@ func (m *ApiKeyManager) UpdateLimits(
 	ctx context.Context,
 	keyID string,
 	monthlyBudgetUSD float64,
-) error {
+) (err error) {
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.openrouter", "openrouter.key.update_limits", "claw_lifecycle")
+	defer func() { finish(err) }()
+
 	limit := normalizeBudget(monthlyBudgetUSD)
 	req := gopenrouter.APIKeyUpdateRequest{
 		Limit:      floatPtr(limit),
 		LimitReset: keyResetPtr(gopenrouter.KeyLimitResetMonthly),
 	}
 
-	_, err := m.client.UpdateAPIKey(ctx, keyID, req)
+	_, err = m.client.UpdateAPIKey(ctx, keyID, req)
 	return wrapError(err)
 }
 
 // Delete removes the key from OpenRouter.
-func (m *ApiKeyManager) Delete(ctx context.Context, keyID string) error {
-	_, err := m.client.DeleteAPIKey(ctx, keyID)
+func (m *ApiKeyManager) Delete(ctx context.Context, keyID string) (err error) {
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.openrouter", "openrouter.key.delete", "claw_lifecycle")
+	defer func() { finish(err) }()
+
+	_, err = m.client.DeleteAPIKey(ctx, keyID)
 	return wrapError(err)
 }
 
 // ResolveModel returns the fully-qualified model slug for OpenRouter agents config.
 func (m *ApiKeyManager) ResolveModel(ctx context.Context, model string) (string, error) {
 	const prefix = "openrouter/"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.openrouter", "openrouter.model.resolve", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
 
 	slug := normalizeModelSlug(model)
 	if slug == "" {

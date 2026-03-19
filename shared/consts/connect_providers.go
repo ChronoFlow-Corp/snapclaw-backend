@@ -1,5 +1,5 @@
 package consts
 
 const (
-	GmailProvider = "GmailProvider"
+	ProviderGmail = "gmail"
 )

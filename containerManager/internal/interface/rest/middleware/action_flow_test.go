@@ -2,7 +2,9 @@ package middleware
 
 import "testing"
 
-func TestClassifyContainerManagerActionFlow(t *testing.T) {
+func TestClassifyActionFlow(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name       string
 		method     string
@@ -11,43 +13,38 @@ func TestClassifyContainerManagerActionFlow(t *testing.T) {
 		wantFlow   string
 	}{
 		{
-			name:       "create claw",
-			method:     "POST",
-			path:       "/claws",
-			wantAction: "claw.create",
-			wantFlow:   "claw_lifecycle",
-		},
-		{
-			name:       "approve",
-			method:     "GET",
-			path:       "/approve",
-			wantAction: "claw.approve",
-			wantFlow:   "claw_pairing",
-		},
-		{
-			name:       "gmail pubsub",
+			name:       "gmail pubsub route",
 			method:     "POST",
 			path:       "/gmail-pubsub",
 			wantAction: "pubsub.forward",
 			wantFlow:   "gmail_pubsub_fanout",
 		},
 		{
-			name:       "connect",
+			name:       "start claw route",
 			method:     "POST",
-			path:       "/connect",
-			wantAction: "claw.connect",
-			wantFlow:   "claw_pairing",
+			path:       "/claws/start",
+			wantAction: "claw.start",
+			wantFlow:   "claw_lifecycle",
+		},
+		{
+			name:       "unknown route",
+			method:     "GET",
+			path:       "/unknown",
+			wantAction: "http.request",
+			wantFlow:   "http_request",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			action, flow := classifyContainerManagerActionFlow(tt.method, tt.path)
-			if action != tt.wantAction {
-				t.Fatalf("action = %q, want %q", action, tt.wantAction)
+			t.Parallel()
+
+			gotAction, gotFlow := ClassifyActionFlow(tt.method, tt.path)
+			if gotAction != tt.wantAction {
+				t.Fatalf("action = %q, want %q", gotAction, tt.wantAction)
 			}
-			if flow != tt.wantFlow {
-				t.Fatalf("flow = %q, want %q", flow, tt.wantFlow)
+			if gotFlow != tt.wantFlow {
+				t.Fatalf("flow = %q, want %q", gotFlow, tt.wantFlow)
 			}
 		})
 	}

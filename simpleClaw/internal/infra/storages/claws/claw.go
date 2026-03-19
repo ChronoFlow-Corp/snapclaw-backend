@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"shared/pkg/observability"
 
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/sql"
@@ -15,11 +17,17 @@ import (
 )
 
 type Storage struct {
-	db *gorm.DB
+	db      *gorm.DB
+	metrics *observability.OperationMetrics
 }
 
-func NewStorage(db *gorm.DB) *Storage {
-	return &Storage{db: db}
+func NewStorage(db *gorm.DB, metrics ...*observability.OperationMetrics) *Storage {
+	var opMetrics *observability.OperationMetrics
+	if len(metrics) > 0 {
+		opMetrics = metrics[0]
+	}
+
+	return &Storage{db: db, metrics: opMetrics}
 }
 
 func (s *Storage) Create(
@@ -28,6 +36,9 @@ func (s *Storage) Create(
 	channelIDs []uuid.UUID,
 ) error {
 	const op = "storages.Claws.Create"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.claws", "storage.claw.create", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
 
 	cfg, err := json.Marshal(cl.Config)
 	if err != nil {
@@ -78,6 +89,9 @@ func (s *Storage) UpdateRuntime(
 	status string,
 ) error {
 	const op = "storages.Claws.UpdateRuntime"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.claws", "storage.claw.update_runtime", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
 
 	var sID *uuid.UUID
 
@@ -113,6 +127,9 @@ func (s *Storage) GetByID(
 	userID uuid.UUID,
 ) (entities.Claw, error) {
 	const op = "storages.Claws.GetByID"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.claws", "storage.claw.get_by_id", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
 
 	clDB, err := gorm.G[models.Claw](s.db).Where("id = ? AND user_id = ?", id, userID).First(ctx)
 	if err != nil {
@@ -144,6 +161,9 @@ func (s *Storage) GetByUserID(
 	userID uuid.UUID,
 ) ([]entities.Claw, error) {
 	const op = "storages.Claws.GetByUserID"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.claws", "storage.claw.list_by_user", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
 
 	clsDB, err := gorm.G[models.Claw](s.db).Where("user_id = ?", userID).Find(ctx)
 	if err != nil {
@@ -179,8 +199,12 @@ func (s *Storage) Update(
 	ctx context.Context,
 	cl entities.Claw,
 	channelIDs []uuid.UUID,
+	replaceChannels bool,
 ) error {
 	const op = "storages.Claws.Update"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.claws", "storage.claw.update", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
 
 	cfg, err := json.Marshal(cl.Config)
 	if err != nil {
@@ -205,7 +229,7 @@ func (s *Storage) Update(
 			return fmt.Errorf("%s: %w", op, sql.ErrNotFound)
 		}
 
-		if channelIDs != nil {
+		if replaceChannels {
 			if err := tx.Table("claw_channels").Where("claw_id = ?", cl.ID).Delete(&clawChannel{}).Error; err != nil {
 				return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 			}
@@ -237,6 +261,9 @@ func (s *Storage) Delete(
 	userID uuid.UUID,
 ) error {
 	const op = "storages.Claws.Delete"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.claws", "storage.claw.delete", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
 
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Table("claw_channels").Where("claw_id = ?", id).Delete(&clawChannel{}).Error; err != nil {

@@ -100,9 +100,10 @@ func (p *PubSubProxy) HandlePubSub(w http.ResponseWriter, r *http.Request) {
 	var flowErr error
 	targetCount := 0
 	successCount := 0
+	ctxWithComponent := observability.WithComponent(r.Context(), "controller.pubsub_proxy")
 	ctx, logger, finishFlow := observability.StartFlow(
-		r.Context(),
-		slctx.Logger(r.Context()),
+		ctxWithComponent,
+		slctx.Logger(ctxWithComponent),
 		"gmail_pubsub_fanout",
 		"pubsub.forward",
 	)
@@ -113,14 +114,22 @@ func (p *PubSubProxy) HandlePubSub(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(ctx)
 
 	if !isJSONContentType(r.Header.Get("Content-Type")) {
-		flowErr = errors.New("invalid content type")
+		flowErr = observability.DecorateError(errors.New("invalid content type"), observability.ErrorAttrs{
+			Result: observability.ResultValidationError,
+			Kind:   observability.ErrorKindValidation,
+			Source: observability.ErrorSourceHTTP,
+		})
 		http.Error(w, "content type must be application/json", http.StatusUnsupportedMediaType)
 		return
 	}
 
 	if !p.isAuthorized(inboundToken(r)) {
 		logger.Warn("pubsub request rejected", slog.String("reason", "invalid ingress token"))
-		flowErr = errors.New("invalid ingress token")
+		flowErr = observability.DecorateError(errors.New("invalid ingress token"), observability.ErrorAttrs{
+			Result: observability.ResultDenied,
+			Kind:   observability.ErrorKindDenied,
+			Source: observability.ErrorSourceHTTP,
+		})
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -128,7 +137,11 @@ func (p *PubSubProxy) HandlePubSub(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		logger.Error("failed to read pubsub request body", slog.Any("err", err))
-		flowErr = err
+		flowErr = observability.DecorateError(err, observability.ErrorAttrs{
+			Result: observability.ResultValidationError,
+			Kind:   observability.ErrorKindValidation,
+			Source: observability.ErrorSourceHTTP,
+		})
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
@@ -172,7 +185,11 @@ func (p *PubSubProxy) HandlePubSub(w http.ResponseWriter, r *http.Request) {
 
 	if len(targets) == 0 {
 		logger.Warn("pubsub request has no configured downstream targets")
-		flowErr = errors.New("no downstream targets configured")
+		flowErr = observability.DecorateError(errors.New("no downstream targets configured"), observability.ErrorAttrs{
+			Result: observability.ResultError,
+			Kind:   observability.ErrorKindUnexpected,
+			Source: observability.ErrorSourceExternal,
+		})
 		http.Error(w, "no downstream targets configured", http.StatusBadGateway)
 		return
 	}
@@ -201,11 +218,22 @@ func (p *PubSubProxy) HandlePubSub(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if successCount > 0 {
+		if successCount < len(targets) {
+			flowErr = observability.DecorateError(errors.New("partial downstream failure"), observability.ErrorAttrs{
+				Result: observability.ResultPartialSuccess,
+				Kind:   observability.ErrorKindUnexpected,
+				Source: observability.ErrorSourceExternal,
+			})
+		}
 		writePlainText(logger, w, http.StatusOK, "OK")
 		return
 	}
 
-	flowErr = errors.New("all downstream requests failed")
+	flowErr = observability.DecorateError(errors.New("all downstream requests failed"), observability.ErrorAttrs{
+		Result: observability.ResultError,
+		Kind:   observability.ErrorKindUnexpected,
+		Source: observability.ErrorSourceExternal,
+	})
 	http.Error(w, "all downstream requests failed", http.StatusBadGateway)
 }
 

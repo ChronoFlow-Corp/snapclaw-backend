@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"shared/pkg/observability"
 	"slices"
 	"strings"
 	"time"
@@ -30,14 +31,21 @@ const MB = 1024 * 1024
 const imageName = "openclaw_npm"
 
 type Manager struct {
-	images map[string]imageInfo
-	cl     *client.Client
+	images  map[string]imageInfo
+	cl      *client.Client
+	metrics *observability.OperationMetrics
 }
 
-func NewManager(ctx context.Context, cl *client.Client) (*Manager, error) {
+func NewManager(ctx context.Context, cl *client.Client, metrics ...*observability.OperationMetrics) (*Manager, error) {
+	var opMetrics *observability.OperationMetrics
+	if len(metrics) > 0 {
+		opMetrics = metrics[0]
+	}
+
 	m := &Manager{
-		images: make(map[string]imageInfo),
-		cl:     cl,
+		images:  make(map[string]imageInfo),
+		cl:      cl,
+		metrics: opMetrics,
 	}
 
 	go m.ping(ctx)
@@ -52,8 +60,11 @@ func NewManager(ctx context.Context, cl *client.Client) (*Manager, error) {
 
 func (m *Manager) Build(ctx context.Context, dockerfile string, buildCtxPaths []string) error {
 	const op = "container.Manager.Build"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.docker", "docker.image.build", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
 
-	err := m.getImages(ctx)
+	err = m.getImages(ctx)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -98,6 +109,9 @@ func (m *Manager) Build(ctx context.Context, dockerfile string, buildCtxPaths []
 
 func (m *Manager) Create(ctx context.Context, opts CreateOptions) (string, error) {
 	const op = "container.Manager.Create"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.docker", "docker.container.create", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
 
 	primaryPort := nat.Port(fmt.Sprintf("%s/tcp", opts.ContainerPort))
 	exposedPorts := nat.PortSet{
@@ -144,10 +158,12 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (string, error
 	return rs.ID, nil
 }
 
-func (m *Manager) Start(ctx context.Context, containerID string) error {
+func (m *Manager) Start(ctx context.Context, containerID string) (err error) {
 	const op = "container.Manager.Start"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.docker", "docker.container.start", "claw_lifecycle")
+	defer func() { finish(err) }()
 
-	err := m.cl.ContainerStart(ctx, containerID, dcontainer.StartOptions{})
+	err = m.cl.ContainerStart(ctx, containerID, dcontainer.StartOptions{})
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -161,10 +177,12 @@ func (m *Manager) Attach(ctx context.Context, containerID string) (*types.Hijack
 	return nil, nil
 }
 
-func (m *Manager) Stop(ctx context.Context, containerID string) error {
+func (m *Manager) Stop(ctx context.Context, containerID string) (err error) {
 	const op = "container.Manager.Stop"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.docker", "docker.container.stop", "claw_lifecycle")
+	defer func() { finish(err) }()
 
-	err := m.cl.ContainerStop(ctx, containerID, dcontainer.StopOptions{})
+	err = m.cl.ContainerStop(ctx, containerID, dcontainer.StopOptions{})
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -172,10 +190,12 @@ func (m *Manager) Stop(ctx context.Context, containerID string) error {
 	return nil
 }
 
-func (m *Manager) Remove(ctx context.Context, containerID string) error {
+func (m *Manager) Remove(ctx context.Context, containerID string) (err error) {
 	const op = "container.Manager.Remove"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.docker", "docker.container.remove", "claw_lifecycle")
+	defer func() { finish(err) }()
 
-	err := m.cl.ContainerRemove(ctx, containerID, dcontainer.RemoveOptions{
+	err = m.cl.ContainerRemove(ctx, containerID, dcontainer.RemoveOptions{
 		Force:         true,
 		RemoveVolumes: true,
 	})
@@ -199,6 +219,9 @@ func (m *Manager) ExecGmail(
 	opts ExecGmailOptions,
 ) error {
 	const op = "container.Manager.ExecGmail"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.docker", "docker.exec.gmail", "claw_pairing")
+	var err error
+	defer func() { finish(err) }()
 	log := logctx.Logger(ctx).With(slog.String("container_id", containerID))
 
 	if containerID == "" {

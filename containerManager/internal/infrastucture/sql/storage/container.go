@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"shared/pkg/observability"
 	"time"
 
 	"containermanager/internal/entities"
@@ -40,17 +42,25 @@ var columns = []string{
 }
 
 type Container struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	metrics *observability.OperationMetrics
 }
 
 var sq = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
 
-func NewContainer(pool *pgxpool.Pool) *Container {
-	return &Container{pool: pool}
+func NewContainer(pool *pgxpool.Pool, metrics ...*observability.OperationMetrics) *Container {
+	var opMetrics *observability.OperationMetrics
+	if len(metrics) > 0 {
+		opMetrics = metrics[0]
+	}
+
+	return &Container{pool: pool, metrics: opMetrics}
 }
 
-func (c *Container) Create(ctx context.Context, cl entities.Container) error {
+func (c *Container) Create(ctx context.Context, cl entities.Container) (err error) {
 	const op = "storage.Container.Create"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), c.metrics, "storage.containers", "storage.container.create", "claw_lifecycle")
+	defer func() { finish(err) }()
 
 	query, values, err := sq.Insert(table).
 		Columns(columns[id], columns[containerID], columns[port], columns[userID], columns[clawID]).
@@ -68,8 +78,10 @@ func (c *Container) Create(ctx context.Context, cl entities.Container) error {
 	return nil
 }
 
-func (c *Container) Update(ctx context.Context, cl entities.Container) error {
+func (c *Container) Update(ctx context.Context, cl entities.Container) (err error) {
 	const op = "storage.Container.Update"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), c.metrics, "storage.containers", "storage.container.update", "claw_lifecycle")
+	defer func() { finish(err) }()
 
 	cDb, err := c.GetByID(ctx, cl.ID.String())
 	if err != nil {
@@ -101,8 +113,10 @@ func (c *Container) Update(ctx context.Context, cl entities.Container) error {
 	return nil
 }
 
-func (c *Container) Remove(ctx context.Context, cl entities.Container) error {
+func (c *Container) Remove(ctx context.Context, cl entities.Container) (err error) {
 	const op = "storage.Container.Remove"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), c.metrics, "storage.containers", "storage.container.remove", "claw_lifecycle")
+	defer func() { finish(err) }()
 
 	query, values, err := sq.Delete(table).Where(squirrel.Eq{columns[id]: cl.ID}).ToSql()
 	if err != nil {
@@ -119,6 +133,9 @@ func (c *Container) Remove(ctx context.Context, cl entities.Container) error {
 
 func (c *Container) GetByUserClawID(ctx context.Context, uID, cID string) (entities.Container, error) {
 	const op = "storage.Container.GetByUserClawID"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), c.metrics, "storage.containers", "storage.container.get_by_user_claw_id", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
 
 	query, values, err := sq.Select(columns...).
 		From(table).
@@ -158,6 +175,9 @@ func (c *Container) GetByUserClawID(ctx context.Context, uID, cID string) (entit
 
 func (c *Container) GetByID(ctx context.Context, containerID string) (entities.Container, error) {
 	const op = "storage.Container.GetByID"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), c.metrics, "storage.containers", "storage.container.get_by_id", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
 
 	query, values, err := sq.Select(columns...).
 		From(table).
@@ -194,6 +214,9 @@ func (c *Container) GetByID(ctx context.Context, containerID string) (entities.C
 
 func (c *Container) GetAll(ctx context.Context) ([]entities.Container, error) {
 	const op = "storage.Container.GetAll"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), c.metrics, "storage.containers", "storage.container.list", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
 
 	query, values, err := sq.Select(columns...).From(table).ToSql()
 	if err != nil {

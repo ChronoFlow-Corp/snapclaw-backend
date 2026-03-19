@@ -57,7 +57,21 @@ func main() {
 		panic(err)
 	}
 
-	st := storage.NewContainer(pool)
+	metricsRegistry := observability.NewPrometheusRegistry()
+	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
+	if err != nil {
+		panic(err)
+	}
+	operationMetrics, err := observability.NewOperationMetrics(metricsRegistry, "containermanager")
+	if err != nil {
+		panic(err)
+	}
+	pubSubMetrics, err := observability.NewPubSubFanoutMetrics(metricsRegistry, "containermanager")
+	if err != nil {
+		panic(err)
+	}
+
+	st := storage.NewContainer(pool, operationMetrics)
 
 	c := configurer.NewClawConfigurer(cfg.Image.BasePath, cfg.Image.CredentialsPath)
 
@@ -66,7 +80,7 @@ func main() {
 		panic(err)
 	}
 
-	m, err := docker.NewManager(ctx, cli)
+	m, err := docker.NewManager(ctx, cli, operationMetrics)
 	if err != nil {
 		panic(err)
 	}
@@ -79,17 +93,7 @@ func main() {
 	s, err := service.NewContainer(c, st, m, service.GogConfig{
 		KeyringBackend:  cfg.Gog.KeyringBackend,
 		KeyringPassword: cfg.Gog.KeyringPassword,
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	metricsRegistry := observability.NewPrometheusRegistry()
-	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
-	if err != nil {
-		panic(err)
-	}
-	pubSubMetrics, err := observability.NewPubSubFanoutMetrics(metricsRegistry, "containermanager")
+	}, operationMetrics)
 	if err != nil {
 		panic(err)
 	}
