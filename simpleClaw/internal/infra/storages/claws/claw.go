@@ -21,6 +21,11 @@ type Storage struct {
 	metrics *observability.OperationMetrics
 }
 
+type occupiedServerRow struct {
+	ServerID uuid.UUID
+	Count    int
+}
+
 func NewStorage(db *gorm.DB, metrics ...*observability.OperationMetrics) *Storage {
 	var opMetrics *observability.OperationMetrics
 	if len(metrics) > 0 {
@@ -193,6 +198,36 @@ func (s *Storage) GetByUserID(
 	}
 
 	return cls, nil
+}
+
+func (s *Storage) CountOccupiedByServer(ctx context.Context) (map[uuid.UUID]int, error) {
+	const op = "storages.Claws.CountOccupiedByServer"
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.claws", "storage.claw.count_occupied_by_server", "claw_lifecycle")
+	var err error
+	defer func() { finish(err) }()
+
+	rows := make([]occupiedServerRow, 0)
+	err = s.db.WithContext(ctx).
+		Model(&models.Claw{}).
+		Select("server_id, COUNT(*) AS count").
+		Where("server_id <> ?", uuid.Nil).
+		Where("container_id <> ''").
+		Group("server_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
+	}
+
+	result := make(map[uuid.UUID]int, len(rows))
+	for _, row := range rows {
+		if row.ServerID == uuid.Nil {
+			continue
+		}
+
+		result[row.ServerID] = row.Count
+	}
+
+	return result, nil
 }
 
 func (s *Storage) Update(

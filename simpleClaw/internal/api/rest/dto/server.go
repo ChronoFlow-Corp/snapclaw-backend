@@ -28,5 +28,6 @@ type ServerResponse struct {
 	ProxyURL  string    `json:"proxyUrl"`
 	Status    string    `json:"status"`
 	SecretKey string    `json:"secretKey"`
+	MaxClaws  int       `json:"maxClaws"`
 	CreatedAt time.Time `json:"createdAt"`
 }

@@ -26,19 +26,21 @@ const (
 	containerID
 	status
 	port
+	hasStartedOnce
 	createdAt
 	updatedAt
 )
 
 var columns = []string{
-	id:          "id",
-	userID:      "user_id",
-	clawID:      "claw_id",
-	containerID: "container_id",
-	status:      "status",
-	port:        "port",
-	createdAt:   "created_at",
-	updatedAt:   "updated_at",
+	id:             "id",
+	userID:         "user_id",
+	clawID:         "claw_id",
+	containerID:    "container_id",
+	status:         "status",
+	port:           "port",
+	hasStartedOnce: "has_started_once",
+	createdAt:      "created_at",
+	updatedAt:      "updated_at",
 }
 
 type Container struct {
@@ -63,8 +65,8 @@ func (c *Container) Create(ctx context.Context, cl entities.Container) (err erro
 	defer func() { finish(err) }()
 
 	query, values, err := sq.Insert(table).
-		Columns(columns[id], columns[containerID], columns[port], columns[userID], columns[clawID]).
-		Values(cl.ID, cl.ContainerID, cl.Port, cl.UserID, cl.ClawID).
+		Columns(columns[id], columns[containerID], columns[port], columns[userID], columns[clawID], columns[hasStartedOnce]).
+		Values(cl.ID, cl.ContainerID, cl.Port, cl.UserID, cl.ClawID, cl.HasStartedOnce).
 		ToSql()
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
@@ -96,6 +98,10 @@ func (c *Container) Update(ctx context.Context, cl entities.Container) (err erro
 
 	if cDb.Port != cl.Port {
 		b = b.Set(columns[port], cl.Port)
+	}
+
+	if cDb.HasStartedOnce != cl.HasStartedOnce {
+		b = b.Set(columns[hasStartedOnce], cl.HasStartedOnce)
 	}
 
 	b = b.Set(columns[updatedAt], time.Now())
@@ -159,6 +165,7 @@ func (c *Container) GetByUserClawID(ctx context.Context, uID, cID string) (entit
 		&res.ContainerID,
 		&res.Status,
 		&res.Port,
+		&res.HasStartedOnce,
 		&res.CreatedAt,
 		&res.UpdatedAt,
 	)
@@ -198,6 +205,7 @@ func (c *Container) GetByID(ctx context.Context, containerID string) (entities.C
 		&res.ContainerID,
 		&res.Status,
 		&res.Port,
+		&res.HasStartedOnce,
 		&res.CreatedAt,
 		&res.UpdatedAt,
 	)
@@ -241,6 +249,7 @@ func (c *Container) GetAll(ctx context.Context) ([]entities.Container, error) {
 			&row.ContainerID,
 			&row.Status,
 			&row.Port,
+			&row.HasStartedOnce,
 			&row.CreatedAt,
 			&row.UpdatedAt,
 		)

@@ -8,4 +8,5 @@ var (
 	ErrURLRequired       = errors.New("url is required")
 	ErrProxyURLInvalid   = errors.New("proxy url is invalid")
 	ErrSecretKeyRequired = errors.New("secret key is required")
+	ErrCapacitySync      = errors.New("server capacity sync failed")
 )

@@ -92,6 +92,57 @@ func (c *client) createClaw(
 	return out, nil
 }
 
+func (c *client) capacity(
+	ctx context.Context,
+	baseURL string,
+	headers map[string]string,
+) (hostingapi.CapacityResponse, error) {
+	const op = "infra.hosting.client.capacity"
+
+	if c == nil || c.http == nil {
+		return hostingapi.CapacityResponse{}, fmt.Errorf("%s: http client is not initialized", op)
+	}
+
+	url := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if url == "" {
+		return hostingapi.CapacityResponse{}, fmt.Errorf("%s: base url is required", op)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url+hostingapi.CapacityEndpoint, nil)
+	if err != nil {
+		return hostingapi.CapacityResponse{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return hostingapi.CapacityResponse{}, fmt.Errorf("%s: %w", op, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return hostingapi.CapacityResponse{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return hostingapi.CapacityResponse{}, unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
+	}
+
+	var out hostingapi.CapacityResponse
+	if len(respBody) > 0 {
+		if err := json.Unmarshal(respBody, &out); err != nil {
+			return hostingapi.CapacityResponse{}, fmt.Errorf("%s: %w", op, err)
+		}
+	}
+
+	return out, nil
+}
+
 func (c *client) updateClaw(
 	ctx context.Context,
 	baseURL string,
@@ -600,6 +651,12 @@ func unexpectedStatusError(op string, statusCode int, status string, body []byte
 	if payload, ok := hostingapi.ParseErrorResponse(body); ok {
 		if statusCode == http.StatusBadRequest && payload.Code == hostingapi.ErrCodeInvalidCode {
 			return fmt.Errorf("%s: %w", op, ErrInvalidCode)
+		}
+		if statusCode == http.StatusConflict && payload.Code == hostingapi.ErrCodeServerCapacityExceeded {
+			return fmt.Errorf("%s: %w", op, ErrServerCapacityExceeded)
+		}
+		if statusCode == http.StatusConflict && payload.Code == hostingapi.ErrCodeServerMemoryUnavailable {
+			return fmt.Errorf("%s: %w", op, ErrServerMemoryUnavailable)
 		}
 
 		return fmt.Errorf("%s: unexpected status %d: %s", op, statusCode, payload.Message)

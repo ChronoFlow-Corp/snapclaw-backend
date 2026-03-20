@@ -27,6 +27,10 @@ import (
 func main() {
 	cfg := config.MustLoadConfig()
 	logger := setupLogger()
+	maxClaws, err := cfg.MaxClaws.ResolveLinux()
+	if err != nil {
+		panic(err)
+	}
 	shutdownTracing, err := observability.SetupTracing(context.Background(), observability.TracingConfig{
 		ServiceName: "containermanager",
 		Environment: cfg.Environment,
@@ -90,7 +94,7 @@ func main() {
 		panic(err)
 	}
 
-	s, err := service.NewContainer(c, st, m, service.GogConfig{
+	s, err := service.NewContainer(c, st, m, maxClaws, service.GogConfig{
 		KeyringBackend:  cfg.Gog.KeyringBackend,
 		KeyringPassword: cfg.Gog.KeyringPassword,
 	}, operationMetrics)
@@ -102,6 +106,7 @@ func main() {
 		PubSubForwardTimeout: cfg.PubSub.ForwardTimeout,
 		PubSubWorkers:        cfg.PubSub.Workers,
 		PubSubDedupTTL:       cfg.PubSub.DedupTTL,
+		MaxClaws:             maxClaws,
 		Metrics:              pubSubMetrics,
 	})
 

@@ -24,14 +24,15 @@ type ContainerOptions struct {
 }
 
 type Container struct {
-	ID          uuid.UUID
-	UserID      string
-	ClawID      string
-	ContainerID string
-	Status      string
-	Port        string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID             uuid.UUID
+	UserID         string
+	ClawID         string
+	ContainerID    string
+	Status         string
+	Port           string
+	HasStartedOnce bool
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type ClawConfig struct {

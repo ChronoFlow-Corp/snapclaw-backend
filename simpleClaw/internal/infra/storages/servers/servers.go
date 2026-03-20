@@ -103,6 +103,7 @@ func (s *Storage) Update(ctx context.Context, srv entities.Server) (err error) {
 			"proxy_url":  srv.ProxyURL,
 			"status":     srv.Status,
 			"secret_key": srv.SecretKey,
+			"max_claws":  srv.MaxClaws,
 		})
 	if err := tx.Error; err != nil {
 		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
@@ -141,6 +142,7 @@ func toEntity(srv models.Server) entities.Server {
 		ProxyURL:  srv.ProxyUrl,
 		Status:    srv.Status,
 		SecretKey: srv.SecretKey,
+		MaxClaws:  srv.MaxClaws,
 		CreatedAt: srv.CreatedAt,
 	}
 }
@@ -154,6 +156,7 @@ func toModel(srv entities.Server) *models.Server {
 		ProxyUrl:  srv.ProxyURL,
 		Status:    srv.Status,
 		SecretKey: srv.SecretKey,
+		MaxClaws:  srv.MaxClaws,
 		CreatedAt: srv.CreatedAt,
 	}
 }

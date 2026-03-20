@@ -26,3 +26,7 @@ type CreateClawResponse struct {
 	ServerID    string `json:"serverId,omitempty"`
 	Status      string `json:"status,omitempty"`
 }
+
+type CapacityResponse struct {
+	MaxClaws int `json:"maxClaws"`
+}

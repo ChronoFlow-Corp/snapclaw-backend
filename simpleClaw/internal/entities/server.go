@@ -14,6 +14,7 @@ type Server struct {
 	ProxyURL  string
 	Status    string
 	SecretKey string
+	MaxClaws  int
 	CreatedAt time.Time
 }
 

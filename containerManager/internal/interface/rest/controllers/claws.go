@@ -32,6 +32,7 @@ import (
 type Claw struct {
 	s                    *service.Container
 	key                  string
+	capacity             hostingapi.CapacityResponse
 	pubSubClient         *http.Client
 	pubSubForwardTimeout time.Duration
 	pubSubWorkers        int
@@ -43,6 +44,7 @@ type ClawOptions struct {
 	PubSubForwardTimeout time.Duration
 	PubSubWorkers        int
 	PubSubDedupTTL       time.Duration
+	MaxClaws             int
 	Metrics              *observability.PubSubFanoutMetrics
 }
 
@@ -65,6 +67,7 @@ func NewClaw(s *service.Container, key string, opts ClawOptions) *Claw {
 	return &Claw{
 		s:                    s,
 		key:                  key,
+		capacity:             hostingapi.CapacityResponse{MaxClaws: opts.MaxClaws},
 		pubSubClient:         observability.NewHTTPClient(forwardTimeout),
 		pubSubForwardTimeout: forwardTimeout,
 		pubSubWorkers:        workers,
@@ -80,6 +83,7 @@ func (c *Claw) Register(mux chi.Router) {
 		r.Put("/claws", c.Update)
 		r.Get("/claws/start", c.Start)
 		r.Get("/claws/stop", c.Stop)
+		r.Get(hostingapi.CapacityEndpoint, c.Capacity)
 		r.Get("/claws/config", c.ConfigArchive)
 		r.Post("/claws/config", c.RestoreConfig)
 		r.Delete("/claws", c.Delete)
@@ -87,6 +91,12 @@ func (c *Claw) Register(mux chi.Router) {
 		r.Post("/connect", c.Connect)
 		r.Post("/gmail-pubsub", c.GmailPubSub)
 	})
+}
+
+func (c *Claw) Capacity(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(c.capacity)
 }
 
 func (c *Claw) CreateClaw(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +129,7 @@ func (c *Claw) CreateClaw(w http.ResponseWriter, r *http.Request) {
 	containerRecordID, err := c.s.Create(r.Context(), cm)
 	if err != nil {
 		log.Error("create claw failed", slog.Any("err", err))
-		writeInternalError(w, err)
+		writeServiceError(w, err)
 
 		return
 	}
@@ -159,7 +169,7 @@ func (c *Claw) Start(w http.ResponseWriter, r *http.Request) {
 	err := c.s.Start(r.Context(), commands.StartClaw{ClawID: clawID, UserID: q})
 	if err != nil {
 		log.Error("start claw failed", slog.Any("err", err))
-		writeInternalError(w, err)
+		writeServiceError(w, err)
 
 		return
 	}
@@ -859,4 +869,30 @@ func writeValidationError(w http.ResponseWriter, message string) {
 
 func writeInternalError(w http.ResponseWriter, err error) {
 	hostingapi.WriteError(w, http.StatusInternalServerError, hostingapi.ErrCodeInternal, err.Error())
+}
+
+func writeServiceError(w http.ResponseWriter, err error) {
+	statusCode, payload := mapServiceError(err)
+	hostingapi.WriteError(w, statusCode, payload.Code, payload.Message)
+}
+
+func mapServiceError(err error) (int, hostingapi.ErrorResponse) {
+	if errors.Is(err, service.ErrServerCapacityExceeded) {
+		return http.StatusConflict, hostingapi.ErrorResponse{
+			Code:    hostingapi.ErrCodeServerCapacityExceeded,
+			Message: service.ErrServerCapacityExceeded.Error(),
+		}
+	}
+
+	if errors.Is(err, service.ErrServerMemoryUnavailable) {
+		return http.StatusConflict, hostingapi.ErrorResponse{
+			Code:    hostingapi.ErrCodeServerMemoryUnavailable,
+			Message: service.ErrServerMemoryUnavailable.Error(),
+		}
+	}
+
+	return http.StatusInternalServerError, hostingapi.ErrorResponse{
+		Code:    hostingapi.ErrCodeInternal,
+		Message: err.Error(),
+	}
 }

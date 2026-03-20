@@ -14,6 +14,7 @@ type Server struct {
 	ProxyUrl  string    `gorm:"type:varchar(255)"`
 	Status    string    `gorm:"type:varchar(255)"`
 	SecretKey string    `gorm:"type:varchar(255)"`
+	MaxClaws  int       `gorm:"type:int;default:0"`
 	Claws     []Claw
 	CreatedAt time.Time `gorm:"autoCreateTime"`
 }

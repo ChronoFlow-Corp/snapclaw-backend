@@ -44,6 +44,10 @@ func (s *updateTestClawStorage) GetByUserID(context.Context, uuid.UUID) ([]entit
 	return nil, nil
 }
 
+func (s *updateTestClawStorage) CountOccupiedByServer(context.Context) (map[uuid.UUID]int, error) {
+	return map[uuid.UUID]int{}, nil
+}
+
 func (s *updateTestClawStorage) Update(
 	_ context.Context,
 	cl entities.Claw,
@@ -89,6 +93,10 @@ type updateTestServerStorage struct{}
 
 func (s *updateTestServerStorage) GetAvailable(context.Context) (entities.Server, error) {
 	return entities.Server{}, nil
+}
+
+func (s *updateTestServerStorage) GetAll(context.Context) ([]entities.Server, error) {
+	return nil, nil
 }
 
 func (s *updateTestServerStorage) GetByID(context.Context, uuid.UUID) (entities.Server, error) {

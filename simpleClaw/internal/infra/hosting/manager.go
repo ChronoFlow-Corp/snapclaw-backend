@@ -111,6 +111,32 @@ func (m *Manager) Create(
 	return container, nil
 }
 
+func (m *Manager) Capacity(ctx context.Context, server entities.Server) (int, error) {
+	const op = "infra.hosting.Manager.Capacity"
+
+	if m == nil || m.client == nil {
+		return 0, fmt.Errorf("%s: http client is not configured", op)
+	}
+
+	if server.URL == "" {
+		return 0, fmt.Errorf("%s: server url is required", op)
+	}
+
+	resp, err := m.client.capacity(
+		ctx,
+		server.URL,
+		map[string]string{"Authorization": server.SecretKey},
+	)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", op, err)
+	}
+	if resp.MaxClaws <= 0 {
+		return 0, fmt.Errorf("%s: invalid max claws %d", op, resp.MaxClaws)
+	}
+
+	return resp.MaxClaws, nil
+}
+
 func (m *Manager) Delete(
 	ctx context.Context,
 	cl entities.Claw,

@@ -15,3 +15,7 @@ type storage interface {
 	Update(ctx context.Context, srv entities.Server) error
 	Delete(ctx context.Context, id uuid.UUID) error
 }
+
+type capacityResolver interface {
+	Capacity(ctx context.Context, srv entities.Server) (int, error)
+}

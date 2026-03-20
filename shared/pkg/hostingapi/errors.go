@@ -7,10 +7,12 @@ import (
 )
 
 const (
-	ErrCodeValidation  = "validation"
-	ErrCodeInvalidCode = "invalid_code"
-	ErrCodeNotFound    = "not_found"
-	ErrCodeInternal    = "internal"
+	ErrCodeValidation              = "validation"
+	ErrCodeInvalidCode             = "invalid_code"
+	ErrCodeNotFound                = "not_found"
+	ErrCodeInternal                = "internal"
+	ErrCodeServerCapacityExceeded  = "server_capacity_exceeded"
+	ErrCodeServerMemoryUnavailable = "server_memory_unavailable"
 )
 
 type ErrorResponse struct {

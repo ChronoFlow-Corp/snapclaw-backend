@@ -14,6 +14,7 @@ type clawStorage interface {
 	Create(ctx context.Context, cl entities.Claw, channelIDs []uuid.UUID) error
 	GetByID(ctx context.Context, id, userID uuid.UUID) (entities.Claw, error)
 	GetByUserID(ctx context.Context, userID uuid.UUID) ([]entities.Claw, error)
+	CountOccupiedByServer(ctx context.Context) (map[uuid.UUID]int, error)
 	Update(
 		ctx context.Context,
 		cl entities.Claw,
@@ -41,6 +42,7 @@ type userStorage interface {
 }
 
 type serverStorage interface {
+	GetAll(ctx context.Context) ([]entities.Server, error)
 	GetAvailable(ctx context.Context) (entities.Server, error)
 	GetByID(ctx context.Context, id uuid.UUID) (entities.Server, error)
 }
