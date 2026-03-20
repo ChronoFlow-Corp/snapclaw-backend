@@ -47,6 +47,7 @@ var (
 	ErrOpenRouterClient          = errors.New("openrouter manager is not configured")
 	ErrServerIDRequired          = errors.New("server id is required")
 	ErrContainerIDRequired       = errors.New("claw container id is required")
+	ErrNoServerCapacity          = errors.New("no server capacity available")
 	ErrConfigArchivePathRequired = errors.New("config archive path is required")
 	ErrPairingCodeRequired       = errors.New("pairing code is required")
 	ErrPairingCodeInvalid        = errors.New("invalid code")
@@ -63,6 +64,7 @@ var (
 	errOpenRouterClient          = ErrOpenRouterClient
 	errServerIDRequired          = ErrServerIDRequired
 	errContainerIDRequired       = ErrContainerIDRequired
+	errNoServerCapacity          = ErrNoServerCapacity
 	errConfigArchivePathRequired = ErrConfigArchivePathRequired
 	errPairingCodeRequired       = ErrPairingCodeRequired
 	errPairingCodeInvalid        = ErrPairingCodeInvalid
@@ -178,7 +180,7 @@ func (s *Service) Create(
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	server, err := s.servers.GetAvailable(ctx)
+	server, err := s.selectAvailableServer(ctx)
 	if err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
@@ -552,7 +554,7 @@ func (s *Service) Start(
 		}
 	}
 
-	srv, err := s.servers.GetAvailable(ctx)
+	srv, err := s.selectAvailableServer(ctx)
 	if err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
@@ -1064,6 +1066,43 @@ func (s *Service) archiveFilePath(cl entities.Claw) (string, error) {
 	}
 
 	return filepath.Join(s.archivePath, cl.UserID.String(), cl.ID.String()+".tar"), nil
+}
+
+func (s *Service) selectAvailableServer(ctx context.Context) (entities.Server, error) {
+	servers, err := s.servers.GetAll(ctx)
+	if err != nil {
+		return entities.Server{}, err
+	}
+
+	occupiedByServer, err := s.claws.CountOccupiedByServer(ctx)
+	if err != nil {
+		return entities.Server{}, err
+	}
+
+	var (
+		selected     entities.Server
+		selectedSet  bool
+		selectedFree int
+	)
+
+	for _, srv := range servers {
+		free := srv.MaxClaws - occupiedByServer[srv.ID]
+		if free <= 0 {
+			continue
+		}
+
+		if !selectedSet || free > selectedFree || (free == selectedFree && srv.CreatedAt.Before(selected.CreatedAt)) {
+			selected = srv
+			selectedSet = true
+			selectedFree = free
+		}
+	}
+
+	if !selectedSet {
+		return entities.Server{}, errNoServerCapacity
+	}
+
+	return selected, nil
 }
 
 func applyBaseUpdates(

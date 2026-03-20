@@ -183,6 +183,7 @@ func serverToResponse(srv entities.Server) dto.ServerResponse {
 		ProxyURL:  srv.ProxyURL,
 		Status:    srv.Status,
 		SecretKey: srv.SecretKey,
+		MaxClaws:  srv.MaxClaws,
 		CreatedAt: srv.CreatedAt,
 	}
 }

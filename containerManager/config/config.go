@@ -14,6 +14,7 @@ type Config struct {
 	Postgres      Postgres      `yaml:"postgres"`
 	Http          Http          `yaml:"http"`
 	Image         Image         `yaml:"image"`
+	MaxClaws      MaxClaws      `yaml:"max_claws" env:"MAX_CLAWS" env-default:"auto"`
 	Gog           gog           `yaml:"gog"`
 	PubSub        pubSub        `yaml:"pubsub"`
 	Migrations    Migrations    `yaml:"migrations"`

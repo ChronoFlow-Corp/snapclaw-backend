@@ -2,6 +2,7 @@ package claw
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -15,9 +16,10 @@ import (
 )
 
 type createTestClawStorage struct {
-	created         entities.Claw
-	createdChannels []uuid.UUID
-	runtimeUpdated  entities.Claw
+	created          entities.Claw
+	createdChannels  []uuid.UUID
+	runtimeUpdated   entities.Claw
+	occupiedByServer map[uuid.UUID]int
 }
 
 func (s *createTestClawStorage) Create(_ context.Context, cl entities.Claw, channelIDs []uuid.UUID) error {
@@ -32,6 +34,19 @@ func (s *createTestClawStorage) GetByID(context.Context, uuid.UUID, uuid.UUID) (
 
 func (s *createTestClawStorage) GetByUserID(context.Context, uuid.UUID) ([]entities.Claw, error) {
 	return nil, nil
+}
+
+func (s *createTestClawStorage) CountOccupiedByServer(context.Context) (map[uuid.UUID]int, error) {
+	if s.occupiedByServer == nil {
+		return map[uuid.UUID]int{}, nil
+	}
+
+	res := make(map[uuid.UUID]int, len(s.occupiedByServer))
+	for serverID, count := range s.occupiedByServer {
+		res[serverID] = count
+	}
+
+	return res, nil
 }
 
 func (s *createTestClawStorage) Update(context.Context, entities.Claw, []uuid.UUID, bool) error {
@@ -81,11 +96,36 @@ func (s *createTestUserStorage) GetGmailToken(context.Context, uuid.UUID) (entit
 }
 
 type createTestServerStorage struct {
-	server entities.Server
+	server  entities.Server
+	servers []entities.Server
 }
 
 func (s *createTestServerStorage) GetAvailable(context.Context) (entities.Server, error) {
 	return s.server, nil
+}
+
+func (s *createTestServerStorage) GetAll(context.Context) ([]entities.Server, error) {
+	if len(s.servers) == 0 {
+		if s.server.ID == uuid.Nil {
+			return nil, nil
+		}
+
+		server := s.server
+		if server.MaxClaws == 0 {
+			server.MaxClaws = 1
+		}
+
+		return []entities.Server{server}, nil
+	}
+
+	servers := append([]entities.Server(nil), s.servers...)
+	for i := range servers {
+		if servers[i].MaxClaws == 0 {
+			servers[i].MaxClaws = 1
+		}
+	}
+
+	return servers, nil
 }
 
 func (s *createTestServerStorage) GetByID(context.Context, uuid.UUID) (entities.Server, error) {
@@ -275,5 +315,100 @@ func TestServiceCreate_AddsNormalizedTelegramChannel(t *testing.T) {
 
 	if tg.BotToken != "telegram-secret" {
 		t.Fatalf("expected telegram bot token to be preserved, got %q", tg.BotToken)
+	}
+}
+
+func TestServiceCreate_SelectsServerWithMostFreeSlots(t *testing.T) {
+	userID := uuid.New()
+	serverAID := uuid.New()
+	serverBID := uuid.New()
+
+	storage := &createTestClawStorage{
+		occupiedByServer: map[uuid.UUID]int{
+			serverAID: 1,
+			serverBID: 1,
+		},
+	}
+	keys := &createTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"}
+	svc := NewClaw(
+		storage,
+		&createTestChannelStorage{},
+		&createTestUserStorage{user: entities.User{
+			ID:               userID,
+			OpenRouterApiKey: "secret",
+			OpenRouterKeyID:  "key-id",
+			CreatedAt:        time.Now(),
+		}},
+		&createTestServerStorage{
+			server: entities.Server{ID: serverAID, MaxClaws: 2},
+			servers: []entities.Server{
+				{ID: serverAID, Name: "alpha", MaxClaws: 2},
+				{ID: serverBID, Name: "beta", MaxClaws: 4},
+			},
+		},
+		&createTestHosting{container: hosting.Container{ID: "container-1"}},
+		keys,
+		"",
+		GmailWatchConfig{},
+	)
+
+	cl, err := svc.Create(context.Background(), commands.CreateClaw{
+		UserID: userID,
+		Name:   "demo",
+		Model:  "openai/gpt-4.1-mini",
+	})
+	if err != nil {
+		t.Fatalf("create claw: %v", err)
+	}
+
+	if cl.ServerID != serverBID {
+		t.Fatalf("server id = %s, want %s", cl.ServerID, serverBID)
+	}
+}
+
+func TestServiceCreate_ReturnsErrorWhenNoServerHasFreeSlots(t *testing.T) {
+	userID := uuid.New()
+	serverAID := uuid.New()
+	serverBID := uuid.New()
+
+	keys := &createTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"}
+	svc := NewClaw(
+		&createTestClawStorage{
+			occupiedByServer: map[uuid.UUID]int{
+				serverAID: 1,
+				serverBID: 2,
+			},
+		},
+		&createTestChannelStorage{},
+		&createTestUserStorage{user: entities.User{
+			ID:               userID,
+			OpenRouterApiKey: "secret",
+			OpenRouterKeyID:  "key-id",
+			CreatedAt:        time.Now(),
+		}},
+		&createTestServerStorage{
+			server: entities.Server{ID: serverAID, MaxClaws: 1},
+			servers: []entities.Server{
+				{ID: serverAID, Name: "alpha", MaxClaws: 1},
+				{ID: serverBID, Name: "beta", MaxClaws: 2},
+			},
+		},
+		&createTestHosting{container: hosting.Container{ID: "container-1"}},
+		keys,
+		"",
+		GmailWatchConfig{},
+	)
+
+	_, err := svc.Create(context.Background(), commands.CreateClaw{
+		UserID: userID,
+		Name:   "demo",
+		Model:  "openai/gpt-4.1-mini",
+	})
+	if err == nil {
+		t.Fatal("expected no capacity error")
+	}
+
+	if !errors.Is(err, ErrNoServerCapacity) {
+		t.Fatalf("expected ErrNoServerCapacity, got %v", err)
 	}
 }

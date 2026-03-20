@@ -146,7 +146,10 @@ func main() {
 		cfg.Auth.Admins,
 		operationMetrics,
 	)
-	serverService := serverservice.New(serversStorage, operationMetrics)
+	serverService := serverservice.New(serversStorage, hostingManager, operationMetrics)
+	if err := serverService.SyncCapacities(context.Background()); err != nil {
+		logger.Error("failed to sync server capacities", slog.Any("err", err))
+	}
 	clawService := claw.NewClaw(
 		clawStorage,
 		channelsStorage,

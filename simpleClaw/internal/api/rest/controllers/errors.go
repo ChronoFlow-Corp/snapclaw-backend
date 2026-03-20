@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"shared/pkg/response"
 
+	"simpleClaw/internal/infra/hosting"
 	"simpleClaw/internal/infra/openrouter"
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/service/claw"
@@ -56,6 +57,8 @@ var serviceErrorMappings = []serviceErrorMapping{
 	{err: openrouter.ErrBadRequest, code: http.StatusBadRequest, message: "openrouter request is invalid"},
 
 	{err: openrouter.ErrRateLimited, code: http.StatusTooManyRequests, message: "openrouter rate limit exceeded"},
+	{err: hosting.ErrServerCapacityExceeded, code: http.StatusConflict, message: "server capacity exceeded"},
+	{err: hosting.ErrServerMemoryUnavailable, code: http.StatusConflict, message: "server memory unavailable"},
 
 	{err: sql.ErrUnavailable, code: http.StatusServiceUnavailable, message: "storage unavailable"},
 	{err: claw.ErrHostingMissing, code: http.StatusServiceUnavailable, message: "hosting is not configured"},

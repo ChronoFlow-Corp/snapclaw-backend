@@ -15,17 +15,18 @@ import (
 )
 
 type Service struct {
-	storage storage
-	metrics *observability.OperationMetrics
+	storage  storage
+	capacity capacityResolver
+	metrics  *observability.OperationMetrics
 }
 
-func New(storage storage, metrics ...*observability.OperationMetrics) *Service {
+func New(storage storage, capacity capacityResolver, metrics ...*observability.OperationMetrics) *Service {
 	var opMetrics *observability.OperationMetrics
 	if len(metrics) > 0 {
 		opMetrics = metrics[0]
 	}
 
-	return &Service{storage: storage, metrics: opMetrics}
+	return &Service{storage: storage, capacity: capacity, metrics: opMetrics}
 }
 
 func (s *Service) Create(ctx context.Context, cm commands.CreateServer) (entities.Server, error) {
@@ -43,6 +44,10 @@ func (s *Service) Create(ctx context.Context, cm commands.CreateServer) (entitie
 
 	srv, err := newServer(cm)
 	if err != nil {
+		return entities.Server{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := s.syncCapacity(ctx, &srv); err != nil {
 		return entities.Server{}, fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -140,6 +145,10 @@ func (s *Service) Update(ctx context.Context, cm commands.UpdateServer) (entitie
 	existing.Status = status
 	existing.SecretKey = secretKey
 
+	if err := s.syncCapacity(ctx, &existing); err != nil {
+		return entities.Server{}, fmt.Errorf("%s: %w", op, err)
+	}
+
 	if err := s.storage.Update(ctx, existing); err != nil {
 		return entities.Server{}, fmt.Errorf("%s: %w", op, err)
 	}
@@ -165,6 +174,32 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) (err error) {
 
 	if err := s.storage.Delete(ctx, id); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Service) SyncCapacities(ctx context.Context) error {
+	const op = "service.server.SyncCapacities"
+
+	servers, err := s.storage.GetAll(ctx)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	for _, srv := range servers {
+		tmp := srv
+		if err := s.syncCapacity(ctx, &tmp); err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+
+		if tmp.MaxClaws == srv.MaxClaws {
+			continue
+		}
+
+		if err := s.storage.Update(ctx, tmp); err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
 	}
 
 	return nil
@@ -226,4 +261,26 @@ func isHTTPURL(raw string) bool {
 	default:
 		return false
 	}
+}
+
+func (s *Service) syncCapacity(ctx context.Context, srv *entities.Server) error {
+	if srv == nil {
+		return fmt.Errorf("%w: server is nil", ErrCapacitySync)
+	}
+
+	if s.capacity == nil {
+		return fmt.Errorf("%w: resolver is not configured", ErrCapacitySync)
+	}
+
+	maxClaws, err := s.capacity.Capacity(ctx, *srv)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrCapacitySync, err)
+	}
+	if maxClaws <= 0 {
+		return fmt.Errorf("%w: invalid max claws %d", ErrCapacitySync, maxClaws)
+	}
+
+	srv.MaxClaws = maxClaws
+
+	return nil
 }

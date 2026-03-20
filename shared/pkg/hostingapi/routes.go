@@ -5,6 +5,7 @@ const (
 	ClawsStartEndpoint  = "/claws/start"
 	ClawsStopEndpoint   = "/claws/stop"
 	ClawsConfigEndpoint = "/claws/config"
+	CapacityEndpoint    = "/capacity"
 	ApproveEndpoint     = "/approve"
 	ConnectEndpoint     = "/connect"
 	GmailPubSubEndpoint = "/gmail-pubsub"

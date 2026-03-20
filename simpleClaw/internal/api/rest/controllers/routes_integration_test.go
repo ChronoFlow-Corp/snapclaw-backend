@@ -436,6 +436,7 @@ func TestRoutesIntegration(t *testing.T) {
 			ProxyURL  string `json:"proxyUrl"`
 			Status    string `json:"status"`
 			SecretKey string `json:"secretKey"`
+			MaxClaws  int    `json:"maxClaws"`
 		}
 		decodeJSON(t, rr, &payload)
 
@@ -447,6 +448,9 @@ func TestRoutesIntegration(t *testing.T) {
 		}
 		if payload.ProxyURL != "http://alpha.internal/gmail-pubsub" {
 			t.Fatalf("unexpected payload: %+v", payload)
+		}
+		if payload.MaxClaws != 7 {
+			t.Fatalf("unexpected maxClaws: %+v", payload)
 		}
 	})
 
@@ -462,13 +466,17 @@ func TestRoutesIntegration(t *testing.T) {
 		}
 
 		var payload []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			MaxClaws int    `json:"maxClaws"`
 		}
 		decodeJSON(t, rr, &payload)
 
 		if len(payload) != 2 {
 			t.Fatalf("expected 2 servers, got %d", len(payload))
+		}
+		if payload[0].MaxClaws != 7 || payload[1].MaxClaws != 7 {
+			t.Fatalf("unexpected payload: %+v", payload)
 		}
 	})
 
@@ -489,12 +497,16 @@ func TestRoutesIntegration(t *testing.T) {
 		}
 
 		var payload struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			MaxClaws int    `json:"maxClaws"`
 		}
 		decodeJSON(t, rr, &payload)
 
 		if payload.ID != srv.ID.String() || payload.Name != "single" {
+			t.Fatalf("unexpected payload: %+v", payload)
+		}
+		if payload.MaxClaws != 7 {
 			t.Fatalf("unexpected payload: %+v", payload)
 		}
 	})
@@ -530,6 +542,7 @@ func TestRoutesIntegration(t *testing.T) {
 			URL       string `json:"url"`
 			ProxyURL  string `json:"proxyUrl"`
 			SecretKey string `json:"secretKey"`
+			MaxClaws  int    `json:"maxClaws"`
 		}
 		decodeJSON(t, rr, &payload)
 
@@ -540,6 +553,9 @@ func TestRoutesIntegration(t *testing.T) {
 			t.Fatalf("unexpected payload: %+v", payload)
 		}
 		if payload.ProxyURL != "http://updated.internal/gmail-pubsub" {
+			t.Fatalf("unexpected payload: %+v", payload)
+		}
+		if payload.MaxClaws != 7 {
 			t.Fatalf("unexpected payload: %+v", payload)
 		}
 	})
@@ -977,6 +993,7 @@ func (s *fakeServerService) seed(name string) entities.Server {
 		"ready",
 		"secret-"+name,
 	)
+	srv.MaxClaws = 7
 	s.servers[srv.ID] = srv
 
 	return srv
@@ -993,6 +1010,7 @@ func (s *fakeServerService) Create(
 	cm servercommands.CreateServer,
 ) (entities.Server, error) {
 	srv := entities.NewServer(cm.Name, cm.IP, cm.URL, cm.ProxyURL, cm.Status, cm.SecretKey)
+	srv.MaxClaws = 7
 	s.servers[srv.ID] = srv
 
 	return srv, nil
@@ -1038,6 +1056,7 @@ func (s *fakeServerService) Update(
 	srv.ProxyURL = cm.ProxyURL
 	srv.Status = cm.Status
 	srv.SecretKey = cm.SecretKey
+	srv.MaxClaws = 7
 	s.servers[srv.ID] = srv
 
 	return srv, nil

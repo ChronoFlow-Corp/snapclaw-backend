@@ -1,15 +1,19 @@
 package service
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"shared/pkg/hostingapi"
 	"shared/pkg/observability"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"containermanager/internal/entities"
@@ -22,12 +26,17 @@ import (
 )
 
 type Container struct {
-	clRepo  ClawRepository
-	manager *docker.Manager
-	p       *Porter
-	cfg     *configurer.ClawConfigurer
-	gog     GogConfig
-	metrics *observability.OperationMetrics
+	clRepo              ClawRepository
+	manager             containerRuntime
+	p                   *Porter
+	cfg                 *configurer.ClawConfigurer
+	gog                 GogConfig
+	maxClaws            int
+	startMu             sync.Mutex
+	readAvailableMemory func() (uint64, error)
+	coldStartMinBytes   uint64
+	warmStartMinBytes   uint64
+	metrics             *observability.OperationMetrics
 }
 
 type GogConfig struct {
@@ -38,11 +47,19 @@ type GogConfig struct {
 var errForbidden = errors.New("container belongs to another user")
 
 var ErrInvalidCode = errors.New("invalid code")
+var ErrServerCapacityExceeded = errors.New("server capacity exceeded")
+var ErrServerMemoryUnavailable = errors.New("server memory unavailable")
+
+const (
+	coldStartMinAvailableBytes = 2 * 1024 * 1024 * 1024
+	warmStartMinAvailableBytes = 800 * 1024 * 1024
+)
 
 func NewContainer(
 	cfg *configurer.ClawConfigurer,
 	clRepo ClawRepository,
-	manager *docker.Manager,
+	manager containerRuntime,
+	maxClaws int,
 	gog GogConfig,
 	metrics ...*observability.OperationMetrics,
 ) (*Container, error) {
@@ -52,11 +69,15 @@ func NewContainer(
 	}
 
 	c := &Container{
-		cfg:     cfg,
-		clRepo:  clRepo,
-		manager: manager,
-		p:       NewPorter(),
-		metrics: opMetrics,
+		cfg:                 cfg,
+		clRepo:              clRepo,
+		manager:             manager,
+		p:                   NewPorter(),
+		maxClaws:            maxClaws,
+		readAvailableMemory: readLinuxMemAvailableBytes,
+		coldStartMinBytes:   coldStartMinAvailableBytes,
+		warmStartMinBytes:   warmStartMinAvailableBytes,
+		metrics:             opMetrics,
 		gog: GogConfig{
 			KeyringBackend:  strings.TrimSpace(gog.KeyringBackend),
 			KeyringPassword: strings.TrimSpace(gog.KeyringPassword),
@@ -76,6 +97,35 @@ func NewContainer(
 	}
 
 	return c, nil
+}
+
+func (c *Container) MaxClaws() int {
+	if c == nil {
+		return 0
+	}
+
+	return c.maxClaws
+}
+
+func (c *Container) ensureMemoryAvailable(requiredBytes uint64) error {
+	if requiredBytes == 0 {
+		return nil
+	}
+
+	if c.readAvailableMemory == nil {
+		return fmt.Errorf("%w: memory reader is not configured", ErrServerMemoryUnavailable)
+	}
+
+	availableBytes, err := c.readAvailableMemory()
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrServerMemoryUnavailable, err)
+	}
+
+	if availableBytes < requiredBytes {
+		return fmt.Errorf("%w: available=%d required=%d", ErrServerMemoryUnavailable, availableBytes, requiredBytes)
+	}
+
+	return nil
 }
 
 func (c *Container) Start(ctx context.Context, cm commands.StartClaw) (err error) {
@@ -98,6 +148,9 @@ func (c *Container) Start(ctx context.Context, cm commands.StartClaw) (err error
 		return fmt.Errorf("%s: claw id is required", op)
 	}
 
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+
 	cont, err := c.clRepo.GetByUserClawID(ctx, cm.UserID, cm.ClawID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
@@ -107,12 +160,22 @@ func (c *Container) Start(ctx context.Context, cm commands.StartClaw) (err error
 		return fmt.Errorf("%s: %w", op, errForbidden)
 	}
 
+	requiredMemory := c.coldStartMinBytes
+	if cont.HasStartedOnce {
+		requiredMemory = c.warmStartMinBytes
+	}
+
+	if err := c.ensureMemoryAvailable(requiredMemory); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
 	err = c.manager.Start(ctx, cont.ContainerID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	cont.Status = entities.ContainerStatusRunning
+	cont.HasStartedOnce = true
 
 	err = c.clRepo.Update(ctx, cont)
 	if err != nil {
@@ -290,6 +353,17 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 		return "", fmt.Errorf("%s: %w", op, errors.New("claw already exists"))
 	}
 
+	if c.maxClaws > 0 {
+		containers, err := c.clRepo.GetAll(ctx)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", op, err)
+		}
+
+		if len(containers) >= c.maxClaws {
+			return "", fmt.Errorf("%s: %w", op, ErrServerCapacityExceeded)
+		}
+	}
+
 	cfgPath, err := c.cfg.Configure(cm)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", op, err)
@@ -336,12 +410,13 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 
 	containerRecordID := uuid.New()
 	err = c.clRepo.Create(ctx, entities.Container{
-		ID:          containerRecordID,
-		UserID:      cm.UserID,
-		ClawID:      cm.ClawID,
-		ContainerID: cID,
-		Port:        cPort,
-		Status:      entities.ContainerStatusStop,
+		ID:             containerRecordID,
+		UserID:         cm.UserID,
+		ClawID:         cm.ClawID,
+		ContainerID:    cID,
+		Port:           cPort,
+		Status:         entities.ContainerStatusStop,
+		HasStartedOnce: false,
 	})
 	if err != nil {
 		_ = c.manager.Remove(ctx, cID)
@@ -560,4 +635,38 @@ func (c *Container) containerVolumes(cfgPath string) []string {
 			docker.GogBootstrapCredentialsPath,
 		),
 	)
+}
+
+func readLinuxMemAvailableBytes() (uint64, error) {
+	f, err := os.Open("/proc/meminfo")
+	if err != nil {
+		return 0, fmt.Errorf("open /proc/meminfo: %w", err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "MemAvailable:") {
+			continue
+		}
+
+		fields := strings.Fields(strings.TrimPrefix(line, "MemAvailable:"))
+		if len(fields) == 0 {
+			return 0, errors.New("MemAvailable value is missing")
+		}
+
+		value, err := strconv.ParseUint(fields[0], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse MemAvailable: %w", err)
+		}
+
+		return value * 1024, nil
+	}
+
+	if err := scanner.Err(); err != nil {
+		return 0, fmt.Errorf("scan /proc/meminfo: %w", err)
+	}
+
+	return 0, errors.New("MemAvailable is not present in /proc/meminfo")
 }
