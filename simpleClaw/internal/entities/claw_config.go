@@ -17,8 +17,7 @@ type ClawConfig struct {
 	Logging  *Logging       `json:"logging,omitempty"`
 	Messages *Messages      `json:"messages,omitempty"`
 	Meta     *ConfigMeta    `json:"meta,omitempty"`
-	Tooling  *ToolingMedia  `json:"tools,omitempty"` // см. замечание про duplicate keys ниже
-	Tools    *ToolsConfig   `json:"toolsRuntime,omitempty"`
+	Tools    *ToolsConfig   `json:"tools,omitempty"`
 	Session  *SessionConfig `json:"session,omitempty"`
 	Channels *ClawChannels  `json:"channels,omitempty"`
 	Agents   Agents         `json:"agents,omitempty"`
@@ -79,10 +78,6 @@ type QueueConfig struct {
 	ByChannel  map[string]string `json:"byChannel,omitempty"`
 }
 
-type ToolingMedia struct {
-	Media MediaTools `json:"media,omitempty"`
-}
-
 type MediaTools struct {
 	Audio MediaAudio `json:"audio,omitempty"`
 	Video MediaVideo `json:"video,omitempty"`
@@ -107,14 +102,12 @@ type MediaModel struct {
 	// for CLI fallback one could use Type/Command/Args etc.
 }
 
-// ---------------- Tools (runtime / permissions) ----------------
-// Примечание: в исходнике встречаются два объекта "tools". Я поместил второй в ToolsConfig и дал json tag "toolsRuntime" —
-// при десериализации реального файла возможно нужно вручную объединить/переименовать ключи или использовать промежуточный map[string]json.RawMessage.
 type ToolsConfig struct {
-	Allow    []string      `json:"allow,omitempty"`
-	Deny     []string      `json:"deny,omitempty"`
-	Exec     ToolsExec     `json:"exec,omitempty"`
-	Elevated ToolsElevated `json:"elevated,omitempty"`
+	Allow    []string       `json:"allow,omitempty"`
+	Deny     []string       `json:"deny,omitempty"`
+	Exec     *ToolsExec     `json:"exec,omitempty"`
+	Elevated *ToolsElevated `json:"elevated,omitempty"`
+	Media    MediaTools     `json:"media,omitempty"`
 }
 type ToolsExec struct {
 	BackgroundMs int `json:"backgroundMs,omitempty"`
@@ -230,8 +223,7 @@ type SlackSlashCommand struct {
 }
 
 type Agents struct {
-	Defaults *AgentDefault     `json:"defaults,omitempty"`
-	List     []AgentListConfig `json:"list,omitempty"`
+	List []AgentListConfig `json:"list,omitempty"`
 }
 
 type AgentDefault struct {
@@ -305,135 +297,193 @@ type RunLogConfig struct {
 }
 
 func NewDefaultClawConfig(model string) ClawConfig {
-	cfg := ClawConfig{
-		Env: Env{
-			OpenRouterAPIKey: "${OPENROUTER_API_KEY}",
-			Vars:             map[string]string{},
-			ShellEnv: ShellEnvConfig{
-				Enabled:   true,
-				TimeoutMs: 30000,
-			},
-		},
-		Logging: &Logging{
-			Level:        "info",
-			ConsoleLevel: "info",
-			ConsoleStyle: "pretty",
-		},
-		Tooling: &ToolingMedia{
-			Media: MediaTools{
-				Audio: MediaAudio{
-					Enabled:        false,
-					MaxBytes:       10 * 1024 * 1024,
-					TimeoutSeconds: 60,
-				},
-				Video: MediaVideo{
-					Enabled:  false,
-					MaxBytes: 50 * 1024 * 1024,
-				},
-			},
-		},
-		Cron: &CronConfig{
-			Enabled:           true,
-			MaxConcurrentRuns: 2,
-			SessionRetention:  "24h",
-			RunLog: RunLogConfig{
-				MaxBytes:  "2mb",
-				KeepLines: 1000,
-			},
-		},
-		Session: &SessionConfig{
-			Scope: "per-sender",
-			Reset: SessionResetConfig{
-				Mode:        "idle",
-				IdleMinutes: 60,
-			},
-			Store: "file",
-			Maintenance: SessionMaintenance{
-				Mode:       "warn",
-				PruneAfter: "30d",
-				MaxEntries: 1000,
-			},
-			TypingIntervalSeconds: 3,
-			SendPolicy: SendPolicyConfig{
-				Default: "allow",
-			},
-		},
-		Agents: Agents{
-			Defaults: &AgentDefault{
-				Compaction: AgentCompaction{
-					ReserveTokensFloor: 20000,
-					MemoryFlush: struct {
-						Enabled              bool `json:"enabled"`
-						SoftThreshHoldTokens int  `json:"softThresholdTokens,omitempty"`
-					}{
-						Enabled:              true,
-						SoftThreshHoldTokens: 4000,
-					},
-				},
-			},
-			List: []AgentListConfig{
-				{
-					ID:            "main",
-					Default:       true,
-					Name:          "main",
-					Workspace:     path.Join(workspacePrefix, "main"),
-					AgentDir:      path.Join(agentDirPrefix, "agents"),
-					SkipBootstrap: false,
-					Model: &AgentModelSelection{
-						Primary: model,
-					},
-					Params:   nil,
-					Identity: nil,
-					GroupChat: &GroupChat{
-						MentionPatterns: []string{"@OpenClaw"},
-					},
-					Sandbox: &Sandbox{
-						Mode: "off",
-					},
-					Runtime: nil,
-					Subagents: &Subagents{
-						AllowAgents: []string{"*"},
-					},
-					Tools: &Tools{
-						Allow: []string{
-							"group:fs",
-							"group:sessions",
-							"group:web",
-							"group:messaging",
-							"group:automation",
-							"exec",
-							"process",
-						},
-						Deny: []string{"canvas", "browser"},
-					},
-				},
-			},
-		},
-		Gateway: &GatewayConfig{
-			Mode: "local",
-			Bind: "lan",
-			ControlUI: ControlUI{
-				Enabled: false,
-			},
-			Auth: GatewayAuth{
-				Mode:  "token",
-				Token: "${OPENCLAW_GATEWAY_TOKEN}",
-			},
-			Reload: ReloadConfig{
-				Mode:       "restart",
-				DebounceMs: 2000,
-			},
-		},
-	}
-
-	return cfg
+	return NewCreateClawConfig(CreateClawConfigInput{PrimaryModel: model})
 }
 
 func (c *ClawConfig) AddTelegramChannel(ch *channels.TelegramConfig) {
 	if c.Channels == nil {
 		c.Channels = &ClawChannels{}
 	}
-	c.Channels.Telegram = ch
+	c.Channels.Telegram = NewTelegramChannelConfig(ch)
 
-	c.Channels.Telegram.Enabled = true
+	if c.Channels.Telegram != nil {
+		c.Channels.Telegram.Enabled = true
+	}
+}
+
+type CreateClawConfigInput struct {
+	PrimaryModel string
+}
+
+func NewCreateClawConfig(input CreateClawConfigInput) ClawConfig {
+	return ClawConfig{
+		Env:     NewDefaultEnvConfig(),
+		Logging: NewDefaultLoggingConfig(),
+		Tools:   NewDefaultToolsConfig(),
+		Session: NewDefaultSessionConfig(),
+		Agents: Agents{
+			List: []AgentListConfig{
+				NewDefaultMainAgentConfig(input.PrimaryModel),
+			},
+		},
+		Cron:    NewDefaultCronConfig(),
+		Gateway: NewDefaultGatewayConfig(),
+	}
+}
+
+func NewDefaultEnvConfig() Env {
+	return Env{
+		OpenRouterAPIKey: "${OPENROUTER_API_KEY}",
+		Vars:             map[string]string{},
+		ShellEnv: ShellEnvConfig{
+			Enabled:   true,
+			TimeoutMs: 30000,
+		},
+	}
+}
+
+func NewDefaultLoggingConfig() *Logging {
+	return &Logging{
+		Level:        "info",
+		ConsoleLevel: "info",
+		ConsoleStyle: "pretty",
+	}
+}
+
+func NewDefaultToolsConfig() *ToolsConfig {
+	return &ToolsConfig{
+		Media: MediaTools{
+			Audio: MediaAudio{
+				Enabled:        false,
+				MaxBytes:       10 * 1024 * 1024,
+				TimeoutSeconds: 60,
+			},
+			Video: MediaVideo{
+				Enabled:  false,
+				MaxBytes: 50 * 1024 * 1024,
+			},
+		},
+	}
+}
+
+func NewDefaultSessionConfig() *SessionConfig {
+	return &SessionConfig{
+		Scope: "per-sender",
+		Reset: SessionResetConfig{
+			Mode:        "idle",
+			IdleMinutes: 60,
+		},
+		Store: "file",
+		Maintenance: SessionMaintenance{
+			Mode:       "warn",
+			PruneAfter: "30d",
+			MaxEntries: 1000,
+		},
+		TypingIntervalSeconds: 3,
+		SendPolicy: SendPolicyConfig{
+			Default: "allow",
+		},
+	}
+}
+
+func NewDefaultMainAgentConfig(model string) AgentListConfig {
+	return AgentListConfig{
+		ID:            "main",
+		Default:       true,
+		Name:          "main",
+		Workspace:     path.Join(workspacePrefix, "main"),
+		AgentDir:      path.Join(agentDirPrefix, "agents"),
+		SkipBootstrap: false,
+		Model: &AgentModelSelection{
+			Primary: model,
+		},
+		GroupChat: &GroupChat{
+			MentionPatterns: []string{"@OpenClaw"},
+		},
+		Sandbox: &Sandbox{
+			Mode: "off",
+		},
+		Subagents: &Subagents{
+			AllowAgents: []string{"*"},
+		},
+		Tools: &Tools{
+			Allow: []string{
+				"group:fs",
+				"group:sessions",
+				"group:web",
+				"group:messaging",
+				"group:automation",
+				"exec",
+				"process",
+			},
+			Deny: []string{"canvas", "browser"},
+		},
+	}
+}
+
+func NewDefaultGatewayConfig() *GatewayConfig {
+	return &GatewayConfig{
+		Mode: "local",
+		Bind: "lan",
+		ControlUI: ControlUI{
+			Enabled: false,
+		},
+		Auth: GatewayAuth{
+			Mode:  "token",
+			Token: "${OPENCLAW_GATEWAY_TOKEN}",
+		},
+		Reload: ReloadConfig{
+			Mode:       "restart",
+			DebounceMs: 2000,
+		},
+	}
+}
+
+func NewDefaultCronConfig() *CronConfig {
+	return &CronConfig{
+		Enabled:           true,
+		MaxConcurrentRuns: 2,
+		SessionRetention:  "24h",
+		RunLog: RunLogConfig{
+			MaxBytes:  "2mb",
+			KeepLines: 1000,
+		},
+	}
+}
+
+func NewTelegramChannelConfig(src *channels.TelegramConfig) *channels.TelegramConfig {
+	if src == nil {
+		return nil
+	}
+
+	return &channels.TelegramConfig{
+		Enabled:               true,
+		BotToken:              src.BotToken,
+		DmPolicy:              src.DmPolicy,
+		AllowFrom:             append([]string(nil), src.AllowFrom...),
+		GroupPolicy:           src.GroupPolicy,
+		GroupAllowFrom:        append([]string(nil), src.GroupAllowFrom...),
+		Groups:                cloneMap(src.Groups),
+		CustomCommands:        append([]channels.TelegramCustomCommand(nil), src.CustomCommands...),
+		HistoryLimit:          src.HistoryLimit,
+		ReplyToMode:           src.ReplyToMode,
+		LinkPreview:           src.LinkPreview,
+		Streaming:             src.Streaming,
+		Actions:               src.Actions,
+		ReactionNotifications: src.ReactionNotifications,
+		MediaMaxMb:            src.MediaMaxMb,
+	}
+}
+
+func cloneMap(src map[string]interface{}) map[string]interface{} {
+	if len(src) == 0 {
+		return nil
+	}
+
+	dst := make(map[string]interface{}, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+
+	return dst
 }

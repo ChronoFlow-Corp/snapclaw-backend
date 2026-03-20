@@ -535,7 +535,7 @@ func TestServiceUpdate_WritesArchiveFromDesiredConfig(t *testing.T) {
 		t.Fatalf("read archive config: %v", err)
 	}
 
-	gotModel := strings.TrimSpace(archived.Agents.Defaults.Model.Primary)
+	gotModel := strings.TrimSpace(currentPrimaryModel(archived))
 	if gotModel != "openrouter/openai/gpt-4.1" {
 		t.Fatalf("unexpected archived model: %s", gotModel)
 	}
