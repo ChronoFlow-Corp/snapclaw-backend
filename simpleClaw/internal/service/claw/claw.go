@@ -226,7 +226,9 @@ func (s *Service) Create(
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	cfg := entities.NewDefaultClawConfig(primaryModel)
+	cfg := entities.NewCreateClawConfig(entities.CreateClawConfigInput{
+		PrimaryModel: primaryModel,
+	})
 	ensureConfigVars(&cfg, keyValue, "")
 
 	for _, ch := range chs {
@@ -1073,7 +1075,7 @@ func applyBaseUpdates(
 
 	ensureConfigVars(&cfg, apiKey, "")
 
-	cfg.Agents.Defaults.Model.Primary = primaryModel
+	setPrimaryModel(&cfg, primaryModel)
 
 	if cfg.Gateway.Mode == "" {
 		cfg.Gateway.Mode = "local"
@@ -1184,12 +1186,6 @@ func mergeChannelConfigs(chs []entities.Channel) *entities.ClawChannels {
 }
 
 func currentPrimaryModel(cfg entities.ClawConfig) string {
-	if cfg.Agents.Defaults != nil {
-		if model := strings.TrimSpace(cfg.Agents.Defaults.Model.Primary); model != "" {
-			return model
-		}
-	}
-
 	for _, agent := range cfg.Agents.List {
 		if agent.Model == nil {
 			continue
@@ -1217,6 +1213,33 @@ func currentPrimaryModel(cfg entities.ClawConfig) string {
 	}
 
 	return ""
+}
+
+func setPrimaryModel(cfg *entities.ClawConfig, model string) {
+	if cfg == nil {
+		return
+	}
+
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].Model == nil {
+			cfg.Agents.List[i].Model = &entities.AgentModelSelection{}
+		}
+
+		if cfg.Agents.List[i].Default {
+			cfg.Agents.List[i].Model.Primary = model
+			return
+		}
+	}
+
+	if len(cfg.Agents.List) == 0 {
+		cfg.Agents.List = append(cfg.Agents.List, entities.NewDefaultMainAgentConfig(model))
+		return
+	}
+
+	if cfg.Agents.List[0].Model == nil {
+		cfg.Agents.List[0].Model = &entities.AgentModelSelection{}
+	}
+	cfg.Agents.List[0].Model.Primary = model
 }
 
 type channelUpdate struct {
