@@ -4,15 +4,15 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/entities/channels"
 	"simpleClaw/internal/infra/hosting"
 	"simpleClaw/internal/service/claw/commands"
-
-	"github.com/google/uuid"
 )
 
 type createTestClawStorage struct {
@@ -24,7 +24,9 @@ type createTestClawStorage struct {
 
 func (s *createTestClawStorage) Create(_ context.Context, cl entities.Claw, channelIDs []uuid.UUID) error {
 	s.created = cl
+
 	s.createdChannels = append([]uuid.UUID(nil), channelIDs...)
+
 	return nil
 }
 
@@ -42,9 +44,7 @@ func (s *createTestClawStorage) CountOccupiedByServer(context.Context) (map[uuid
 	}
 
 	res := make(map[uuid.UUID]int, len(s.occupiedByServer))
-	for serverID, count := range s.occupiedByServer {
-		res[serverID] = count
-	}
+	maps.Copy(res, s.occupiedByServer)
 
 	return res, nil
 }
@@ -68,6 +68,7 @@ func (s *createTestClawStorage) UpdateRuntime(
 	s.runtimeUpdated.ServerID = serverID
 	s.runtimeUpdated.ContainerID = containerID
 	s.runtimeUpdated.Status = status
+
 	return nil
 }
 
@@ -143,6 +144,7 @@ func (k *createTestKeys) Create(context.Context, uuid.UUID, string, float64) (en
 
 func (k *createTestKeys) ResolveModel(context.Context, string) (string, error) {
 	k.resolveModelCalls++
+
 	return k.resolveModelResult, nil
 }
 

@@ -55,15 +55,15 @@ func wrapError(err error) error {
 func wrapStatusError(code int, err error) error {
 	switch code {
 	case 400:
-		return fmt.Errorf("%w: %v", ErrBadRequest, err)
+		return fmt.Errorf("%w: %w", ErrBadRequest, err)
 	case 401, 403:
-		return fmt.Errorf("%w: %v", ErrUnauthorized, err)
+		return fmt.Errorf("%w: %w", ErrUnauthorized, err)
 	case 404:
-		return fmt.Errorf("%w: %v", ErrNotFound, err)
+		return fmt.Errorf("%w: %w", ErrNotFound, err)
 	case 408, 429:
-		return fmt.Errorf("%w: %v", ErrRateLimited, err)
+		return fmt.Errorf("%w: %w", ErrRateLimited, err)
 	case 500, 502, 503, 504:
-		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	default:
 		return err
 	}

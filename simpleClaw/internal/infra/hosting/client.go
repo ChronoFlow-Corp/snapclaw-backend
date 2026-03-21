@@ -8,10 +8,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"shared/pkg/hostingapi"
-	"shared/pkg/observability"
 	"strings"
 	"time"
+
+	"shared/pkg/hostingapi"
+	"shared/pkg/observability"
 )
 
 // client executes HTTP requests against containerManager.
@@ -63,6 +64,7 @@ func (c *client) createClaw(
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -83,8 +85,10 @@ func (c *client) createClaw(
 	}
 
 	var out hostingapi.CreateClawResponse
+
 	if len(respBody) > 0 {
-		if err := json.Unmarshal(respBody, &out); err != nil {
+		err := json.Unmarshal(respBody, &out)
+		if err != nil {
 			return hostingapi.CreateClawResponse{}, fmt.Errorf("%s: %w", op, err)
 		}
 	}
@@ -108,12 +112,13 @@ func (c *client) capacity(
 		return hostingapi.CapacityResponse{}, fmt.Errorf("%s: base url is required", op)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url+hostingapi.CapacityEndpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url+hostingapi.CapacityEndpoint, http.NoBody)
 	if err != nil {
 		return hostingapi.CapacityResponse{}, fmt.Errorf("%s: %w", op, err)
 	}
 
 	req.Header.Set("Accept", "application/json")
+
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -134,8 +139,10 @@ func (c *client) capacity(
 	}
 
 	var out hostingapi.CapacityResponse
+
 	if len(respBody) > 0 {
-		if err := json.Unmarshal(respBody, &out); err != nil {
+		err := json.Unmarshal(respBody, &out)
+		if err != nil {
 			return hostingapi.CapacityResponse{}, fmt.Errorf("%s: %w", op, err)
 		}
 	}
@@ -177,6 +184,7 @@ func (c *client) updateClaw(
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -226,17 +234,20 @@ func (c *client) deleteClaw(
 	q := u.Query()
 	q.Set(hostingapi.QueryUserID, userID)
 	q.Set(hostingapi.QueryClawID, clawID)
+
 	if deleteConfig {
 		q.Set(hostingapi.QueryDeleteConfig, "true")
 	}
+
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u.String(), http.NoBody)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	req.Header.Set("Accept", "application/json")
+
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -294,17 +305,20 @@ func (c *client) configArchive(
 	q := u.Query()
 	q.Set(hostingapi.QueryUserID, userID)
 	q.Set(hostingapi.QueryClawID, clawID)
+
 	if deleteAfter {
 		q.Set(hostingapi.QueryDeleteAfter, "true")
 	}
+
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
 
 	req.Header.Set("Accept", "application/x-tar")
+
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -371,6 +385,7 @@ func (c *client) restoreConfigArchive(
 	}
 
 	req.Header.Set("Content-Type", "application/x-tar")
+
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -383,6 +398,7 @@ func (c *client) restoreConfigArchive(
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		respBody, _ := io.ReadAll(resp.Body)
+
 		return unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
 	}
 
@@ -417,12 +433,13 @@ func (c *client) stopClaw(
 	q.Set(hostingapi.QueryClawID, clawID)
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), http.NoBody)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	req.Header.Set("Accept", "application/json")
+
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -473,12 +490,13 @@ func (c *client) startClaw(
 	q.Set(hostingapi.QueryClawID, clawID)
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), http.NoBody)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	req.Header.Set("Accept", "application/json")
+
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -543,12 +561,13 @@ func (c *client) approvePairing(
 	q.Set(hostingapi.QueryCode, code)
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), http.NoBody)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	req.Header.Set("Accept", "application/json")
+
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -625,6 +644,7 @@ func (c *client) connect(
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -652,9 +672,11 @@ func unexpectedStatusError(op string, statusCode int, status string, body []byte
 		if statusCode == http.StatusBadRequest && payload.Code == hostingapi.ErrCodeInvalidCode {
 			return fmt.Errorf("%s: %w", op, ErrInvalidCode)
 		}
+
 		if statusCode == http.StatusConflict && payload.Code == hostingapi.ErrCodeServerCapacityExceeded {
 			return fmt.Errorf("%s: %w", op, ErrServerCapacityExceeded)
 		}
+
 		if statusCode == http.StatusConflict && payload.Code == hostingapi.ErrCodeServerMemoryUnavailable {
 			return fmt.Errorf("%s: %w", op, ErrServerMemoryUnavailable)
 		}

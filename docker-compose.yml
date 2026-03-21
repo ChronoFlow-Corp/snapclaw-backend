@@ -6,6 +6,7 @@ services:
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
+      - --web.enable-remote-write-receiver
     volumes:
       - ./deploy/prometheus/config.yaml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -47,16 +48,23 @@ services:
       - prometheus
       - tempo
 
-  promtail:
-    image: grafana/promtail:2.9.4
-    command: -config.file=/etc/promtail/config.yaml
+  alloy:
+    image: grafana/alloy:latest
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
     volumes:
-      - ./deploy/promtail/config.yaml:/etc/promtail/config.yaml:ro
+      - ./deploy/alloy/config.alloy:/etc/alloy/config.alloy:ro
       - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - promtail_positions:/tmp
+      - alloy_data:/var/lib/alloy/data
+    ports:
+      - "127.0.0.1:12345:12345"
     depends_on:
       - loki
+      - prometheus
+      - tempo
 
   simpleclaw-db:
     image: postgres:16-alpine
@@ -110,7 +118,7 @@ services:
       - ./deploy/containerManager/config.yaml:/config/dev-config.yaml:ro
       - ./:/workspace:ro
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./claw-configs:/claw-configs:rw
+      - /Users/kodokuus/work/go/snapclaw-backend/claw-configs:/Users/kodokuus/work/go/snapclaw-backend/claw-configs:rw
     ports:
       - "8080:8080"
     depends_on:
@@ -118,7 +126,7 @@ services:
 
 volumes:
   grafana_data:
-  promtail_positions:
+  alloy_data:
   loki_data:
   prometheus_data:
   tempo_data:

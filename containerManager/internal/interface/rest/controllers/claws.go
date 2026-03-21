@@ -12,19 +12,18 @@ import (
 	"mime"
 	"net/http"
 	"os"
-	"shared/pkg/hostingapi"
-	"shared/pkg/observability"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"containermanager/internal/interface/rest/middleware"
-
 	"containermanager/internal/entities"
+	"containermanager/internal/interface/rest/middleware"
 	"containermanager/internal/pkg/logctx"
 	"containermanager/internal/service"
 	"containermanager/internal/service/commands"
+	"shared/pkg/hostingapi"
+	"shared/pkg/observability"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -79,17 +78,17 @@ func NewClaw(s *service.Container, key string, opts ClawOptions) *Claw {
 func (c *Claw) Register(mux chi.Router) {
 	mux.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(c.key))
-		r.Post("/claws", c.CreateClaw)
-		r.Put("/claws", c.Update)
-		r.Get("/claws/start", c.Start)
-		r.Get("/claws/stop", c.Stop)
+		r.Post(hostingapi.ClawsEndpoint, c.CreateClaw)
+		r.Put(hostingapi.ClawsEndpoint, c.Update)
+		r.Get(hostingapi.ClawsStartEndpoint, c.Start)
+		r.Get(hostingapi.ClawsStopEndpoint, c.Stop)
 		r.Get(hostingapi.CapacityEndpoint, c.Capacity)
 		r.Get("/claws/config", c.ConfigArchive)
 		r.Post("/claws/config", c.RestoreConfig)
 		r.Delete("/claws", c.Delete)
-		r.Get("/approve", c.Approve)
-		r.Post("/connect", c.Connect)
-		r.Post("/gmail-pubsub", c.GmailPubSub)
+		r.Get(hostingapi.ApproveEndpoint, c.Approve)
+		r.Post(hostingapi.ConnectEndpoint, c.Connect)
+		r.Post(hostingapi.GmailPubSubEndpoint, c.GmailPubSub)
 	})
 }
 
@@ -111,11 +110,13 @@ func (c *Claw) CreateClaw(w http.ResponseWriter, r *http.Request) {
 
 	if cfg.UserID == "" {
 		writeValidationError(w, "userId is required")
+
 		return
 	}
 
 	if cfg.ClawID == "" {
 		writeValidationError(w, "clawId is required")
+
 		return
 	}
 
@@ -241,6 +242,7 @@ func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Error("stop claw failed", slog.Any("err", err))
 		writeInternalError(w, err)
+
 		return
 	}
 
@@ -309,12 +311,15 @@ func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 	)
 
 	deleteConfig := false
+
 	if raw := r.URL.Query().Get(hostingapi.QueryDeleteConfig); raw != "" {
 		val, err := strconv.ParseBool(raw)
 		if err != nil {
 			writeValidationError(w, "deleteConfig must be a boolean")
+
 			return
 		}
+
 		deleteConfig = val
 	}
 
@@ -326,6 +331,7 @@ func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Error("delete claw failed", slog.Any("err", err))
 		writeInternalError(w, err)
+
 		return
 	}
 
@@ -336,12 +342,14 @@ func (c *Claw) ConfigArchive(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get(hostingapi.QueryUserID)
 	if q == "" {
 		writeValidationError(w, "userId is required")
+
 		return
 	}
 
 	clawID := r.URL.Query().Get(hostingapi.QueryClawID)
 	if clawID == "" {
 		writeValidationError(w, "clawId is required")
+
 		return
 	}
 
@@ -351,12 +359,15 @@ func (c *Claw) ConfigArchive(w http.ResponseWriter, r *http.Request) {
 	)
 
 	deleteAfter := false
+
 	if raw := r.URL.Query().Get(hostingapi.QueryDeleteAfter); raw != "" {
 		val, err := strconv.ParseBool(raw)
 		if err != nil {
 			writeValidationError(w, "deleteAfter must be a boolean")
+
 			return
 		}
+
 		deleteAfter = val
 	}
 
@@ -375,12 +386,15 @@ func (c *Claw) ConfigArchive(w http.ResponseWriter, r *http.Request) {
 			slog.Any("err", err),
 			slog.Bool("delete_after", deleteAfter),
 		)
+
 		if errors.Is(err, os.ErrNotExist) {
 			hostingapi.WriteError(w, http.StatusNotFound, hostingapi.ErrCodeNotFound, err.Error())
+
 			return
 		}
 
 		writeInternalError(w, err)
+
 		return
 	}
 
@@ -391,12 +405,14 @@ func (c *Claw) RestoreConfig(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get(hostingapi.QueryUserID)
 	if q == "" {
 		writeValidationError(w, "userId is required")
+
 		return
 	}
 
 	clawID := r.URL.Query().Get(hostingapi.QueryClawID)
 	if clawID == "" {
 		writeValidationError(w, "clawId is required")
+
 		return
 	}
 
@@ -409,6 +425,7 @@ func (c *Claw) RestoreConfig(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Error("restore config failed", slog.Any("err", err))
 		writeInternalError(w, err)
+
 		return
 	}
 
@@ -420,39 +437,49 @@ func (c *Claw) Connect(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get(hostingapi.QueryUserID)
 	if q == "" {
 		writeValidationError(w, "userId is required")
+
 		return
 	}
+
 	clawID := r.URL.Query().Get(hostingapi.QueryClawID)
 	if clawID == "" {
 		writeValidationError(w, "clawId is required")
+
 		return
 	}
+
 	provider := r.URL.Query().Get(hostingapi.QueryProvider)
 	if provider == "" {
 		writeValidationError(w, "provider is required")
+
 		return
 	}
 
 	normalizedProvider, err := hostingapi.NormalizeProvider(provider)
 	if err != nil {
 		writeValidationError(w, err.Error())
+
 		return
 	}
 
 	token, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeValidationError(w, "failed to read token")
+
 		return
 	}
 
 	if len(bytes.TrimSpace(token)) == 0 {
 		writeValidationError(w, "token is required")
+
 		return
 	}
+
 	log := logctx.Logger(r.Context()).With(
 		slog.String("user_id", q),
 		slog.String("claw_id", clawID),
 	)
+
 	err = c.s.Connect(
 		r.Context(),
 		commands.ConnectCommand{
@@ -465,6 +492,7 @@ func (c *Claw) Connect(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Error("connect failed", slog.Any("err", err))
 		writeInternalError(w, err)
+
 		return
 	}
 
@@ -476,7 +504,9 @@ func (c *Claw) GmailPubSub(w http.ResponseWriter, r *http.Request) {
 	startedAt := time.Now()
 	targetCount := 0
 	successCount := 0
+
 	var flowErr error
+
 	ctxWithComponent := observability.WithComponent(r.Context(), "controller.gmail_pubsub")
 	ctx, log, finishFlow := observability.StartFlow(
 		ctxWithComponent,
@@ -484,44 +514,68 @@ func (c *Claw) GmailPubSub(w http.ResponseWriter, r *http.Request) {
 		"gmail_pubsub_fanout",
 		"pubsub.forward",
 	)
+
 	defer func() {
-		c.pubSubMetrics.Observe("gmail_pubsub_fanout", targetCount, successCount, flowErr, time.Since(startedAt))
+		c.pubSubMetrics.Observe(
+			"gmail_pubsub_fanout",
+			targetCount,
+			successCount,
+			flowErr,
+			time.Since(startedAt),
+		)
 		finishFlow(flowErr)
 	}()
+
 	r = r.WithContext(ctx)
 
 	if !isJSONContentType(r.Header.Get("Content-Type")) {
-		flowErr = observability.DecorateError(errors.New("invalid content type"), observability.ErrorAttrs{
-			Result: observability.ResultValidationError,
-			Kind:   observability.ErrorKindValidation,
-			Source: observability.ErrorSourceHTTP,
-		})
+		flowErr = observability.DecorateError(
+			errors.New("invalid content type"),
+			observability.ErrorAttrs{
+				Result: observability.ResultValidationError,
+				Kind:   observability.ErrorKindValidation,
+				Source: observability.ErrorSourceHTTP,
+			},
+		)
+
 		hostingapi.WriteError(
 			w,
 			http.StatusUnsupportedMediaType,
 			hostingapi.ErrCodeValidation,
 			"content type must be application/json",
 		)
+
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		flowErr = observability.DecorateError(fmt.Errorf("read request body: %w", err), observability.ErrorAttrs{
-			Result: observability.ResultValidationError,
-			Kind:   observability.ErrorKindValidation,
-			Source: observability.ErrorSourceHTTP,
-		})
+		flowErr = observability.DecorateError(
+			fmt.Errorf("read request body: %w", err),
+			observability.ErrorAttrs{
+				Result: observability.ResultValidationError,
+				Kind:   observability.ErrorKindValidation,
+				Source: observability.ErrorSourceHTTP,
+			},
+		)
+
 		writeValidationError(w, "failed to read request body")
+
 		return
 	}
+
 	if len(bytes.TrimSpace(body)) == 0 {
-		flowErr = observability.DecorateError(errors.New("empty request body"), observability.ErrorAttrs{
-			Result: observability.ResultValidationError,
-			Kind:   observability.ErrorKindValidation,
-			Source: observability.ErrorSourceHTTP,
-		})
+		flowErr = observability.DecorateError(
+			errors.New("empty request body"),
+			observability.ErrorAttrs{
+				Result: observability.ResultValidationError,
+				Kind:   observability.ErrorKindValidation,
+				Source: observability.ErrorSourceHTTP,
+			},
+		)
+
 		writeValidationError(w, "request body is required")
+
 		return
 	}
 
@@ -529,6 +583,7 @@ func (c *Claw) GmailPubSub(w http.ResponseWriter, r *http.Request) {
 	if !c.pubSubDedup.Add(msgKey) {
 		log.Info("gmail pubsub message skipped as duplicate", slog.String("message_key", msgKey))
 		w.WriteHeader(http.StatusNoContent)
+
 		return
 	}
 
@@ -536,29 +591,36 @@ func (c *Claw) GmailPubSub(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Error("failed to list running containers", slog.Any("err", err))
 		flowErr = fmt.Errorf("list running containers: %w", err)
+
 		hostingapi.WriteError(
 			w,
 			http.StatusServiceUnavailable,
 			hostingapi.ErrCodeInternal,
 			"failed to list running containers",
 		)
+
 		return
 	}
 
 	if len(containers) == 0 {
 		log.Info("gmail pubsub received with no running containers")
 		w.WriteHeader(http.StatusNoContent)
+
 		return
 	}
+
 	targetCount = len(containers)
 
 	headers := forwardPubSubHeaders(r.Header)
 	results := c.forwardPubSubToContainers(r.Context(), containers, body, headers)
 
 	var okCount int
+
 	for _, res := range results {
-		if res.err == nil && res.statusCode >= http.StatusOK && res.statusCode < http.StatusMultipleChoices {
+		if res.err == nil && res.statusCode >= http.StatusOK &&
+			res.statusCode < http.StatusMultipleChoices {
 			okCount++
+
 			continue
 		}
 
@@ -570,6 +632,7 @@ func (c *Claw) GmailPubSub(w http.ResponseWriter, r *http.Request) {
 				slog.Int64("duration_ms", res.duration.Milliseconds()),
 				slog.Any("err", res.err),
 			)
+
 			continue
 		}
 
@@ -591,26 +654,34 @@ func (c *Claw) GmailPubSub(w http.ResponseWriter, r *http.Request) {
 	successCount = okCount
 
 	if okCount == 0 {
-		flowErr = observability.DecorateError(errors.New("all downstream requests failed"), observability.ErrorAttrs{
-			Result: observability.ResultError,
-			Kind:   observability.ErrorKindUnexpected,
-			Source: observability.ErrorSourceExternal,
-		})
+		flowErr = observability.DecorateError(
+			errors.New("all downstream requests failed"),
+			observability.ErrorAttrs{
+				Result: observability.ResultError,
+				Kind:   observability.ErrorKindUnexpected,
+				Source: observability.ErrorSourceExternal,
+			},
+		)
+
 		hostingapi.WriteError(
 			w,
 			http.StatusBadGateway,
 			hostingapi.ErrCodeInternal,
 			"all downstream requests failed",
 		)
+
 		return
 	}
 
 	if okCount < len(containers) {
-		flowErr = observability.DecorateError(errors.New("partial downstream failure"), observability.ErrorAttrs{
-			Result: observability.ResultPartialSuccess,
-			Kind:   observability.ErrorKindUnexpected,
-			Source: observability.ErrorSourceExternal,
-		})
+		flowErr = observability.DecorateError(
+			errors.New("partial downstream failure"),
+			observability.ErrorAttrs{
+				Result: observability.ResultPartialSuccess,
+				Kind:   observability.ErrorKindUnexpected,
+				Source: observability.ErrorSourceExternal,
+			},
+		)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -626,10 +697,11 @@ func (c *Claw) forwardPubSubToContainers(
 	sem := make(chan struct{}, c.pubSubWorkers)
 
 	var wg sync.WaitGroup
+
 	for _, container := range containers {
-		container := container
 
 		wg.Add(1)
+
 		sem <- struct{}{}
 
 		go func() {
@@ -644,6 +716,7 @@ func (c *Claw) forwardPubSubToContainers(
 	close(results)
 
 	out := make([]pubSubForwardResult, 0, len(containers))
+
 	for result := range results {
 		out = append(out, result)
 	}
@@ -674,7 +747,12 @@ func (c *Claw) forwardPubSubToContainer(
 	reqCtx, cancel := context.WithTimeout(ctx, c.pubSubForwardTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, targetURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(
+		reqCtx,
+		http.MethodPost,
+		targetURL,
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		return pubSubForwardResult{
 			containerID: container.ID.String(),
@@ -758,17 +836,20 @@ type pubSubEnvelope struct {
 
 func pubSubMessageKey(body []byte) string {
 	var envelope pubSubEnvelope
-	if err := json.Unmarshal(body, &envelope); err == nil {
+	err := json.Unmarshal(body, &envelope)
+	if err == nil {
 		key := strings.TrimSpace(envelope.Message.MessageID)
 		if key == "" {
 			key = strings.TrimSpace(envelope.Message.MessageIDAlt)
 		}
+
 		if key != "" {
 			return "msg:" + key
 		}
 	}
 
 	sum := sha256.Sum256(body)
+
 	return "sha256:" + fmt.Sprintf("%x", sum[:])
 }
 
@@ -868,7 +949,12 @@ func writeValidationError(w http.ResponseWriter, message string) {
 }
 
 func writeInternalError(w http.ResponseWriter, err error) {
-	hostingapi.WriteError(w, http.StatusInternalServerError, hostingapi.ErrCodeInternal, err.Error())
+	hostingapi.WriteError(
+		w,
+		http.StatusInternalServerError,
+		hostingapi.ErrCodeInternal,
+		err.Error(),
+	)
 }
 
 func writeServiceError(w http.ResponseWriter, err error) {

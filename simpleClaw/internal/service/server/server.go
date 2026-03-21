@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"shared/pkg/observability"
 	"strings"
 
+	"shared/pkg/observability"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/service/server/commands"
 
@@ -20,8 +20,13 @@ type Service struct {
 	metrics  *observability.OperationMetrics
 }
 
-func New(storage storage, capacity capacityResolver, metrics ...*observability.OperationMetrics) *Service {
+func New(
+	storage storage,
+	capacity capacityResolver,
+	metrics ...*observability.OperationMetrics,
+) *Service {
 	var opMetrics *observability.OperationMetrics
+
 	if len(metrics) > 0 {
 		opMetrics = metrics[0]
 	}
@@ -31,6 +36,7 @@ func New(storage storage, capacity capacityResolver, metrics ...*observability.O
 
 func (s *Service) Create(ctx context.Context, cm commands.CreateServer) (entities.Server, error) {
 	const op = "service.server.Create"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -39,7 +45,9 @@ func (s *Service) Create(ctx context.Context, cm commands.CreateServer) (entitie
 		"server.create",
 		"server_registry",
 	)
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	srv, err := newServer(cm)
@@ -60,6 +68,7 @@ func (s *Service) Create(ctx context.Context, cm commands.CreateServer) (entitie
 
 func (s *Service) GetAll(ctx context.Context) ([]entities.Server, error) {
 	const op = "service.server.GetAll"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -68,7 +77,9 @@ func (s *Service) GetAll(ctx context.Context) ([]entities.Server, error) {
 		"server.list",
 		"server_registry",
 	)
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	servers, err := s.storage.GetAll(ctx)
@@ -81,6 +92,7 @@ func (s *Service) GetAll(ctx context.Context) ([]entities.Server, error) {
 
 func (s *Service) GetByID(ctx context.Context, id uuid.UUID) (entities.Server, error) {
 	const op = "service.server.GetByID"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -89,7 +101,9 @@ func (s *Service) GetByID(ctx context.Context, id uuid.UUID) (entities.Server, e
 		"server.get",
 		"server_registry",
 	)
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	if id == uuid.Nil {
@@ -106,6 +120,7 @@ func (s *Service) GetByID(ctx context.Context, id uuid.UUID) (entities.Server, e
 
 func (s *Service) Update(ctx context.Context, cm commands.UpdateServer) (entities.Server, error) {
 	const op = "service.server.Update"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -114,7 +129,9 @@ func (s *Service) Update(ctx context.Context, cm commands.UpdateServer) (entitie
 		"server.update",
 		"server_registry",
 	)
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	if cm.ID == uuid.Nil {
@@ -158,6 +175,7 @@ func (s *Service) Update(ctx context.Context, cm commands.UpdateServer) (entitie
 
 func (s *Service) Delete(ctx context.Context, id uuid.UUID) (err error) {
 	const op = "service.server.Delete"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -166,6 +184,7 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) (err error) {
 		"server.delete",
 		"server_registry",
 	)
+
 	defer func() { finish(err) }()
 
 	if id == uuid.Nil {
@@ -189,7 +208,8 @@ func (s *Service) SyncCapacities(ctx context.Context) error {
 
 	for _, srv := range servers {
 		tmp := srv
-		if err := s.syncCapacity(ctx, &tmp); err != nil {
+		err := s.syncCapacity(ctx, &tmp)
+		if err != nil {
 			return fmt.Errorf("%s: %w", op, err)
 		}
 
@@ -197,7 +217,8 @@ func (s *Service) SyncCapacities(ctx context.Context) error {
 			continue
 		}
 
-		if err := s.storage.Update(ctx, tmp); err != nil {
+		err = s.storage.Update(ctx, tmp)
+		if err != nil {
 			return fmt.Errorf("%s: %w", op, err)
 		}
 	}
@@ -274,8 +295,9 @@ func (s *Service) syncCapacity(ctx context.Context, srv *entities.Server) error 
 
 	maxClaws, err := s.capacity.Capacity(ctx, *srv)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrCapacitySync, err)
+		return fmt.Errorf("%w: %w", ErrCapacitySync, err)
 	}
+
 	if maxClaws <= 0 {
 		return fmt.Errorf("%w: invalid max claws %d", ErrCapacitySync, maxClaws)
 	}

@@ -43,6 +43,7 @@ func TestClassifyActionFlow(t *testing.T) {
 			if gotAction != tt.wantAction {
 				t.Fatalf("action = %q, want %q", gotAction, tt.wantAction)
 			}
+
 			if gotFlow != tt.wantFlow {
 				t.Fatalf("flow = %q, want %q", gotFlow, tt.wantFlow)
 			}

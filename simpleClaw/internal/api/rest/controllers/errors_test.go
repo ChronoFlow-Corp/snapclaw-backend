@@ -18,6 +18,7 @@ func TestMapServiceError_InvalidPairingCode(t *testing.T) {
 	if code != http.StatusBadRequest {
 		t.Fatalf("unexpected code: %d", code)
 	}
+
 	if message != "invalid code" {
 		t.Fatalf("unexpected message: %q", message)
 	}

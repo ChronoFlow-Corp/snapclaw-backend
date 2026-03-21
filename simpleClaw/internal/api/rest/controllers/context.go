@@ -18,15 +18,18 @@ func userIDFromContext(ctx context.Context) (uuid.UUID, error) {
 		if v == uuid.Nil {
 			return uuid.Nil, errUserIDNotFound
 		}
+
 		return v, nil
 	case string:
 		if v == "" {
 			return uuid.Nil, errUserIDNotFound
 		}
+
 		id, err := uuid.Parse(v)
 		if err != nil {
 			return uuid.Nil, err
 		}
+
 		return id, nil
 	default:
 		return uuid.Nil, errUserIDNotFound

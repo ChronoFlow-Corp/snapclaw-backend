@@ -5,14 +5,13 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	jwt2 "shared/pkg/jwt"
-	"shared/pkg/response"
-
-	"simpleClaw/internal/entities"
-	"simpleClaw/internal/pkg/slctx"
 
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/golang-jwt/jwt/v5"
+	jwt2 "shared/pkg/jwt"
+	"shared/pkg/response"
+	"simpleClaw/internal/entities"
+	"simpleClaw/internal/pkg/slctx"
 )
 
 type jwtProvider interface {
@@ -42,6 +41,7 @@ func AuthJwt(j jwtProvider) func(next http.Handler) http.Handler {
 					Code:    http.StatusUnauthorized,
 					Message: "Access token is invalid",
 				})
+
 				return
 			}
 

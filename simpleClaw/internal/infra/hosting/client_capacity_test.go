@@ -3,8 +3,9 @@ package hosting
 import (
 	"errors"
 	"net/http"
-	"shared/pkg/hostingapi"
 	"testing"
+
+	"shared/pkg/hostingapi"
 )
 
 func TestUnexpectedStatusError_MapsCapacityErrors(t *testing.T) {

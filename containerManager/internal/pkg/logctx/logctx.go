@@ -3,6 +3,7 @@ package logctx
 import (
 	"context"
 	"log/slog"
+
 	"shared/pkg/observability"
 )
 

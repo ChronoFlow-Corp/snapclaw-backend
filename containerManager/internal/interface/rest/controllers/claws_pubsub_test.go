@@ -8,6 +8,7 @@ import (
 func TestPubSubMessageKey(t *testing.T) {
 	t.Run("uses messageId when present", func(t *testing.T) {
 		body := []byte(`{"message":{"messageId":"abc-123"}}`)
+
 		got := pubSubMessageKey(body)
 		if got != "msg:abc-123" {
 			t.Fatalf("unexpected key: %q", got)
@@ -16,10 +17,12 @@ func TestPubSubMessageKey(t *testing.T) {
 
 	t.Run("falls back to hash when id missing", func(t *testing.T) {
 		body := []byte(`{"message":{"data":"xyz"}}`)
+
 		got := pubSubMessageKey(body)
 		if got == "" || got == "msg:" {
 			t.Fatalf("unexpected empty key: %q", got)
 		}
+
 		if len(got) < len("sha256:") || got[:7] != "sha256:" {
 			t.Fatalf("expected sha256 fallback, got: %q", got)
 		}

@@ -304,6 +304,7 @@ func (c *ClawConfig) AddTelegramChannel(ch *channels.TelegramConfig) {
 	if c.Channels == nil {
 		c.Channels = &ClawChannels{}
 	}
+
 	c.Channels.Telegram = NewTelegramChannelConfig(ch)
 
 	if c.Channels.Telegram != nil {

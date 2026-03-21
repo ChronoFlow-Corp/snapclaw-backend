@@ -5,15 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"shared/pkg/observability"
 	"strings"
 	"time"
 
-	"simpleClaw/internal/entities"
-
-	gopenrouter "github.com/revrost/go-openrouter"
-
 	"github.com/google/uuid"
+	gopenrouter "github.com/revrost/go-openrouter"
+	"shared/pkg/observability"
+	"simpleClaw/internal/entities"
 )
 
 // ApiKeyManager manages OpenRouter API keys through the go-openrouter client.
@@ -80,7 +78,9 @@ func (m *ApiKeyManager) Create(
 	monthlyBudgetUSD float64,
 ) (entities.OpenRouterKey, error) {
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.openrouter", "openrouter.key.create", "claw_lifecycle")
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	name := makeKeyName(userID, label)
@@ -110,6 +110,7 @@ func (m *ApiKeyManager) UpdateLimits(
 	monthlyBudgetUSD float64,
 ) (err error) {
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.openrouter", "openrouter.key.update_limits", "claw_lifecycle")
+
 	defer func() { finish(err) }()
 
 	limit := normalizeBudget(monthlyBudgetUSD)
@@ -119,23 +120,29 @@ func (m *ApiKeyManager) UpdateLimits(
 	}
 
 	_, err = m.client.UpdateAPIKey(ctx, keyID, req)
+
 	return wrapError(err)
 }
 
 // Delete removes the key from OpenRouter.
 func (m *ApiKeyManager) Delete(ctx context.Context, keyID string) (err error) {
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.openrouter", "openrouter.key.delete", "claw_lifecycle")
+
 	defer func() { finish(err) }()
 
 	_, err = m.client.DeleteAPIKey(ctx, keyID)
+
 	return wrapError(err)
 }
 
 // ResolveModel returns the fully-qualified model slug for OpenRouter agents config.
 func (m *ApiKeyManager) ResolveModel(ctx context.Context, model string) (string, error) {
 	const prefix = "openrouter/"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.openrouter", "openrouter.model.resolve", "claw_lifecycle")
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	slug := normalizeModelSlug(model)
@@ -201,6 +208,7 @@ func keyResetPtr(v gopenrouter.KeyLimitReset) *gopenrouter.KeyLimitReset {
 func normalizeModelSlug(slug string) string {
 	trimmed := strings.TrimSpace(slug)
 	trimmed = strings.TrimPrefix(trimmed, "openrouter/")
+
 	return trimmed
 }
 

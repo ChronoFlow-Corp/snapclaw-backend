@@ -32,6 +32,6 @@ observability:
     path: "/metrics"
   tracing:
     enabled: true
-    endpoint: "http://tempo:4318"
+    endpoint: "http://alloy:4318"
     insecure: true
     sample_ratio: 1

@@ -4,12 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"shared/pkg/response"
-
-	"simpleClaw/internal/entities"
-	"simpleClaw/internal/infra/sql"
 
 	"github.com/google/uuid"
+	"shared/pkg/response"
+	"simpleClaw/internal/entities"
+	"simpleClaw/internal/infra/sql"
 )
 
 type adminUserProvider interface {
@@ -33,6 +32,7 @@ func AdminOnly(users adminUserProvider) func(next http.Handler) http.Handler {
 			if err != nil {
 				code := http.StatusInternalServerError
 				message := "internal error"
+
 				if errors.Is(err, sql.ErrNotFound) {
 					code = http.StatusUnauthorized
 					message = "user not found"

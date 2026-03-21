@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"simpleClaw/internal/infra/sql"
-	"simpleClaw/internal/infra/sql/models"
-
-	"simpleClaw/internal/entities"
-
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"simpleClaw/internal/entities"
+	"simpleClaw/internal/infra/sql"
+	"simpleClaw/internal/infra/sql/models"
 )
 
 type Storage struct {
@@ -109,6 +107,7 @@ func (s *Storage) GetByUserID(ctx context.Context, userID uuid.UUID) ([]entities
 
 	for _, chDB := range chsDB {
 		var cfg entities.ClawChannels
+
 		err = json.Unmarshal(chDB.OpenClawConfig, &cfg)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", op, err)
@@ -149,6 +148,7 @@ func (s *Storage) GetByIDs(
 
 	for _, chDB := range chsDB {
 		var cfg entities.ClawChannels
+
 		err = json.Unmarshal(chDB.OpenClawConfig, &cfg)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", op, err)

@@ -11,11 +11,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"shared/pkg/jwt"
 	"sort"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"shared/pkg/jwt"
 	"simpleClaw/config"
 	"simpleClaw/internal/api/rest/controllers"
 	"simpleClaw/internal/entities"
@@ -24,9 +26,6 @@ import (
 	clawcommands "simpleClaw/internal/service/claw/commands"
 	servercommands "simpleClaw/internal/service/server/commands"
 	usercommands "simpleClaw/internal/service/user/commands"
-
-	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 )
 
 type testEnv struct {
@@ -67,6 +66,7 @@ func TestRoutesIntegration(t *testing.T) {
 		if !hasCookie(cookies, "access_token") {
 			t.Fatalf("expected access_token cookie in response")
 		}
+
 		if !hasCookie(cookies, "refresh_token") {
 			t.Fatalf("expected refresh_token cookie in response")
 		}
@@ -98,6 +98,7 @@ func TestRoutesIntegration(t *testing.T) {
 		if payload.ID != env.user.ID.String() {
 			t.Fatalf("unexpected user id: %s", payload.ID)
 		}
+
 		if payload.Email != env.user.Email {
 			t.Fatalf("unexpected email: %s", payload.Email)
 		}
@@ -132,12 +133,15 @@ func TestRoutesIntegration(t *testing.T) {
 		if payload.ID == "" {
 			t.Fatalf("expected non-empty channel ID")
 		}
+
 		if payload.Name != "alerts" {
 			t.Fatalf("unexpected channel name: %s", payload.Name)
 		}
+
 		if payload.ChannelType != entities.ChannelTelegramType {
 			t.Fatalf("unexpected channel type: %s", payload.ChannelType)
 		}
+
 		if payload.UserID != env.user.ID.String() {
 			t.Fatalf("unexpected user ID: %s", payload.UserID)
 		}
@@ -190,6 +194,7 @@ func TestRoutesIntegration(t *testing.T) {
 		if payload.ID != cl.ID.String() {
 			t.Fatalf("unexpected claw id: %s", payload.ID)
 		}
+
 		if payload.Name != "single" {
 			t.Fatalf("unexpected claw name: %s", payload.Name)
 		}
@@ -224,9 +229,11 @@ func TestRoutesIntegration(t *testing.T) {
 		if payload.ID == "" {
 			t.Fatalf("expected non-empty claw ID")
 		}
+
 		if payload.Name != "new-claw" {
 			t.Fatalf("unexpected claw name: %s", payload.Name)
 		}
+
 		if payload.Status != entities.StatusStop {
 			t.Fatalf("unexpected claw status: %s", payload.Status)
 		}
@@ -267,6 +274,7 @@ func TestRoutesIntegration(t *testing.T) {
 		if payload.ID != cl.ID.String() {
 			t.Fatalf("unexpected claw id: %s", payload.ID)
 		}
+
 		if payload.Name != "after-update" {
 			t.Fatalf("unexpected claw name: %s", payload.Name)
 		}
@@ -325,6 +333,7 @@ func TestRoutesIntegration(t *testing.T) {
 
 		var payload map[string]bool
 		decodeJSON(t, rr, &payload)
+
 		if !payload["started"] {
 			t.Fatalf("expected started=true, got payload=%v", payload)
 		}
@@ -359,6 +368,7 @@ func TestRoutesIntegration(t *testing.T) {
 
 		var payload map[string]bool
 		decodeJSON(t, rr, &payload)
+
 		if !payload["stopped"] {
 			t.Fatalf("expected stopped=true, got payload=%v", payload)
 		}
@@ -395,6 +405,7 @@ func TestRoutesIntegration(t *testing.T) {
 		if !payload["deleted"] {
 			t.Fatalf("expected deleted=true, got payload=%v", payload)
 		}
+
 		if env.clawService.exists(cl.ID) {
 			t.Fatalf("claw %s should be deleted", cl.ID)
 		}
@@ -443,12 +454,15 @@ func TestRoutesIntegration(t *testing.T) {
 		if payload.ID == "" {
 			t.Fatalf("expected non-empty server ID")
 		}
+
 		if payload.Name != "alpha" || payload.URL != "http://alpha.internal" {
 			t.Fatalf("unexpected payload: %+v", payload)
 		}
+
 		if payload.ProxyURL != "http://alpha.internal/gmail-pubsub" {
 			t.Fatalf("unexpected payload: %+v", payload)
 		}
+
 		if payload.MaxClaws != 7 {
 			t.Fatalf("unexpected maxClaws: %+v", payload)
 		}
@@ -475,6 +489,7 @@ func TestRoutesIntegration(t *testing.T) {
 		if len(payload) != 2 {
 			t.Fatalf("expected 2 servers, got %d", len(payload))
 		}
+
 		if payload[0].MaxClaws != 7 || payload[1].MaxClaws != 7 {
 			t.Fatalf("unexpected payload: %+v", payload)
 		}
@@ -506,6 +521,7 @@ func TestRoutesIntegration(t *testing.T) {
 		if payload.ID != srv.ID.String() || payload.Name != "single" {
 			t.Fatalf("unexpected payload: %+v", payload)
 		}
+
 		if payload.MaxClaws != 7 {
 			t.Fatalf("unexpected payload: %+v", payload)
 		}
@@ -549,12 +565,15 @@ func TestRoutesIntegration(t *testing.T) {
 		if payload.ID != srv.ID.String() || payload.Name != "after-update" {
 			t.Fatalf("unexpected payload: %+v", payload)
 		}
+
 		if payload.URL != "http://updated.internal" || payload.SecretKey != "updated-secret" {
 			t.Fatalf("unexpected payload: %+v", payload)
 		}
+
 		if payload.ProxyURL != "http://updated.internal/gmail-pubsub" {
 			t.Fatalf("unexpected payload: %+v", payload)
 		}
+
 		if payload.MaxClaws != 7 {
 			t.Fatalf("unexpected payload: %+v", payload)
 		}
@@ -582,6 +601,7 @@ func TestRoutesIntegration(t *testing.T) {
 		if !payload["deleted"] {
 			t.Fatalf("expected deleted=true, got payload=%v", payload)
 		}
+
 		if env.serverService.exists(srv.ID) {
 			t.Fatalf("server %s should be deleted", srv.ID)
 		}
@@ -668,8 +688,10 @@ func (e *testEnv) request(
 ) *httptest.ResponseRecorder {
 	t.Helper()
 
-	var reqBody []byte
-	var err error
+	var (
+		reqBody []byte
+		err     error
+	)
 
 	if body != nil {
 		reqBody, err = json.Marshal(body)
@@ -679,9 +701,11 @@ func (e *testEnv) request(
 	}
 
 	req := httptest.NewRequest(method, path, bytes.NewReader(reqBody))
+
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}
@@ -695,7 +719,8 @@ func (e *testEnv) request(
 func decodeJSON(t *testing.T, rr *httptest.ResponseRecorder, dst any) {
 	t.Helper()
 
-	if err := json.NewDecoder(rr.Body).Decode(dst); err != nil {
+	err := json.NewDecoder(rr.Body).Decode(dst)
+	if err != nil {
 		t.Fatalf("decode response: %v; body=%s", err, rr.Body.String())
 	}
 }
@@ -793,6 +818,7 @@ func (s *fakeUserService) AddChannel(
 	}
 
 	cfg := entities.ClawChannels{}
+
 	if cm.Telegram != nil {
 		cfg.Telegram = &entitychannels.TelegramConfig{
 			DmPolicy:  entitychannels.DmPolicy(cm.Telegram.DmPolicy),
@@ -908,6 +934,7 @@ func (s *fakeClawService) Update(
 	if cm.Name != nil {
 		existing.Name = *cm.Name
 	}
+
 	existing.UpdatedAt = time.Now()
 	s.claws[existing.ID] = existing
 

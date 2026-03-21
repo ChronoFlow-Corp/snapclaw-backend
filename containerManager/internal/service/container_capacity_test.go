@@ -12,7 +12,6 @@ import (
 	"containermanager/internal/infrastucture/pkg/docker"
 	"containermanager/internal/infrastucture/sql/storage"
 	"containermanager/internal/service/commands"
-
 	"github.com/google/uuid"
 )
 
@@ -35,6 +34,7 @@ func (r *fakeClawRepository) GetByUserClawID(_ context.Context, _ string, clawID
 			return cl, nil
 		}
 	}
+
 	if r.getByUserClawIDErr != nil {
 		return entities.Container{}, r.getByUserClawIDErr
 	}
@@ -49,6 +49,7 @@ func (r *fakeClawRepository) GetAll(context.Context) ([]entities.Container, erro
 func (r *fakeClawRepository) Update(_ context.Context, cl entities.Container) error {
 	r.updateCalled = true
 	r.updated = cl
+
 	return nil
 }
 
@@ -68,6 +69,7 @@ type fakeRuntime struct {
 
 func (r *fakeRuntime) Create(context.Context, docker.CreateOptions) (string, error) {
 	r.createCalled = true
+
 	return "container-1", nil
 }
 
@@ -76,6 +78,7 @@ func (r *fakeRuntime) Start(_ context.Context, containerID string) error {
 	if r.startFunc != nil {
 		return r.startFunc(containerID)
 	}
+
 	return nil
 }
 
@@ -84,9 +87,11 @@ func (r *fakeRuntime) Remove(context.Context, string) error { return nil }
 func (r *fakeRuntime) ExecGmail(context.Context, string, []byte, docker.ExecGmailOptions) error {
 	return nil
 }
+
 func (r *fakeRuntime) StartGmailWatch(context.Context, string, docker.ExecGmailWatchStartOptions) error {
 	return nil
 }
+
 func (r *fakeRuntime) StartGmailWatcher(context.Context, string, docker.ExecGmailWatcherOptions) error {
 	return nil
 }
@@ -120,6 +125,7 @@ func TestContainerCreate_ReturnsCapacityErrorWhenMaxClawsReached(t *testing.T) {
 	if !errors.Is(err, ErrServerCapacityExceeded) {
 		t.Fatalf("expected ErrServerCapacityExceeded, got %v", err)
 	}
+
 	if runtime.createCalled {
 		t.Fatal("docker create should not be called when capacity is exhausted")
 	}
@@ -157,6 +163,7 @@ func TestContainerStart_ColdStartRequiresEnoughMemory(t *testing.T) {
 	if !errors.Is(err, ErrServerMemoryUnavailable) {
 		t.Fatalf("expected ErrServerMemoryUnavailable, got %v", err)
 	}
+
 	if runtime.startCalled {
 		t.Fatal("docker start should not be called when memory is insufficient")
 	}
@@ -186,19 +193,23 @@ func TestContainerStart_WarmRestartUsesWarmThreshold(t *testing.T) {
 		warmStartMinBytes:   warmStartMinAvailableBytes,
 	}
 
-	if err := svc.Start(context.Background(), commands.StartClaw{UserID: "user-1", ClawID: "claw-1"}); err != nil {
+	err := svc.Start(context.Background(), commands.StartClaw{UserID: "user-1", ClawID: "claw-1"})
+	if err != nil {
 		t.Fatalf("start warm container: %v", err)
 	}
 
 	if !runtime.startCalled {
 		t.Fatal("expected docker start to be called")
 	}
+
 	if !repo.updateCalled {
 		t.Fatal("expected repository update")
 	}
+
 	if repo.updated.Status != entities.ContainerStatusRunning {
 		t.Fatalf("status = %q, want %q", repo.updated.Status, entities.ContainerStatusRunning)
 	}
+
 	if !repo.updated.HasStartedOnce {
 		t.Fatal("expected has_started_once to stay true")
 	}
@@ -212,7 +223,9 @@ func TestContainerStart_SerializesConcurrentStarts(t *testing.T) {
 	releaseFirst := make(chan struct{})
 
 	runtime := &fakeRuntime{}
+
 	var startMu sync.Mutex
+
 	startCalls := 0
 	runtime.startFunc = func(containerID string) error {
 		startMu.Lock()
@@ -222,11 +235,14 @@ func TestContainerStart_SerializesConcurrentStarts(t *testing.T) {
 
 		if call == 1 {
 			firstStarted <- struct{}{}
+
 			<-releaseFirst
+
 			return nil
 		}
 
 		secondStarted <- struct{}{}
+
 		return nil
 	}
 
@@ -287,7 +303,8 @@ func TestContainerStart_SerializesConcurrentStarts(t *testing.T) {
 	close(releaseFirst)
 
 	for range 2 {
-		if err := <-errCh; err != nil {
+		err := <-errCh
+		if err != nil {
 			t.Fatalf("start returned error: %v", err)
 		}
 	}

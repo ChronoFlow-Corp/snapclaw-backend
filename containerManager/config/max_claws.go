@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -15,54 +17,58 @@ const (
 )
 
 type MaxClaws struct {
-	Auto  bool
-	Value int
+	Auto  bool `yaml:"auto"  env-default:"true"`
+	Value int  `yaml:"value"`
 }
 
-func (m *MaxClaws) UnmarshalText(text []byte) error {
-	raw := strings.TrimSpace(string(text))
-	if raw == "" {
-		return errors.New("max_claws is required")
-	}
+//func (m *MaxClaws) UnmarshalText(text []byte) error {
+//	raw := strings.TrimSpace(string(text))
+//	if raw == "" {
+//		return errors.New("max_claws is required")
+//	}
+//
+//	if strings.EqualFold(raw, "auto") {
+//		m.Auto = true
+//		m.Value = 0
+//
+//		return nil
+//	}
+//
+//	value, err := strconv.Atoi(raw)
+//	if err != nil {
+//		return fmt.Errorf("parse max_claws: %w", err)
+//	}
+//
+//	if value <= 0 {
+//		return errors.New("max_claws must be greater than zero")
+//	}
+//
+//	m.Auto = false
+//	m.Value = value
+//
+//	return nil
+//}
+//
+//func (m *MaxClaws) UnmarshalYAML(unmarshal func(any) error) error {
+//	var raw any
+//	err := unmarshal(&raw)
+//	if err != nil {
+//		return err
+//	}
+//
+//	switch v := raw.(type) {
+//	case int:
+//		return m.UnmarshalText([]byte(strconv.Itoa(v)))
+//	case int64:
+//		return m.UnmarshalText([]byte(strconv.FormatInt(v, 10)))
+//	case string:
+//		return m.UnmarshalText([]byte(v))
+//	default:
+//		return fmt.Errorf("unsupported max_claws type %T", raw)
+//	}
+//}
 
-	if strings.EqualFold(raw, "auto") {
-		m.Auto = true
-		m.Value = 0
-		return nil
-	}
-
-	value, err := strconv.Atoi(raw)
-	if err != nil {
-		return fmt.Errorf("parse max_claws: %w", err)
-	}
-	if value <= 0 {
-		return errors.New("max_claws must be greater than zero")
-	}
-
-	m.Auto = false
-	m.Value = value
-	return nil
-}
-
-func (m *MaxClaws) UnmarshalYAML(unmarshal func(any) error) error {
-	var raw any
-	if err := unmarshal(&raw); err != nil {
-		return err
-	}
-
-	switch v := raw.(type) {
-	case int:
-		return m.UnmarshalText([]byte(strconv.Itoa(v)))
-	case int64:
-		return m.UnmarshalText([]byte(strconv.FormatInt(v, 10)))
-	case string:
-		return m.UnmarshalText([]byte(v))
-	default:
-		return fmt.Errorf("unsupported max_claws type %T", raw)
-	}
-}
-
-func (m MaxClaws) Resolve(totalBytes uint64, reserveBytes uint64) (int, error) {
+func (m *MaxClaws) Resolve(totalBytes uint64, reserveBytes uint64) (int, error) {
 	if !m.Auto {
 		if m.Value <= 0 {
 			return 0, errors.New("max_claws must be greater than zero")
@@ -83,10 +89,33 @@ func (m MaxClaws) Resolve(totalBytes uint64, reserveBytes uint64) (int, error) {
 	return value, nil
 }
 
-func (m MaxClaws) ResolveLinux() (int, error) {
-	totalBytes, err := readLinuxMemInfoValue("/proc/meminfo", "MemTotal")
-	if err != nil {
-		return 0, err
+func (m *MaxClaws) ResolveLinux() (int, error) {
+	//totalBytes, err := readLinuxMemInfoValue("/proc/meminfo", "MemTotal")
+	//if err != nil {
+	//	return 0, err
+	//}
+
+	var totalBytes uint64
+	var err error
+
+	switch runtime.GOOS {
+	case "linux":
+		totalBytes, err = readLinuxMemInfoValue("/proc/meminfo", "MemTotal")
+		if err != nil {
+			return 0, err
+		}
+
+	case "darwin":
+		out, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
+		if err != nil {
+			return 0, err
+		}
+		totalBytes, err = strconv.ParseUint(strings.TrimSpace(string(out)), 10, 64)
+		if err != nil {
+			return 0, err
+		}
+	default:
+		return 0, fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
 
 	return m.Resolve(totalBytes, defaultReserveBytes)
@@ -100,6 +129,7 @@ func readLinuxMemInfoValue(path string, key string) (uint64, error) {
 	defer f.Close()
 
 	prefix := key + ":"
+
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())

@@ -3,14 +3,13 @@ package middleware
 import (
 	"log/slog"
 	"net/http"
-	"shared/pkg/observability"
 	"strings"
 	"time"
 
 	"containermanager/internal/pkg/logctx"
-
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"shared/pkg/observability"
 )
 
 // Logger injects a logger into context and logs each request with duration and status.

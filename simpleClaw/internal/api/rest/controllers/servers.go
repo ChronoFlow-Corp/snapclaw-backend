@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+
 	"shared/pkg/jwt"
 	"shared/pkg/response"
-
 	"simpleClaw/internal/api/rest/dto"
 	"simpleClaw/internal/api/rest/middleware"
 	"simpleClaw/internal/entities"
@@ -58,6 +58,7 @@ func (s *Server) List(w http.ResponseWriter, r *http.Request) {
 	servers, err := s.service.GetAll(r.Context())
 	if err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 
@@ -83,6 +84,7 @@ func (s *Server) Get(w http.ResponseWriter, r *http.Request) {
 	srv, err := s.service.GetByID(r.Context(), id)
 	if err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 
@@ -111,6 +113,7 @@ func (s *Server) Create(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 
@@ -149,6 +152,7 @@ func (s *Server) Update(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 
@@ -168,6 +172,7 @@ func (s *Server) Delete(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.service.Delete(r.Context(), id); err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 

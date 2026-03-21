@@ -27,23 +27,30 @@ import (
 func main() {
 	cfg := config.MustLoadConfig()
 	logger := setupLogger()
+
 	maxClaws, err := cfg.MaxClaws.ResolveLinux()
 	if err != nil {
 		panic(err)
 	}
-	shutdownTracing, err := observability.SetupTracing(context.Background(), observability.TracingConfig{
-		ServiceName: "containermanager",
-		Environment: cfg.Environment,
-		Enabled:     cfg.Observability.Tracing.Enabled,
-		Endpoint:    cfg.Observability.Tracing.Endpoint,
-		Insecure:    cfg.Observability.Tracing.Insecure,
-		SampleRatio: cfg.Observability.Tracing.SampleRatio,
-	})
+
+	shutdownTracing, err := observability.SetupTracing(
+		context.Background(),
+		observability.TracingConfig{
+			ServiceName: "containermanager",
+			Environment: cfg.Environment,
+			Enabled:     cfg.Observability.Tracing.Enabled,
+			Endpoint:    cfg.Observability.Tracing.Endpoint,
+			Insecure:    cfg.Observability.Tracing.Insecure,
+			SampleRatio: cfg.Observability.Tracing.SampleRatio,
+		},
+	)
 	if err != nil {
 		panic(err)
 	}
+
 	defer func() {
-		if err := shutdownTracing(context.Background()); err != nil {
+		err := shutdownTracing(context.Background())
+		if err != nil {
 			logger.Error("failed to shutdown tracing provider", slog.Any("err", err))
 		}
 	}()
@@ -51,7 +58,8 @@ func main() {
 	ctx := context.Background()
 
 	if cfg.Migrations.Auto {
-		if err := migrations.Run(ctx, cfg.Postgres.URL, cfg.Migrations.Path); err != nil {
+		err := migrations.Run(ctx, cfg.Postgres.URL, cfg.Migrations.Path)
+		if err != nil {
 			panic(err)
 		}
 	}
@@ -62,14 +70,17 @@ func main() {
 	}
 
 	metricsRegistry := observability.NewPrometheusRegistry()
+
 	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
 	if err != nil {
 		panic(err)
 	}
+
 	operationMetrics, err := observability.NewOperationMetrics(metricsRegistry, "containermanager")
 	if err != nil {
 		panic(err)
 	}
+
 	pubSubMetrics, err := observability.NewPubSubFanoutMetrics(metricsRegistry, "containermanager")
 	if err != nil {
 		panic(err)
@@ -116,6 +127,7 @@ func main() {
 	mux.Use(restmw.Logger())
 	mux.Use(middleware.Recoverer)
 	mux.Use(httpMetrics.Middleware(restmw.ClassifyActionFlow, restmw.RoutePattern))
+
 	if cfg.Observability.Metrics.Enabled {
 		mux.Handle(cfg.Observability.Metrics.Path, observability.Handler(metricsRegistry))
 	}
@@ -123,6 +135,7 @@ func main() {
 	cl.Register(mux)
 
 	var handler http.Handler = mux
+
 	if cfg.Observability.Tracing.Enabled {
 		handler = observability.WrapHTTPHandler(handler, "containermanager.http")
 	}

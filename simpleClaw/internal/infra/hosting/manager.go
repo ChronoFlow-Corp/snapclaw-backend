@@ -6,14 +6,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"shared/pkg/hostingapi"
-	"shared/pkg/observability"
 	"sort"
 	"strings"
 
-	"simpleClaw/internal/entities"
-
 	"github.com/google/uuid"
+	"shared/pkg/hostingapi"
+	"shared/pkg/observability"
+	"simpleClaw/internal/entities"
 )
 
 const (
@@ -29,6 +28,7 @@ type Manager struct {
 
 func NewManager(metrics ...*observability.OperationMetrics) *Manager {
 	var opMetrics *observability.OperationMetrics
+
 	if len(metrics) > 0 {
 		opMetrics = metrics[0]
 	}
@@ -45,8 +45,11 @@ func (m *Manager) Create(
 	server entities.Server,
 ) (Container, error) {
 	const op = "infra.hosting.Manager.Create"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.create", "claw_lifecycle")
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	if m == nil || m.client == nil {
@@ -130,6 +133,7 @@ func (m *Manager) Capacity(ctx context.Context, server entities.Server) (int, er
 	if err != nil {
 		return 0, fmt.Errorf("%s: %w", op, err)
 	}
+
 	if resp.MaxClaws <= 0 {
 		return 0, fmt.Errorf("%s: invalid max claws %d", op, resp.MaxClaws)
 	}
@@ -144,7 +148,9 @@ func (m *Manager) Delete(
 	deleteConfig bool,
 ) (err error) {
 	const op = "infra.hosting.Manager.Delete"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.delete", "claw_lifecycle")
+
 	defer func() { finish(err) }()
 
 	if m == nil || m.client == nil {
@@ -185,7 +191,9 @@ func (m *Manager) Start(
 	server entities.Server,
 ) (err error) {
 	const op = "infra.hosting.Manager.Start"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.start", "claw_lifecycle")
+
 	defer func() { finish(err) }()
 
 	if m == nil || m.client == nil {
@@ -223,7 +231,9 @@ func (m *Manager) Stop(
 	server entities.Server,
 ) (err error) {
 	const op = "infra.hosting.Manager.Stop"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.stop", "claw_lifecycle")
+
 	defer func() { finish(err) }()
 
 	if m == nil || m.client == nil {
@@ -261,7 +271,9 @@ func (m *Manager) Update(
 	server entities.Server,
 ) (err error) {
 	const op = "infra.hosting.Manager.Update"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.update", "claw_lifecycle")
+
 	defer func() { finish(err) }()
 
 	if m == nil || m.client == nil {
@@ -311,8 +323,11 @@ func (m *Manager) ConfigArchive(
 	deleteAfter bool,
 ) (io.ReadCloser, error) {
 	const op = "infra.hosting.Manager.ConfigArchive"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.config_archive", "claw_lifecycle")
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	if m == nil || m.client == nil {
@@ -349,7 +364,9 @@ func (m *Manager) RestoreConfigArchive(
 	body io.Reader,
 ) (err error) {
 	const op = "infra.hosting.Manager.RestoreConfigArchive"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.config_restore", "claw_lifecycle")
+
 	defer func() { finish(err) }()
 
 	if m == nil || m.client == nil {
@@ -406,14 +423,15 @@ func (m *Manager) ApprovePairing(
 		return fmt.Errorf("%s: code is required", op)
 	}
 
-	if err := m.client.approvePairing(
+	err := m.client.approvePairing(
 		ctx,
 		server.URL,
 		map[string]string{"Authorization": server.SecretKey},
 		cl.UserID.String(),
 		cl.ID.String(),
 		code,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -457,7 +475,7 @@ func (m *Manager) Connect(
 		return fmt.Errorf("%s: token is required", op)
 	}
 
-	if err := m.client.connect(
+	err := m.client.connect(
 		ctx,
 		server.URL,
 		map[string]string{"Authorization": server.SecretKey},
@@ -465,7 +483,8 @@ func (m *Manager) Connect(
 		cl.ID.String(),
 		provider,
 		token,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -494,6 +513,7 @@ func buildVars(cfg entities.ClawConfig) []string {
 		if value == "" {
 			continue
 		}
+
 		vars[key] = value
 	}
 
@@ -519,6 +539,7 @@ func buildVars(cfg entities.ClawConfig) []string {
 	for key := range vars {
 		keys = append(keys, key)
 	}
+
 	sort.Strings(keys)
 
 	result := make([]string, 0, len(keys))
@@ -531,5 +552,6 @@ func buildVars(cfg entities.ClawConfig) []string {
 
 func isVarRef(value string) bool {
 	value = strings.TrimSpace(value)
+
 	return strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}")
 }

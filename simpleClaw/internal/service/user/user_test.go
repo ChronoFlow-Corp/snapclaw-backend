@@ -9,13 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"shared/pkg/jwt"
-
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/service/user/commands"
-
-	"github.com/google/uuid"
 )
 
 func TestSignInCreatesAdminUserForConfiguredEmail(t *testing.T) {
@@ -54,6 +52,7 @@ func TestSignInUpdatesRoleForExistingConfiguredAdmin(t *testing.T) {
 	t.Parallel()
 
 	storage := newFakeUserStorage()
+
 	existing := entities.NewUser("User", "user", "", "admin@example.com", entities.UserRole)
 	if err := storage.Create(context.Background(), existing); err != nil {
 		t.Fatalf("seed user: %v", err)
@@ -119,21 +118,25 @@ func newFakeUserStorage() *fakeUserStorage {
 
 func (s *fakeUserStorage) Create(_ context.Context, u entities.User) error {
 	s.users[u.ID] = u
+
 	return nil
 }
 
 func (s *fakeUserStorage) Delete(_ context.Context, id uuid.UUID) error {
 	delete(s.users, id)
+
 	return nil
 }
 
 func (s *fakeUserStorage) CreateSession(_ context.Context, session entities.Session) error {
 	s.sessions[session.ID] = session
+
 	return nil
 }
 
 func (s *fakeUserStorage) DeleteSession(_ context.Context, session entities.Session) error {
 	delete(s.sessions, session.ID)
+
 	return nil
 }
 
@@ -169,6 +172,7 @@ func (s *fakeUserStorage) UpdateSessionRefresh(
 
 	session.RefreshToken = refreshToken
 	s.sessions[sessionID] = session
+
 	return nil
 }
 
@@ -201,6 +205,7 @@ func (s *fakeUserStorage) UpdateRole(_ context.Context, id uuid.UUID, role strin
 
 	user.Role = role
 	s.users[id] = user
+
 	return nil
 }
 
@@ -217,6 +222,7 @@ func (s *fakeUserStorage) UpdateOpenRouterKey(
 	user.OpenRouterKeyID = key.ID
 	user.OpenRouterApiKey = key.Secret
 	s.users[id] = user
+
 	return nil
 }
 

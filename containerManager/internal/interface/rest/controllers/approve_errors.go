@@ -3,9 +3,9 @@ package controllers
 import (
 	"errors"
 	"net/http"
-	"shared/pkg/hostingapi"
 
 	"containermanager/internal/service"
+	"shared/pkg/hostingapi"
 )
 
 func mapApproveError(err error) (int, hostingapi.ErrorResponse) {

@@ -3,10 +3,10 @@ package controllers
 import (
 	"fmt"
 	"net/http"
-	"shared/pkg/hostingapi"
 	"testing"
 
 	"containermanager/internal/service"
+	"shared/pkg/hostingapi"
 )
 
 func TestMapApproveError(t *testing.T) {
@@ -22,9 +22,11 @@ func TestMapApproveError(t *testing.T) {
 		if code != http.StatusBadRequest {
 			t.Fatalf("unexpected code: %d", code)
 		}
+
 		if payload.Code != hostingapi.ErrCodeInvalidCode {
 			t.Fatalf("unexpected payload code: %q", payload.Code)
 		}
+
 		if payload.Message != service.ErrInvalidCode.Error() {
 			t.Fatalf("unexpected payload message: %q", payload.Message)
 		}
@@ -38,9 +40,11 @@ func TestMapApproveError(t *testing.T) {
 		if code != http.StatusInternalServerError {
 			t.Fatalf("unexpected code: %d", code)
 		}
+
 		if payload.Code != hostingapi.ErrCodeInternal {
 			t.Fatalf("unexpected payload code: %q", payload.Code)
 		}
+
 		if payload.Message != "boom" {
 			t.Fatalf("unexpected payload message: %q", payload.Message)
 		}

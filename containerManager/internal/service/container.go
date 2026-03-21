@@ -1,17 +1,14 @@
 package service
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"shared/pkg/hostingapi"
 	"shared/pkg/observability"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,9 +43,11 @@ type GogConfig struct {
 
 var errForbidden = errors.New("container belongs to another user")
 
-var ErrInvalidCode = errors.New("invalid code")
-var ErrServerCapacityExceeded = errors.New("server capacity exceeded")
-var ErrServerMemoryUnavailable = errors.New("server memory unavailable")
+var (
+	ErrInvalidCode             = errors.New("invalid code")
+	ErrServerCapacityExceeded  = errors.New("server capacity exceeded")
+	ErrServerMemoryUnavailable = errors.New("server memory unavailable")
+)
 
 const (
 	coldStartMinAvailableBytes = 2 * 1024 * 1024 * 1024
@@ -64,6 +63,7 @@ func NewContainer(
 	metrics ...*observability.OperationMetrics,
 ) (*Container, error) {
 	var opMetrics *observability.OperationMetrics
+
 	if len(metrics) > 0 {
 		opMetrics = metrics[0]
 	}
@@ -74,7 +74,7 @@ func NewContainer(
 		manager:             manager,
 		p:                   NewPorter(),
 		maxClaws:            maxClaws,
-		readAvailableMemory: readLinuxMemAvailableBytes,
+		readAvailableMemory: readAvailableMemoryBytes,
 		coldStartMinBytes:   coldStartMinAvailableBytes,
 		warmStartMinBytes:   warmStartMinAvailableBytes,
 		metrics:             opMetrics,
@@ -118,11 +118,16 @@ func (c *Container) ensureMemoryAvailable(requiredBytes uint64) error {
 
 	availableBytes, err := c.readAvailableMemory()
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrServerMemoryUnavailable, err)
+		return fmt.Errorf("%w: %w", ErrServerMemoryUnavailable, err)
 	}
 
 	if availableBytes < requiredBytes {
-		return fmt.Errorf("%w: available=%d required=%d", ErrServerMemoryUnavailable, availableBytes, requiredBytes)
+		return fmt.Errorf(
+			"%w: available=%d required=%d",
+			ErrServerMemoryUnavailable,
+			availableBytes,
+			requiredBytes,
+		)
 	}
 
 	return nil
@@ -130,6 +135,7 @@ func (c *Container) ensureMemoryAvailable(requiredBytes uint64) error {
 
 func (c *Container) Start(ctx context.Context, cm commands.StartClaw) (err error) {
 	const op = "service.Container.Start"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -138,6 +144,7 @@ func (c *Container) Start(ctx context.Context, cm commands.StartClaw) (err error
 		"claw.start",
 		"claw_lifecycle",
 	)
+
 	defer func() { finish(err) }()
 
 	if cm.UserID == "" {
@@ -161,6 +168,7 @@ func (c *Container) Start(ctx context.Context, cm commands.StartClaw) (err error
 	}
 
 	requiredMemory := c.coldStartMinBytes
+
 	if cont.HasStartedOnce {
 		requiredMemory = c.warmStartMinBytes
 	}
@@ -187,6 +195,7 @@ func (c *Container) Start(ctx context.Context, cm commands.StartClaw) (err error
 
 func (c *Container) Stop(ctx context.Context, cm commands.StopClaw) (err error) {
 	const op = "service.Container.Stop"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -195,6 +204,7 @@ func (c *Container) Stop(ctx context.Context, cm commands.StopClaw) (err error) 
 		"claw.stop",
 		"claw_lifecycle",
 	)
+
 	defer func() { finish(err) }()
 
 	if cm.UserID == "" {
@@ -231,6 +241,7 @@ func (c *Container) Stop(ctx context.Context, cm commands.StopClaw) (err error) 
 
 func (c *Container) Update(ctx context.Context, cm commands.UpdateClaw) (err error) {
 	const op = "service.Container.Update"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -239,6 +250,7 @@ func (c *Container) Update(ctx context.Context, cm commands.UpdateClaw) (err err
 		"claw.update",
 		"claw_lifecycle",
 	)
+
 	defer func() { finish(err) }()
 
 	if cm.UserID == "" {
@@ -271,6 +283,7 @@ func (c *Container) Restart() error {
 
 func (c *Container) Delete(ctx context.Context, cm commands.DeleteClaw) (err error) {
 	const op = "service.Container.Delete"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -279,6 +292,7 @@ func (c *Container) Delete(ctx context.Context, cm commands.DeleteClaw) (err err
 		"claw.delete",
 		"claw_lifecycle",
 	)
+
 	defer func() { finish(err) }()
 
 	if cm.UserID == "" {
@@ -315,7 +329,8 @@ func (c *Container) Delete(ctx context.Context, cm commands.DeleteClaw) (err err
 			return fmt.Errorf("%s: configurer is not configured", op)
 		}
 
-		if err := c.cfg.DeleteClawConfig(cm.UserID, cm.ClawID); err != nil {
+		err := c.cfg.DeleteClawConfig(cm.UserID, cm.ClawID)
+		if err != nil {
 			return fmt.Errorf("%s: %w", op, err)
 		}
 	}
@@ -325,6 +340,7 @@ func (c *Container) Delete(ctx context.Context, cm commands.DeleteClaw) (err err
 
 func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string, error) {
 	const op = "service.Container.CreateClaw"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -333,7 +349,9 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 		"claw.create",
 		"claw_lifecycle",
 	)
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	if cm.UserID == "" {
@@ -377,6 +395,7 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 	gogWatchPort, err := GogWatchPortFromGateway(cPort)
 	if err != nil {
 		c.p.Release(cPort)
+
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -405,10 +424,12 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 	})
 	if err != nil {
 		releasePort()
+
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
 
 	containerRecordID := uuid.New()
+
 	err = c.clRepo.Create(ctx, entities.Container{
 		ID:             containerRecordID,
 		UserID:         cm.UserID,
@@ -420,7 +441,9 @@ func (c *Container) Create(ctx context.Context, cm commands.CreateClaw) (string,
 	})
 	if err != nil {
 		_ = c.manager.Remove(ctx, cID)
+
 		releasePort()
+
 		return "", fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -438,7 +461,8 @@ func (c *Container) ConfigArchive(
 ) error {
 	const op = "service.Container.ConfigArchive"
 
-	if err := ctx.Err(); err != nil {
+	err := ctx.Err()
+	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -454,12 +478,14 @@ func (c *Container) ConfigArchive(
 		return fmt.Errorf("%s: configurer is not configured", op)
 	}
 
-	if err := c.cfg.ArchiveClawConfig(cm.UserID, cm.ClawID, w); err != nil {
+	err = c.cfg.ArchiveClawConfig(cm.UserID, cm.ClawID, w)
+	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	if cm.DeleteAfter {
-		if err := c.cfg.DeleteClawConfig(cm.UserID, cm.ClawID); err != nil {
+		err := c.cfg.DeleteClawConfig(cm.UserID, cm.ClawID)
+		if err != nil {
 			return fmt.Errorf("%s: %w", op, err)
 		}
 	}
@@ -474,7 +500,8 @@ func (c *Container) RestoreConfig(
 ) error {
 	const op = "service.Container.RestoreConfig"
 
-	if err := ctx.Err(); err != nil {
+	err := ctx.Err()
+	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -490,7 +517,8 @@ func (c *Container) RestoreConfig(
 		return fmt.Errorf("%s: configurer is not configured", op)
 	}
 
-	if err := c.cfg.RestoreClawConfig(cm.UserID, cm.ClawID, r); err != nil {
+	err = c.cfg.RestoreClawConfig(cm.UserID, cm.ClawID, r)
+	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -509,6 +537,7 @@ func (c *Container) Approve(clawID, userID, code string) error {
 		if errors.Is(err, configurer.ErrInvalidCode) {
 			return fmt.Errorf("%s: %w", op, ErrInvalidCode)
 		}
+
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -635,38 +664,4 @@ func (c *Container) containerVolumes(cfgPath string) []string {
 			docker.GogBootstrapCredentialsPath,
 		),
 	)
-}
-
-func readLinuxMemAvailableBytes() (uint64, error) {
-	f, err := os.Open("/proc/meminfo")
-	if err != nil {
-		return 0, fmt.Errorf("open /proc/meminfo: %w", err)
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "MemAvailable:") {
-			continue
-		}
-
-		fields := strings.Fields(strings.TrimPrefix(line, "MemAvailable:"))
-		if len(fields) == 0 {
-			return 0, errors.New("MemAvailable value is missing")
-		}
-
-		value, err := strconv.ParseUint(fields[0], 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("parse MemAvailable: %w", err)
-		}
-
-		return value * 1024, nil
-	}
-
-	if err := scanner.Err(); err != nil {
-		return 0, fmt.Errorf("scan /proc/meminfo: %w", err)
-	}
-
-	return 0, errors.New("MemAvailable is not present in /proc/meminfo")
 }

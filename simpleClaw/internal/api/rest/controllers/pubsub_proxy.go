@@ -70,10 +70,7 @@ func NewPubSubProxy(servers proxyTargetService, opts PubSubProxyOptions) *PubSub
 		retryBackoff = 250 * time.Millisecond
 	}
 
-	retryCount := opts.RetryCount
-	if retryCount < 0 {
-		retryCount = 0
-	}
+	retryCount := max(opts.RetryCount, 0)
 
 	return &PubSubProxy{
 		servers:        servers,
@@ -97,7 +94,9 @@ func (p *PubSubProxy) Health(w http.ResponseWriter, _ *http.Request) {
 
 func (p *PubSubProxy) HandlePubSub(w http.ResponseWriter, r *http.Request) {
 	startedAt := time.Now()
+
 	var flowErr error
+
 	targetCount := 0
 	successCount := 0
 	ctxWithComponent := observability.WithComponent(r.Context(), "controller.pubsub_proxy")
@@ -107,30 +106,49 @@ func (p *PubSubProxy) HandlePubSub(w http.ResponseWriter, r *http.Request) {
 		"gmail_pubsub_fanout",
 		"pubsub.forward",
 	)
+
 	defer func() {
-		p.metrics.Observe("gmail_pubsub_fanout", targetCount, successCount, flowErr, time.Since(startedAt))
+		p.metrics.Observe(
+			"gmail_pubsub_fanout",
+			targetCount,
+			successCount,
+			flowErr,
+			time.Since(startedAt),
+		)
 		finishFlow(flowErr)
 	}()
+
 	r = r.WithContext(ctx)
 
 	if !isJSONContentType(r.Header.Get("Content-Type")) {
-		flowErr = observability.DecorateError(errors.New("invalid content type"), observability.ErrorAttrs{
-			Result: observability.ResultValidationError,
-			Kind:   observability.ErrorKindValidation,
-			Source: observability.ErrorSourceHTTP,
-		})
+		flowErr = observability.DecorateError(
+			errors.New("invalid content type"),
+			observability.ErrorAttrs{
+				Result: observability.ResultValidationError,
+				Kind:   observability.ErrorKindValidation,
+				Source: observability.ErrorSourceHTTP,
+			},
+		)
+
 		http.Error(w, "content type must be application/json", http.StatusUnsupportedMediaType)
+
 		return
 	}
 
 	if !p.isAuthorized(inboundToken(r)) {
 		logger.Warn("pubsub request rejected", slog.String("reason", "invalid ingress token"))
-		flowErr = observability.DecorateError(errors.New("invalid ingress token"), observability.ErrorAttrs{
-			Result: observability.ResultDenied,
-			Kind:   observability.ErrorKindDenied,
-			Source: observability.ErrorSourceHTTP,
-		})
+
+		flowErr = observability.DecorateError(
+			errors.New("invalid ingress token"),
+			observability.ErrorAttrs{
+				Result: observability.ResultDenied,
+				Kind:   observability.ErrorKindDenied,
+				Source: observability.ErrorSourceHTTP,
+			},
+		)
+
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+
 		return
 	}
 
@@ -142,7 +160,9 @@ func (p *PubSubProxy) HandlePubSub(w http.ResponseWriter, r *http.Request) {
 			Kind:   observability.ErrorKindValidation,
 			Source: observability.ErrorSourceHTTP,
 		})
+
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
+
 		return
 	}
 
@@ -150,7 +170,9 @@ func (p *PubSubProxy) HandlePubSub(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		logger.Error("failed to load proxy targets", slog.Any("err", err))
 		flowErr = err
+
 		http.Error(w, "failed to load targets", http.StatusServiceUnavailable)
+
 		return
 	}
 
@@ -185,12 +207,18 @@ func (p *PubSubProxy) HandlePubSub(w http.ResponseWriter, r *http.Request) {
 
 	if len(targets) == 0 {
 		logger.Warn("pubsub request has no configured downstream targets")
-		flowErr = observability.DecorateError(errors.New("no downstream targets configured"), observability.ErrorAttrs{
-			Result: observability.ResultError,
-			Kind:   observability.ErrorKindUnexpected,
-			Source: observability.ErrorSourceExternal,
-		})
+
+		flowErr = observability.DecorateError(
+			errors.New("no downstream targets configured"),
+			observability.ErrorAttrs{
+				Result: observability.ResultError,
+				Kind:   observability.ErrorKindUnexpected,
+				Source: observability.ErrorSourceExternal,
+			},
+		)
+
 		http.Error(w, "no downstream targets configured", http.StatusBadGateway)
+
 		return
 	}
 
@@ -198,11 +226,13 @@ func (p *PubSubProxy) HandlePubSub(w http.ResponseWriter, r *http.Request) {
 	results := make(chan forwardResult, len(targets))
 
 	var wg sync.WaitGroup
+
 	for _, target := range targets {
 		wg.Add(1)
 
 		go func(ctx context.Context, target proxyTarget) {
 			defer wg.Done()
+
 			results <- p.forward(ctx, logger, target, body, headers)
 		}(r.Context(), target)
 	}
@@ -211,29 +241,40 @@ func (p *PubSubProxy) HandlePubSub(w http.ResponseWriter, r *http.Request) {
 	close(results)
 
 	successCount = 0
+
 	for res := range results {
-		if res.err == nil && res.statusCode >= http.StatusOK && res.statusCode < http.StatusMultipleChoices {
+		if res.err == nil && res.statusCode >= http.StatusOK &&
+			res.statusCode < http.StatusMultipleChoices {
 			successCount++
 		}
 	}
 
 	if successCount > 0 {
 		if successCount < len(targets) {
-			flowErr = observability.DecorateError(errors.New("partial downstream failure"), observability.ErrorAttrs{
-				Result: observability.ResultPartialSuccess,
-				Kind:   observability.ErrorKindUnexpected,
-				Source: observability.ErrorSourceExternal,
-			})
+			flowErr = observability.DecorateError(
+				errors.New("partial downstream failure"),
+				observability.ErrorAttrs{
+					Result: observability.ResultPartialSuccess,
+					Kind:   observability.ErrorKindUnexpected,
+					Source: observability.ErrorSourceExternal,
+				},
+			)
 		}
+
 		writePlainText(logger, w, http.StatusOK, "OK")
+
 		return
 	}
 
-	flowErr = observability.DecorateError(errors.New("all downstream requests failed"), observability.ErrorAttrs{
-		Result: observability.ResultError,
-		Kind:   observability.ErrorKindUnexpected,
-		Source: observability.ErrorSourceExternal,
-	})
+	flowErr = observability.DecorateError(
+		errors.New("all downstream requests failed"),
+		observability.ErrorAttrs{
+			Result: observability.ResultError,
+			Kind:   observability.ErrorKindUnexpected,
+			Source: observability.ErrorSourceExternal,
+		},
+	)
+
 	http.Error(w, "all downstream requests failed", http.StatusBadGateway)
 }
 
@@ -244,15 +285,14 @@ func (p *PubSubProxy) forward(
 	body []byte,
 	headers http.Header,
 ) forwardResult {
-	attempts := p.retryCount + 1
-	if attempts < 1 {
-		attempts = 1
-	}
+	attempts := max(p.retryCount+1, 1)
 
 	var result forwardResult
+
 	for attempt := 1; attempt <= attempts; attempt++ {
 		result = p.forwardOnce(ctx, logger, target, body, headers, attempt)
-		if result.err == nil && result.statusCode >= http.StatusOK && result.statusCode < http.StatusMultipleChoices {
+		if result.err == nil && result.statusCode >= http.StatusOK &&
+			result.statusCode < http.StatusMultipleChoices {
 			return result
 		}
 
@@ -269,7 +309,9 @@ func (p *PubSubProxy) forward(
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+
 			result.err = ctx.Err()
+
 			return result
 		case <-timer.C:
 		}
@@ -291,7 +333,12 @@ func (p *PubSubProxy) forwardOnce(
 	reqCtx, cancel := context.WithTimeout(ctx, p.forwardTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, target.URL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(
+		reqCtx,
+		http.MethodPost,
+		target.URL,
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		logger.Error(
 			"failed to build downstream request",
@@ -309,6 +356,7 @@ func (p *PubSubProxy) forwardOnce(
 	}
 
 	req.Header = headers.Clone()
+
 	if target.AuthToken != "" {
 		req.Header.Set("Authorization", target.AuthToken)
 	}
@@ -331,6 +379,7 @@ func (p *PubSubProxy) forwardOnce(
 			err:      err,
 		}
 	}
+
 	if err := drainAndClose(logger, resp.Body); err != nil {
 		logger.Warn(
 			"failed to drain downstream response body",
@@ -379,7 +428,8 @@ func shouldRetryForward(result forwardResult) bool {
 		return true
 	}
 
-	return result.statusCode == http.StatusTooManyRequests || result.statusCode >= http.StatusInternalServerError
+	return result.statusCode == http.StatusTooManyRequests ||
+		result.statusCode >= http.StatusInternalServerError
 }
 
 func buildProxyTarget(srv entities.Server) (proxyTarget, error) {
@@ -479,14 +529,16 @@ func writePlainText(logger *slog.Logger, w http.ResponseWriter, status int, body
 
 func drainAndClose(logger *slog.Logger, body io.ReadCloser) error {
 	if _, err := io.Copy(io.Discard, body); err != nil {
-		if closeErr := body.Close(); closeErr != nil {
+		closeErr := body.Close()
+		if closeErr != nil {
 			logger.Warn("failed to close downstream response body", slog.Any("err", closeErr))
 		}
 
 		return err
 	}
 
-	if err := body.Close(); err != nil {
+	err := body.Close()
+	if err != nil {
 		return err
 	}
 

@@ -8,9 +8,8 @@ import (
 	"shared/pkg/response"
 	"strings"
 
-	"simpleClaw/internal/api/rest/middleware"
-
 	"simpleClaw/internal/api/rest/dto"
+	"simpleClaw/internal/api/rest/middleware"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/service/claw/commands"
 
@@ -95,6 +94,7 @@ func (c *Claw) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var limits commands.ApiKeyLimits
+
 	if req.ApiLimits != nil {
 		limits.MonthlyBudgetUSD = req.ApiLimits.MonthlyBudgetUSD
 	}
@@ -126,12 +126,14 @@ func (c *Claw) List(w http.ResponseWriter, r *http.Request) {
 			Code:    http.StatusUnauthorized,
 			Message: "User ID should be a UUID",
 		})
+
 		return
 	}
 
 	cls, err := c.service.GetByUserID(r.Context(), userID)
 	if err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 
@@ -150,12 +152,14 @@ func (c *Claw) List(w http.ResponseWriter, r *http.Request) {
 
 func (c *Claw) Get(w http.ResponseWriter, r *http.Request) {
 	rawID := chi.URLParam(r, "id")
+
 	id, err := uuid.Parse(rawID)
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusBadRequest,
 			Message: "invalid claw id",
 		})
+
 		return
 	}
 
@@ -165,12 +169,14 @@ func (c *Claw) Get(w http.ResponseWriter, r *http.Request) {
 			Code:    http.StatusUnauthorized,
 			Message: "invalid user id",
 		})
+
 		return
 	}
 
 	cl, err := c.service.GetByID(r.Context(), id, userID)
 	if err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 
@@ -183,12 +189,14 @@ func (c *Claw) Get(w http.ResponseWriter, r *http.Request) {
 
 func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
 	rawID := chi.URLParam(r, "id")
+
 	id, err := uuid.Parse(rawID)
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusBadRequest,
 			Message: "invalid claw id: " + rawID,
 		})
+
 		return
 	}
 
@@ -198,6 +206,7 @@ func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
 			Code:    http.StatusBadRequest,
 			Message: "invalid request body",
 		})
+
 		return
 	}
 
@@ -207,10 +216,12 @@ func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
 			Code:    http.StatusUnauthorized,
 			Message: "invalid user id",
 		})
+
 		return
 	}
 
 	var channelIDs []uuid.UUID
+
 	if req.ChannelIDs != nil {
 		channelIDs = make([]uuid.UUID, 0, len(req.ChannelIDs))
 		for _, raw := range req.ChannelIDs {
@@ -220,6 +231,7 @@ func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
 					Code:    http.StatusBadRequest,
 					Message: "invalid channel id",
 				})
+
 				return
 			}
 
@@ -228,6 +240,7 @@ func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var limits commands.ApiKeyLimits
+
 	if req.ApiLimits != nil {
 		limits.MonthlyBudgetUSD = req.ApiLimits.MonthlyBudgetUSD
 	}
@@ -242,6 +255,7 @@ func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 
@@ -250,12 +264,14 @@ func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
 
 func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 	rawID := chi.URLParam(r, "id")
+
 	id, err := uuid.Parse(rawID)
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusBadRequest,
 			Message: "invalid claw id",
 		})
+
 		return
 	}
 
@@ -265,6 +281,7 @@ func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 			Code:    http.StatusUnauthorized,
 			Message: "invalid user id",
 		})
+
 		return
 	}
 
@@ -274,6 +291,7 @@ func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 		DeleteConfig: true,
 	}); err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 
@@ -282,6 +300,7 @@ func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 
 func (c *Claw) Start(w http.ResponseWriter, r *http.Request) {
 	rawID := chi.URLParam(r, "id")
+
 	id, err := uuid.Parse(rawID)
 	if err != nil {
 		response.RespondError(w, response.Error{
@@ -308,6 +327,7 @@ func (c *Claw) Start(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 
@@ -316,6 +336,7 @@ func (c *Claw) Start(w http.ResponseWriter, r *http.Request) {
 
 func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
 	rawID := chi.URLParam(r, "id")
+
 	id, err := uuid.Parse(rawID)
 	if err != nil {
 		response.RespondError(w, response.Error{
@@ -342,6 +363,7 @@ func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 
@@ -350,6 +372,7 @@ func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
 
 func (c *Claw) ApprovePairing(w http.ResponseWriter, r *http.Request) {
 	rawID := chi.URLParam(r, "id")
+
 	id, err := uuid.Parse(rawID)
 	if err != nil {
 		response.RespondError(w, response.Error{
@@ -396,6 +419,7 @@ func (c *Claw) ApprovePairing(w http.ResponseWriter, r *http.Request) {
 		Code:   code,
 	}); err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 
@@ -404,6 +428,7 @@ func (c *Claw) ApprovePairing(w http.ResponseWriter, r *http.Request) {
 
 func (c *Claw) Connect(w http.ResponseWriter, r *http.Request) {
 	rawID := chi.URLParam(r, "id")
+
 	id, err := uuid.Parse(rawID)
 	if err != nil {
 		response.RespondError(w, response.Error{
@@ -435,6 +460,7 @@ func (c *Claw) Connect(w http.ResponseWriter, r *http.Request) {
 		Provider: provider,
 	}); err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 

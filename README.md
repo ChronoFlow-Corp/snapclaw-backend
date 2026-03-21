@@ -56,6 +56,7 @@ docker compose up --build
 - Loki: http://localhost:3100
 - Prometheus: http://localhost:9090
 - Tempo: http://localhost:3200
+- Alloy UI: http://localhost:12345
 - simpleClaw API: http://localhost:1337
 - containerManager API: http://localhost:8080
 

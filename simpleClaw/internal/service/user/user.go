@@ -5,17 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"shared/consts"
-	"shared/pkg/jwt"
-	"shared/pkg/observability"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"shared/consts"
+	"shared/pkg/jwt"
+	"shared/pkg/observability"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/service/user/commands"
-
-	"github.com/google/uuid"
 )
 
 type Service struct {
@@ -36,6 +35,7 @@ func NewUser(
 	metrics ...*observability.OperationMetrics,
 ) *Service {
 	var opMetrics *observability.OperationMetrics
+
 	if len(metrics) > 0 {
 		opMetrics = metrics[0]
 	}
@@ -55,6 +55,7 @@ func (s *Service) SignIn(
 	cm commands.SignIn,
 ) (access jwt.AccessToken, refresh jwt.RefreshToken, err error) {
 	const op = "service.Service.Sign"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -63,6 +64,7 @@ func (s *Service) SignIn(
 		"auth.sign_in",
 		"auth",
 	)
+
 	defer func() { finish(err) }()
 
 	email := normalizeEmail(cm.Email)
@@ -89,7 +91,8 @@ func (s *Service) SignIn(
 			return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
 		}
 	} else if u.Role != role {
-		if err := s.uSt.UpdateRole(ctx, u.ID, role); err != nil {
+		err := s.uSt.UpdateRole(ctx, u.ID, role)
+		if err != nil {
 			return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
 		}
 
@@ -122,6 +125,7 @@ func (s *Service) Refresh(
 	rawRefresh string,
 ) (access jwt.AccessToken, refresh jwt.RefreshToken, err error) {
 	const op = "service.Service.Refresh"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -130,6 +134,7 @@ func (s *Service) Refresh(
 		"auth.refresh",
 		"auth",
 	)
+
 	defer func() { finish(err) }()
 
 	t, err := s.j.ParseRefresh(rawRefresh)
@@ -165,6 +170,7 @@ func (s *Service) Refresh(
 
 func (s *Service) UserInfo(ctx context.Context, userID uuid.UUID) (entities.User, error) {
 	const op = "service.Service.UserInfo"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -173,7 +179,9 @@ func (s *Service) UserInfo(ctx context.Context, userID uuid.UUID) (entities.User
 		"user.info.get",
 		"user_profile",
 	)
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	user, err := s.uSt.GetByID(ctx, userID)
@@ -189,6 +197,7 @@ func (s *Service) AddChannel(
 	cm commands.AddChannel,
 ) (entities.Channel, error) {
 	const op = "service.Service.AddChannel"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -197,7 +206,9 @@ func (s *Service) AddChannel(
 		"channel.add",
 		"channel_connect",
 	)
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	var ch entities.Channel
@@ -225,6 +236,7 @@ func (s *Service) AddChannel(
 
 func (s *Service) RemoveChannel(ctx context.Context, cm commands.RemoveChannel) (err error) {
 	const op = "service.Service.RemoveChannel"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -233,6 +245,7 @@ func (s *Service) RemoveChannel(ctx context.Context, cm commands.RemoveChannel) 
 		"channel.delete",
 		"channel_connect",
 	)
+
 	defer func() { finish(err) }()
 
 	err = s.chSt.Delete(ctx, cm.ChannelID, cm.UserID)
@@ -245,6 +258,7 @@ func (s *Service) RemoveChannel(ctx context.Context, cm commands.RemoveChannel) 
 
 func (s *Service) UpdateChannel(ctx context.Context, cm commands.UpdateChannel) (err error) {
 	const op = "service.Service.UpdateChannel"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -253,6 +267,7 @@ func (s *Service) UpdateChannel(ctx context.Context, cm commands.UpdateChannel) 
 		"channel.update",
 		"channel_connect",
 	)
+
 	defer func() { finish(err) }()
 
 	var ch entities.Channel
@@ -285,6 +300,7 @@ func (s *Service) GetChannel(
 	channelID, userID uuid.UUID,
 ) (entities.Channel, error) {
 	const op = "service.Service.GetChannel"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -293,7 +309,9 @@ func (s *Service) GetChannel(
 		"channel.get",
 		"channel_connect",
 	)
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	ch, err := s.chSt.GetByID(ctx, channelID, userID)
@@ -306,6 +324,7 @@ func (s *Service) GetChannel(
 
 func (s *Service) GetChannels(ctx context.Context, userID uuid.UUID) ([]entities.Channel, error) {
 	const op = "service.Service.GetChannels"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -314,7 +333,9 @@ func (s *Service) GetChannels(ctx context.Context, userID uuid.UUID) ([]entities
 		"channel.list",
 		"channel_connect",
 	)
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	chs, err := s.chSt.GetByUserID(ctx, userID)
@@ -327,6 +348,7 @@ func (s *Service) GetChannels(ctx context.Context, userID uuid.UUID) ([]entities
 
 func (s *Service) Connect(ctx context.Context, cm commands.ConnectCommand) (err error) {
 	const op = "service.Service.Connect"
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -335,6 +357,7 @@ func (s *Service) Connect(ctx context.Context, cm commands.ConnectCommand) (err 
 		"channel.connect",
 		"channel_connect",
 	)
+
 	defer func() { finish(err) }()
 
 	provider := strings.ToLower(strings.TrimSpace(cm.Provider))
@@ -351,6 +374,7 @@ func (s *Service) Connect(ctx context.Context, cm commands.ConnectCommand) (err 
 	}
 
 	expiry := ""
+
 	if !cm.ExpiresAt.IsZero() {
 		expiry = cm.ExpiresAt.UTC().Format(time.RFC3339)
 	}
@@ -372,15 +396,19 @@ func (s *Service) Connect(ctx context.Context, cm commands.ConnectCommand) (err 
 		if token.Email == "" {
 			token.Email = existing.Email
 		}
+
 		if token.Client == "" {
 			token.Client = existing.Client
 		}
+
 		if token.Token.RefreshToken == "" {
 			token.Token.RefreshToken = existing.Token.RefreshToken
 		}
+
 		if token.Token.TokenType == "" {
 			token.Token.TokenType = existing.Token.TokenType
 		}
+
 		if token.Token.Expiry == "" {
 			token.Token.Expiry = existing.Token.Expiry
 		}
@@ -393,6 +421,7 @@ func (s *Service) Connect(ctx context.Context, cm commands.ConnectCommand) (err 
 		if err != nil {
 			return fmt.Errorf("%s: %w", op, err)
 		}
+
 		token.Email = user.Email
 	}
 

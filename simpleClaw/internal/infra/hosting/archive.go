@@ -11,7 +11,7 @@ import (
 )
 
 // WriteConfigArchive writes a tar archive with the claw config folder.
-// Archive layout: <clawID>/openclaw.json
+// Archive layout: <clawID>/openclaw.json.
 func WriteConfigArchive(cfg entities.ClawConfig, clawID string, w io.Writer) error {
 	const op = "infra.hosting.WriteConfigArchive"
 
@@ -42,6 +42,7 @@ func WriteConfigArchive(cfg entities.ClawConfig, clawID string, w io.Writer) err
 	}
 
 	fileName := clawID + "/" + openClawConfigName + ".json"
+
 	hdr := &tar.Header{
 		Name:     fileName,
 		Mode:     0o644,

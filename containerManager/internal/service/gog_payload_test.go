@@ -28,15 +28,19 @@ func TestNormalizeGogImportPayload(t *testing.T) {
 		if payload.Email != "user@example.com" {
 			t.Fatalf("unexpected email: %q", payload.Email)
 		}
+
 		if payload.Client != "default" {
 			t.Fatalf("unexpected client: %q", payload.Client)
 		}
+
 		if payload.RefreshToken != "rt-1" {
 			t.Fatalf("unexpected refresh token: %q", payload.RefreshToken)
 		}
+
 		if payload.Topic != "projects/demo/topics/gog-gmail-watch" {
 			t.Fatalf("unexpected topic: %q", payload.Topic)
 		}
+
 		if len(payload.Labels) != 2 {
 			t.Fatalf("unexpected labels count: %d", len(payload.Labels))
 		}
@@ -64,12 +68,15 @@ func TestNormalizeGogImportPayload(t *testing.T) {
 		if payload.Email != "legacy@example.com" {
 			t.Fatalf("unexpected email: %q", payload.Email)
 		}
+
 		if payload.Client != "default" {
 			t.Fatalf("unexpected client defaulting: %q", payload.Client)
 		}
+
 		if payload.RefreshToken != "legacy-rt" {
 			t.Fatalf("unexpected refresh token: %q", payload.RefreshToken)
 		}
+
 		if payload.Topic != "projects/demo/topics/legacy" {
 			t.Fatalf("unexpected topic: %q", payload.Topic)
 		}

@@ -11,12 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/hosting"
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/service/claw/commands"
-
-	"github.com/google/uuid"
 )
 
 type updateTestClawStorage struct {
@@ -58,6 +57,7 @@ func (s *updateTestClawStorage) Update(
 	s.updatedClaw = cl
 	s.updatedChannels = channelIDs
 	s.replaceChannels = replaceChannels
+
 	return s.updateErr
 }
 
@@ -114,6 +114,7 @@ func (k *updateTestKeys) Create(context.Context, uuid.UUID, string, float64) (en
 
 func (k *updateTestKeys) ResolveModel(context.Context, string) (string, error) {
 	k.resolveModelCalls++
+
 	return k.resolveModelResult, nil
 }
 
@@ -140,6 +141,7 @@ type updateTestHosting struct {
 
 func (h *updateTestHosting) Update(context.Context, entities.Claw, entities.Server) error {
 	h.calls++
+
 	return h.updateErr
 }
 
@@ -551,6 +553,7 @@ func TestServiceUpdate_WritesArchiveFromDesiredConfig(t *testing.T) {
 
 func readArchivedClawConfig(archiveRoot string, userID, clawID uuid.UUID) (entities.ClawConfig, error) {
 	archivePath := archiveRoot + "/" + userID.String() + "/" + clawID.String() + ".tar"
+
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return entities.ClawConfig{}, err
@@ -558,12 +561,14 @@ func readArchivedClawConfig(archiveRoot string, userID, clawID uuid.UUID) (entit
 	defer f.Close()
 
 	tr := tar.NewReader(f)
+
 	for {
 		hdr, err := tr.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return entities.ClawConfig{}, io.EOF
 			}
+
 			return entities.ClawConfig{}, err
 		}
 

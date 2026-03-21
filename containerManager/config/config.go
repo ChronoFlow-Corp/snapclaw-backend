@@ -10,15 +10,15 @@ import (
 )
 
 type Config struct {
-	Environment   string        `yaml:"environment" env:"ENVIRONMENT" env-default:"development"`
-	Postgres      Postgres      `yaml:"postgres"`
-	Http          Http          `yaml:"http"`
-	Image         Image         `yaml:"image"`
-	MaxClaws      MaxClaws      `yaml:"max_claws" env:"MAX_CLAWS" env-default:"auto"`
-	Gog           gog           `yaml:"gog"`
-	PubSub        pubSub        `yaml:"pubsub"`
-	Migrations    Migrations    `yaml:"migrations"`
-	Observability observability `yaml:"observability"`
+	Environment   string        `env:"ENVIRONMENT" env-default:"development" yaml:"environment"`
+	Postgres      Postgres      `                                            yaml:"postgres"`
+	Http          Http          `                                            yaml:"http"`
+	Image         Image         `                                            yaml:"image"`
+	MaxClaws      MaxClaws      `env:"MAX_CLAWS"   env-default:"auto"        yaml:"max_claws"`
+	Gog           gog           `                                            yaml:"gog"`
+	PubSub        pubSub        `                                            yaml:"pubsub"`
+	Migrations    Migrations    `                                            yaml:"migrations"`
+	Observability observability `                                            yaml:"observability"`
 }
 
 type Http struct {
@@ -40,14 +40,14 @@ type Image struct {
 }
 
 type gog struct {
-	KeyringBackend  string `yaml:"keyring_backend" env:"GOG_KEYRING_BACKEND" env-default:"file"`
-	KeyringPassword string `yaml:"keyring_password" env:"GOG_KEYRING_PASSWORD"`
+	KeyringBackend  string `env:"GOG_KEYRING_BACKEND"  env-default:"file" yaml:"keyring_backend"`
+	KeyringPassword string `env:"GOG_KEYRING_PASSWORD"                    yaml:"keyring_password"`
 }
 
 type pubSub struct {
-	ForwardTimeout time.Duration `yaml:"forward_timeout" env:"PUBSUB_FORWARD_TIMEOUT" env-default:"5s"`
-	Workers        int           `yaml:"workers" env:"PUBSUB_WORKERS" env-default:"32"`
-	DedupTTL       time.Duration `yaml:"dedup_ttl" env:"PUBSUB_DEDUP_TTL" env-default:"10m"`
+	ForwardTimeout time.Duration `env:"PUBSUB_FORWARD_TIMEOUT" env-default:"5s"  yaml:"forward_timeout"`
+	Workers        int           `env:"PUBSUB_WORKERS"         env-default:"32"  yaml:"workers"`
+	DedupTTL       time.Duration `env:"PUBSUB_DEDUP_TTL"       env-default:"10m" yaml:"dedup_ttl"`
 }
 
 type Migrations struct {
@@ -61,15 +61,15 @@ type observability struct {
 }
 
 type metrics struct {
-	Enabled bool   `yaml:"enabled" env:"OBS_METRICS_ENABLED" env-default:"true"`
-	Path    string `yaml:"path" env:"OBS_METRICS_PATH" env-default:"/metrics"`
+	Enabled bool   `env:"OBS_METRICS_ENABLED" env-default:"true"     yaml:"enabled"`
+	Path    string `env:"OBS_METRICS_PATH"    env-default:"/metrics" yaml:"path"`
 }
 
 type tracing struct {
-	Enabled     bool    `yaml:"enabled" env:"OBS_TRACING_ENABLED" env-default:"false"`
-	Endpoint    string  `yaml:"endpoint" env:"OBS_TRACING_ENDPOINT"`
-	Insecure    bool    `yaml:"insecure" env:"OBS_TRACING_INSECURE" env-default:"true"`
-	SampleRatio float64 `yaml:"sample_ratio" env:"OBS_TRACING_SAMPLE_RATIO" env-default:"1"`
+	Enabled     bool    `env:"OBS_TRACING_ENABLED"      env-default:"false" yaml:"enabled"`
+	Endpoint    string  `env:"OBS_TRACING_ENDPOINT"                         yaml:"endpoint"`
+	Insecure    bool    `env:"OBS_TRACING_INSECURE"     env-default:"true"  yaml:"insecure"`
+	SampleRatio float64 `env:"OBS_TRACING_SAMPLE_RATIO" env-default:"1"     yaml:"sample_ratio"`
 }
 
 func MustLoadConfig() Config {
@@ -88,6 +88,10 @@ func MustLoadConfig() Config {
 	}
 
 	cfg.normalize()
+
+	if cfg.MaxClaws.Value == 0 && cfg.MaxClaws.Auto == false {
+		panic("max_claws must be greater than zero")
+	}
 
 	return cfg
 }

@@ -20,6 +20,7 @@ func TestContainerApprove_InvalidCode(t *testing.T) {
 	)
 
 	basePath := t.TempDir()
+
 	credentialsDir := filepath.Join(basePath, userID, clawID, ".openclaw", "credentials")
 	if err := os.MkdirAll(credentialsDir, 0o755); err != nil {
 		t.Fatalf("mkdir credentials dir: %v", err)
@@ -41,10 +42,13 @@ func TestContainerApprove_InvalidCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create pairing file: %v", err)
 	}
+
 	if err := json.NewEncoder(fd).Encode(pendingPairing); err != nil {
 		_ = fd.Close()
+
 		t.Fatalf("encode pairing file: %v", err)
 	}
+
 	if err := fd.Close(); err != nil {
 		t.Fatalf("close pairing file: %v", err)
 	}

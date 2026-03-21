@@ -11,7 +11,9 @@ import (
 
 func TestLoggerSkipsSuccessfulMetricsRequest(t *testing.T) {
 	var buf bytes.Buffer
+
 	prev := slog.Default()
+
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
 	t.Cleanup(func() {
 		slog.SetDefault(prev)
@@ -21,7 +23,7 @@ func TestLoggerSkipsSuccessfulMetricsRequest(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req := httptest.NewRequest(http.MethodGet, "/metrics", http.NoBody)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -32,7 +34,9 @@ func TestLoggerSkipsSuccessfulMetricsRequest(t *testing.T) {
 
 func TestLoggerLogsNonOKMetricsRequest(t *testing.T) {
 	var buf bytes.Buffer
+
 	prev := slog.Default()
+
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
 	t.Cleanup(func() {
 		slog.SetDefault(prev)
@@ -42,7 +46,7 @@ func TestLoggerLogsNonOKMetricsRequest(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req := httptest.NewRequest(http.MethodGet, "/metrics", http.NoBody)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -50,12 +54,15 @@ func TestLoggerLogsNonOKMetricsRequest(t *testing.T) {
 	if !strings.Contains(body, "request completed") {
 		t.Fatalf("expected request log for non-OK /metrics request, got: %s", body)
 	}
+
 	if !strings.Contains(body, `"status":502`) {
 		t.Fatalf("expected status in request log, got: %s", body)
 	}
+
 	if !strings.Contains(body, `"component":"http.server"`) {
 		t.Fatalf("expected component in request log, got: %s", body)
 	}
+
 	if !strings.Contains(body, `"result":"error"`) {
 		t.Fatalf("expected result in request log, got: %s", body)
 	}

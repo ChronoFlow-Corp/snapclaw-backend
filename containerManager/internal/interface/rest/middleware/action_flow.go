@@ -28,6 +28,7 @@ func classifyContainerManagerActionFlow(method, path string) (string, string) {
 		if method == "GET" {
 			return "claw.config.archive", "claw_lifecycle"
 		}
+
 		if method == "POST" {
 			return "claw.config.restore", "claw_lifecycle"
 		}

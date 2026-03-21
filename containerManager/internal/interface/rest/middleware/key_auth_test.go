@@ -13,10 +13,11 @@ func TestAuthRejectsMissingAuthorizationHeader(t *testing.T) {
 
 	handler := middleware.Auth("secret")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		called = true
+
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/claws/start", nil)
+	req := httptest.NewRequest(http.MethodGet, "/claws/start", http.NoBody)
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -24,6 +25,7 @@ func TestAuthRejectsMissingAuthorizationHeader(t *testing.T) {
 	if called {
 		t.Fatalf("next handler must not be called when auth header is missing")
 	}
+
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rr.Code)
 	}
@@ -34,11 +36,13 @@ func TestAuthRejectsInvalidAuthorizationHeader(t *testing.T) {
 
 	handler := middleware.Auth("secret")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		called = true
+
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/claws/start", nil)
+	req := httptest.NewRequest(http.MethodGet, "/claws/start", http.NoBody)
 	req.Header.Set("Authorization", "wrong-secret")
+
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -46,6 +50,7 @@ func TestAuthRejectsInvalidAuthorizationHeader(t *testing.T) {
 	if called {
 		t.Fatalf("next handler must not be called when auth header is invalid")
 	}
+
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rr.Code)
 	}

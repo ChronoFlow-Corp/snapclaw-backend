@@ -9,9 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"simpleClaw/internal/api/rest/controllers"
-
 	"github.com/go-chi/chi/v5"
+	"simpleClaw/internal/api/rest/controllers"
 )
 
 type proxiedRequest struct {
@@ -29,13 +28,14 @@ func TestPubSubProxyHealth(t *testing.T) {
 	controllers.NewPubSubProxy(newFakeServerService(), controllers.PubSubProxyOptions{}).Register(router)
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequest(http.MethodGet, "/health", http.NoBody)
 
 	router.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d", rr.Code)
 	}
+
 	if strings.TrimSpace(rr.Body.String()) != "OK" {
 		t.Fatalf("unexpected body: %q", rr.Body.String())
 	}
@@ -61,6 +61,7 @@ func TestPubSubProxyFanOut(t *testing.T) {
 				Authorization:        r.Header.Get("Authorization"),
 				Token:                r.URL.Query().Get("token"),
 			}
+
 			w.WriteHeader(http.StatusOK)
 		}))
 		defer firstTarget.Close()
@@ -80,6 +81,7 @@ func TestPubSubProxyFanOut(t *testing.T) {
 				Authorization:        r.Header.Get("Authorization"),
 				Token:                r.URL.Query().Get("token"),
 			}
+
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer secondTarget.Close()
@@ -196,6 +198,7 @@ func TestPubSubProxyFanOut(t *testing.T) {
 		if rr.Code != http.StatusUnauthorized {
 			t.Fatalf("unexpected status: %d body=%s", rr.Code, rr.Body.String())
 		}
+
 		if called.Load() {
 			t.Fatalf("downstream target must not be called on invalid ingress token")
 		}
@@ -230,6 +233,7 @@ func waitForProxyRequest(t *testing.T, ch <-chan proxiedRequest) proxiedRequest 
 		return req
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for proxied request")
+
 		return proxiedRequest{}
 	}
 }
@@ -240,21 +244,27 @@ func assertForwardedRequest(t *testing.T, req proxiedRequest, expectedBody, expe
 	if req.Body != expectedBody {
 		t.Fatalf("unexpected body: %q", req.Body)
 	}
+
 	if req.ContentType != "application/json; charset=utf-8" {
 		t.Fatalf("unexpected content type: %q", req.ContentType)
 	}
+
 	if req.UserAgent != "pubsub-client/1.0" {
 		t.Fatalf("unexpected user agent: %q", req.UserAgent)
 	}
+
 	if req.XGoogTopic != "projects/demo/topics/test" {
 		t.Fatalf("unexpected x-goog-topic: %q", req.XGoogTopic)
 	}
+
 	if req.XGoogDeliveryAttempt != "3" {
 		t.Fatalf("unexpected x-goog-delivery-attempt: %q", req.XGoogDeliveryAttempt)
 	}
+
 	if req.Authorization != expectedAuthorization {
 		t.Fatalf("unexpected authorization header: %q", req.Authorization)
 	}
+
 	if req.Token != "" {
 		t.Fatalf("token must not be sent via query, got: %q", req.Token)
 	}

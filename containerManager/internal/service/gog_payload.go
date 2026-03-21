@@ -77,7 +77,8 @@ func parseGogImportPayload(raw []byte) (gogImportPayload, bool) {
 
 func parseLegacyGmailPayload(raw []byte) (gogImportPayload, error) {
 	var legacy legacyGmailPayload
-	if err := json.Unmarshal(raw, &legacy); err != nil {
+	err := json.Unmarshal(raw, &legacy)
+	if err != nil {
 		return gogImportPayload{}, err
 	}
 
@@ -132,6 +133,7 @@ func normalizeGogWatchLabels(labels []string) []string {
 	}
 
 	seen := make(map[string]struct{}, len(labels))
+
 	out := make([]string, 0, len(labels))
 	for _, raw := range labels {
 		label := strings.TrimSpace(raw)
@@ -142,6 +144,7 @@ func normalizeGogWatchLabels(labels []string) []string {
 		if _, ok := seen[label]; ok {
 			continue
 		}
+
 		seen[label] = struct{}{}
 		out = append(out, label)
 	}

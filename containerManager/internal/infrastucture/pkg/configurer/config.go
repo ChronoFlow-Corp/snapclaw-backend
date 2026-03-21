@@ -141,16 +141,19 @@ func (c *ClawConfigurer) RestoreClawConfig(userID, clawID string, r io.Reader) e
 	archiveRoot := path.Base(basePath)
 
 	tr := tar.NewReader(r)
+
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
+
 		if err != nil {
 			return fmt.Errorf("%s: %w", op, err)
 		}
 
 		name := filepath.Clean(hdr.Name)
+
 		name = strings.TrimPrefix(name, "/")
 		if name == "." || name == "" {
 			continue
@@ -160,11 +163,13 @@ func (c *ClawConfigurer) RestoreClawConfig(userID, clawID string, r io.Reader) e
 		if name == archiveRoot {
 			continue
 		}
-		if strings.HasPrefix(name, prefix) {
-			name = strings.TrimPrefix(name, prefix)
+
+		if after, ok := strings.CutPrefix(name, prefix); ok {
+			name = after
 		}
 
 		target := filepath.Join(basePath, name)
+
 		cleanTargetPath := filepath.Clean(target)
 		if cleanTargetPath == basePath ||
 			!strings.HasPrefix(
@@ -176,7 +181,8 @@ func (c *ClawConfigurer) RestoreClawConfig(userID, clawID string, r io.Reader) e
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(cleanTargetPath, os.FileMode(hdr.Mode)); err != nil {
+			err := os.MkdirAll(cleanTargetPath, os.FileMode(hdr.Mode))
+			if err != nil {
 				return fmt.Errorf("%s: %w", op, err)
 			}
 		case tar.TypeReg:
@@ -195,6 +201,7 @@ func (c *ClawConfigurer) RestoreClawConfig(userID, clawID string, r io.Reader) e
 
 			if _, err := io.Copy(f, tr); err != nil {
 				_ = f.Close()
+
 				return fmt.Errorf("%s: %w", op, err)
 			}
 
@@ -215,6 +222,7 @@ func (c *ClawConfigurer) ApprovePair(userID, clawID, code string) error {
 	if userID == "" {
 		return fmt.Errorf("%s: user id is required", op)
 	}
+
 	if clawID == "" {
 		return fmt.Errorf("%s: claw id is required", op)
 	}
@@ -244,10 +252,12 @@ func (c *ClawConfigurer) ApprovePair(userID, clawID, code string) error {
 	}
 
 	var approvedID string
+
 	for i := range p.Requests {
 		if p.Requests[i].Code == code {
 			approvedID = p.Requests[i].ID
 			p.Requests = slices.Delete(p.Requests, i, i+1)
+
 			break
 		}
 	}
@@ -285,6 +295,7 @@ func (c *ClawConfigurer) ApprovePair(userID, clawID, code string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
+
 	err = fd.Truncate(0)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
@@ -302,6 +313,7 @@ func (c *ClawConfigurer) configPath(userID, clawID string) (string, error) {
 	if userID == "" {
 		return "", fmt.Errorf("user id is required")
 	}
+
 	if clawID == "" {
 		return "", fmt.Errorf("claw id is required")
 	}
@@ -332,6 +344,7 @@ func tarDir(w io.Writer, root string, archiveRoot string) error {
 		}
 
 		archPath := archiveRoot
+
 		if rel != "." {
 			archPath = filepath.ToSlash(filepath.Join(archiveRoot, rel))
 		} else {
@@ -344,6 +357,7 @@ func tarDir(w io.Writer, root string, archiveRoot string) error {
 		}
 
 		var link string
+
 		if info.Mode()&os.ModeSymlink != 0 {
 			link, err = os.Readlink(path)
 			if err != nil {
@@ -373,6 +387,7 @@ func tarDir(w io.Writer, root string, archiveRoot string) error {
 
 			_, err = io.Copy(tw, f)
 			_ = f.Close()
+
 			if err != nil {
 				return err
 			}
@@ -396,11 +411,13 @@ func configure(basePath string, cfg []entities.ClawConfig) error {
 				return err
 			}
 		case entities.ClawConfigTypeJson:
-			if err := writeFile(fmt.Sprintf("%s/%s.json", basePath, c.Name), c.Data); err != nil {
+			err := writeFile(fmt.Sprintf("%s/%s.json", basePath, c.Name), c.Data)
+			if err != nil {
 				return err
 			}
 		case entities.ClawConfigTypeMd:
-			if err := writeFile(fmt.Sprintf("%s/%s.md", basePath, c.Name), c.Data); err != nil {
+			err := writeFile(fmt.Sprintf("%s/%s.md", basePath, c.Name), c.Data)
+			if err != nil {
 				return err
 			}
 		}
@@ -417,6 +434,7 @@ func writeFile(path string, data []byte) error {
 
 	if _, err = f.Write(data); err != nil {
 		_ = f.Close()
+
 		return err
 	}
 

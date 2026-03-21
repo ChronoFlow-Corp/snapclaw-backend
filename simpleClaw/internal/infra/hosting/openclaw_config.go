@@ -1,6 +1,6 @@
 package hosting
 
-//type openClawConfig struct {
+// type openClawConfig struct {
 //	Env      *entities.Env           `json:"env,omitempty"`
 //	Channels *entities.ClawChannels  `json:"channels,omitempty"`
 //	Agents   *openClawAgents         `json:"agents,omitempty"`

@@ -1,9 +1,8 @@
 package sql
 
 import (
-	"simpleClaw/internal/infra/sql/models"
-
 	"gorm.io/gorm"
+	"simpleClaw/internal/infra/sql/models"
 )
 
 func Migration(db *gorm.DB) error {

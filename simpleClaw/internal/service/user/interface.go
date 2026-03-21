@@ -3,9 +3,8 @@ package user
 import (
 	"context"
 
-	"simpleClaw/internal/entities"
-
 	"github.com/google/uuid"
+	"simpleClaw/internal/entities"
 )
 
 type UStorage interface {

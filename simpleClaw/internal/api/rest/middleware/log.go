@@ -3,15 +3,14 @@ package middleware
 import (
 	"log/slog"
 	"net/http"
-	"shared/pkg/observability"
 	"strings"
 	"time"
 
-	"simpleClaw/internal/entities"
-	"simpleClaw/internal/pkg/slctx"
-
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"shared/pkg/observability"
+	"simpleClaw/internal/entities"
+	"simpleClaw/internal/pkg/slctx"
 )
 
 // Logger is a middleware that injects a logger into the request context.

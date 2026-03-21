@@ -4,18 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"shared/pkg/observability"
 	"strings"
 	"time"
-
-	"simpleClaw/internal/infra/sql"
-
-	"simpleClaw/internal/entities"
-	"simpleClaw/internal/infra/sql/models"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"shared/pkg/observability"
+	"simpleClaw/internal/entities"
+	"simpleClaw/internal/infra/sql"
+	"simpleClaw/internal/infra/sql/models"
 )
 
 type Storage struct {
@@ -25,6 +23,7 @@ type Storage struct {
 
 func NewStorage(db *gorm.DB, metrics ...*observability.OperationMetrics) *Storage {
 	var opMetrics *observability.OperationMetrics
+
 	if len(metrics) > 0 {
 		opMetrics = metrics[0]
 	}
@@ -37,8 +36,11 @@ func NewStorage(db *gorm.DB, metrics ...*observability.OperationMetrics) *Storag
 
 func (s *Storage) Create(ctx context.Context, u entities.User) error {
 	const op = "storages.Users.Create"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.users", "storage.user.create", "user_profile")
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	err = gorm.G[models.User](s.db).Create(ctx, &models.User{
@@ -61,7 +63,9 @@ func (s *Storage) Create(ctx context.Context, u entities.User) error {
 
 func (s *Storage) Delete(ctx context.Context, id uuid.UUID) (err error) {
 	const op = "storages.Users.Delete"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.users", "storage.user.delete", "user_profile")
+
 	defer func() { finish(err) }()
 
 	affected, err := gorm.G[models.User](s.db).Where("id = ?", id).Delete(ctx)
@@ -78,7 +82,9 @@ func (s *Storage) Delete(ctx context.Context, id uuid.UUID) (err error) {
 
 func (s *Storage) CreateSession(ctx context.Context, session entities.Session) (err error) {
 	const op = "storages.Users.CreateSession"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.users", "storage.session.create", "auth")
+
 	defer func() { finish(err) }()
 
 	err = gorm.G[models.Session](s.db).Create(ctx, &models.Session{
@@ -96,8 +102,11 @@ func (s *Storage) CreateSession(ctx context.Context, session entities.Session) (
 
 func (s *Storage) GetByEmail(ctx context.Context, email string) (entities.User, error) {
 	const op = "storages.Users.GetByEmail"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.users", "storage.user.get_by_email", "user_profile")
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	email = strings.ToLower(strings.TrimSpace(email))
@@ -122,7 +131,9 @@ func (s *Storage) GetByEmail(ctx context.Context, email string) (entities.User, 
 
 func (s *Storage) UpdateRole(ctx context.Context, id uuid.UUID, role string) (err error) {
 	const op = "storages.Users.UpdateRole"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.users", "storage.user.update_role", "user_profile")
+
 	defer func() { finish(err) }()
 
 	tx := s.db.WithContext(ctx).Model(&models.User{}).
@@ -141,8 +152,11 @@ func (s *Storage) UpdateRole(ctx context.Context, id uuid.UUID, role string) (er
 
 func (s *Storage) GetByID(ctx context.Context, id uuid.UUID) (entities.User, error) {
 	const op = "storages.Users.GetByID"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.users", "storage.user.get_by_id", "user_profile")
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	uDB, err := gorm.G[models.User](s.db).Where("id = ?", id).First(ctx)
@@ -165,7 +179,9 @@ func (s *Storage) GetByID(ctx context.Context, id uuid.UUID) (entities.User, err
 
 func (s *Storage) DeleteSession(ctx context.Context, session entities.Session) (err error) {
 	const op = "storages.Users.DeleteSession"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.users", "storage.session.delete", "auth")
+
 	defer func() { finish(err) }()
 
 	_, err = gorm.G[models.Session](
@@ -181,8 +197,11 @@ func (s *Storage) DeleteSession(ctx context.Context, session entities.Session) (
 
 func (s *Storage) GetSessions(ctx context.Context, userID uuid.UUID) ([]entities.Session, error) {
 	const op = "storages.Users.GetSessions"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.users", "storage.session.list", "auth")
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	sessions := make([]entities.Session, 0)
@@ -206,8 +225,11 @@ func (s *Storage) GetSessions(ctx context.Context, userID uuid.UUID) ([]entities
 
 func (s *Storage) GetSession(ctx context.Context, id uuid.UUID) (entities.Session, error) {
 	const op = "storages.Users.GetSession"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.users", "storage.session.get", "auth")
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	sDB, err := gorm.G[models.Session](s.db).Where("id = ?", id).First(ctx)
@@ -229,7 +251,9 @@ func (s *Storage) UpdateSessionRefresh(
 	refreshToken string,
 ) (err error) {
 	const op = "storages.Users.UpdateSessionRefresh"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.users", "storage.session.update_refresh", "auth")
+
 	defer func() { finish(err) }()
 
 	updates := map[string]any{
@@ -256,7 +280,9 @@ func (s *Storage) UpdateOpenRouterKey(
 	key entities.OpenRouterKey,
 ) (err error) {
 	const op = "storages.Users.UpdateOpenRouterKey"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.users", "storage.user.update_openrouter_key", "user_profile")
+
 	defer func() { finish(err) }()
 
 	updates := map[string]any{
@@ -285,6 +311,7 @@ func (s *Storage) GetGmailToken(ctx context.Context, userID uuid.UUID) (entities
 	}
 
 	expiry := ""
+
 	if !tDB.ExpiresAt.IsZero() {
 		expiry = tDB.ExpiresAt.UTC().Format(time.RFC3339)
 	}

@@ -6,10 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/service/server/commands"
-
-	"github.com/google/uuid"
 )
 
 type testStorage struct {
@@ -21,6 +20,7 @@ type testStorage struct {
 
 func (s *testStorage) Create(_ context.Context, srv entities.Server) error {
 	s.created = srv
+
 	return nil
 }
 
@@ -34,6 +34,7 @@ func (s *testStorage) GetByID(context.Context, uuid.UUID) (entities.Server, erro
 
 func (s *testStorage) Update(_ context.Context, srv entities.Server) error {
 	s.updated = srv
+
 	return nil
 }
 
@@ -154,7 +155,8 @@ func TestServiceSyncCapacities_RefreshesStoredServers(t *testing.T) {
 	}
 	svc := New(storage, &testCapacityResolver{maxClaws: 9})
 
-	if err := svc.SyncCapacities(context.Background()); err != nil {
+	err := svc.SyncCapacities(context.Background())
+	if err != nil {
 		t.Fatalf("sync capacities: %v", err)
 	}
 

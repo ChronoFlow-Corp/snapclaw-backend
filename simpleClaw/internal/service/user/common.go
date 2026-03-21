@@ -9,15 +9,18 @@ import (
 
 func addTgCfg(cm commands.TelegramChannel) channels.TelegramConfig {
 	tgCh := channels.TelegramConfig{}
+
 	switch channels.DmPolicy(cm.DmPolicy) {
 	case channels.DmDisabled:
 		tgCh.DmPolicy = channels.DmDisabled
 	case channels.DmOpen:
 		tgCh.DmPolicy = channels.DmOpen
+
 		allowFrom := normalizeAllowFrom(cm.AllowFrom)
 		if !containsAllowAll(allowFrom) {
 			allowFrom = append(allowFrom, "*")
 		}
+
 		tgCh.AllowFrom = allowFrom
 		tgCh.GroupPolicy = "allowlist"
 		tgCh.Groups = map[string]interface{}{"*": struct {
@@ -46,9 +49,11 @@ func normalizeAllowFrom(values []string) []string {
 		if val == "" {
 			continue
 		}
+
 		if _, ok := seen[val]; ok {
 			continue
 		}
+
 		seen[val] = struct{}{}
 		out = append(out, val)
 	}
@@ -62,5 +67,6 @@ func containsAllowAll(values []string) bool {
 			return true
 		}
 	}
+
 	return false
 }

@@ -16,7 +16,7 @@ const (
 )
 
 type Config struct {
-	Environment   string        `yaml:"environment" env:"ENVIRONMENT" env-default:"development"`
+	Environment   string        `env:"ENVIRONMENT"    env-default:"development" yaml:"environment"`
 	Http          http          `yaml:"http"`
 	Database      database      `yaml:"database"`
 	Auth          auth          `yaml:"auth"`
@@ -28,39 +28,39 @@ type Config struct {
 }
 
 type http struct {
-	Addr    string   `yaml:"addr"    env-default:":8080"`
-	Origins []string `yaml:"origins" env-default:"*"`
+	Addr    string   `env-default:":8080" yaml:"addr"`
+	Origins []string `env-default:"*"     yaml:"origins"`
 }
 
 type database struct {
-	Dsn string `yaml:"dsn" env-required:"true"`
+	Dsn string `env-required:"true" yaml:"dsn"`
 }
 
 type auth struct {
 	Google google   `yaml:"google"`
 	Jwt    Jwt      `yaml:"jwt"`
-	Admins []string `yaml:"admins" env:"AUTH_ADMINS" env-separator:","`
+	Admins []string `env:"AUTH_ADMINS" env-separator:"," yaml:"admins"`
 }
 
 type google struct {
-	ClientID     string `yaml:"client_id"     env-required:"true"`
-	ClientSecret string `yaml:"client_secret" env-required:"true"`
-	CallbackURL  string `yaml:"callback_url"  env-required:"true"`
-	FrontendURL  string `yaml:"frontend_url"  env-required:"true"`
+	ClientID     string `env-required:"true" yaml:"client_id"`
+	ClientSecret string `env-required:"true" yaml:"client_secret"`
+	CallbackURL  string `env-required:"true" yaml:"callback_url"`
+	FrontendURL  string `env-required:"true" yaml:"frontend_url"`
 }
 
 type Jwt struct {
-	RefreshSecret       string        `yaml:"refresh_secret"        env-required:"true"`
-	AccessSecretPublic  string        `yaml:"access_secret_public"  env-required:"true"`
-	AccessSecretPrivate string        `yaml:"access_secret_private" env-required:"true"`
-	AccessExpire        time.Duration `yaml:"access_expire"         env-required:"true" env-default:"24h"`
-	RefreshExpire       time.Duration `yaml:"refresh_expire"        env-required:"true" env-default:"148h"`
+	RefreshSecret       string        `env-required:"true" yaml:"refresh_secret"`
+	AccessSecretPublic  string        `env-required:"true" yaml:"access_secret_public"`
+	AccessSecretPrivate string        `env-required:"true" yaml:"access_secret_private"`
+	AccessExpire        time.Duration `env-default:"24h"   env-required:"true"          yaml:"access_expire"`
+	RefreshExpire       time.Duration `env-default:"148h"  env-required:"true"          yaml:"refresh_expire"`
 }
 
 type openrouter struct {
-	BaseURL  string        `yaml:"base_url"  env-required:"true"`
-	APIToken string        `yaml:"api_token" env-required:"true"`
-	Timeout  time.Duration `yaml:"timeout"                       env-default:"15s"`
+	BaseURL  string        `env-required:"true" yaml:"base_url"`
+	APIToken string        `env-required:"true" yaml:"api_token"`
+	Timeout  time.Duration `env-default:"15s"   yaml:"timeout"`
 }
 
 type hosting struct {
@@ -68,8 +68,8 @@ type hosting struct {
 }
 
 type containerManager struct {
-	Timeout    time.Duration `yaml:"timeout"     env-default:"15s"`
-	BackupPath string        `yaml:"backup_path" env-default:"/tmp/simpleclaw/config-archives" env:"CONTAINER_MANAGER_BACKUP_PATH"`
+	Timeout    time.Duration `env-default:"15s"                   yaml:"timeout"`
+	BackupPath string        `env:"CONTAINER_MANAGER_BACKUP_PATH" env-default:"/tmp/simpleclaw/config-archives" yaml:"backup_path"`
 }
 
 type connect struct {
@@ -77,22 +77,22 @@ type connect struct {
 }
 
 type proxy struct {
-	Token          string        `yaml:"token" env:"PROXY_TOKEN"`
-	ForwardTimeout time.Duration `yaml:"forward_timeout" env:"PROXY_FORWARD_TIMEOUT" env-default:"5s"`
-	RetryCount     int           `yaml:"retry_count" env:"PROXY_RETRY_COUNT" env-default:"2"`
-	RetryBackoff   time.Duration `yaml:"retry_backoff" env:"PROXY_RETRY_BACKOFF" env-default:"250ms"`
+	Token          string        `env:"PROXY_TOKEN"           yaml:"token"`
+	ForwardTimeout time.Duration `env:"PROXY_FORWARD_TIMEOUT" env-default:"5s"    yaml:"forward_timeout"`
+	RetryCount     int           `env:"PROXY_RETRY_COUNT"     env-default:"2"     yaml:"retry_count"`
+	RetryBackoff   time.Duration `env:"PROXY_RETRY_BACKOFF"   env-default:"250ms" yaml:"retry_backoff"`
 }
 
 type gmail struct {
-	ClientID     string `yaml:"client_id"     env-required:"true"`
-	ClientSecret string `yaml:"client_secret" env-required:"true"`
-	CallbackURL  string `yaml:"callback_url"  env-required:"true"`
+	ClientID     string `env-required:"true" yaml:"client_id"`
+	ClientSecret string `env-required:"true" yaml:"client_secret"`
+	CallbackURL  string `env-required:"true" yaml:"callback_url"`
 	Watch        watch  `yaml:"watch"`
 }
 
 type watch struct {
-	Topic  string   `yaml:"topic" env:"CONNECT_GMAIL_WATCH_TOPIC"`
-	Labels []string `yaml:"labels" env:"CONNECT_GMAIL_WATCH_LABELS" env-separator:"," env-default:"INBOX"`
+	Topic  string   `env:"CONNECT_GMAIL_WATCH_TOPIC"  yaml:"topic"`
+	Labels []string `env:"CONNECT_GMAIL_WATCH_LABELS" env-default:"INBOX" env-separator:"," yaml:"labels"`
 }
 
 type observability struct {
@@ -101,15 +101,15 @@ type observability struct {
 }
 
 type metrics struct {
-	Enabled bool   `yaml:"enabled" env:"OBS_METRICS_ENABLED" env-default:"true"`
-	Path    string `yaml:"path" env:"OBS_METRICS_PATH" env-default:"/metrics"`
+	Enabled bool   `env:"OBS_METRICS_ENABLED" env-default:"true"     yaml:"enabled"`
+	Path    string `env:"OBS_METRICS_PATH"    env-default:"/metrics" yaml:"path"`
 }
 
 type tracing struct {
-	Enabled     bool    `yaml:"enabled" env:"OBS_TRACING_ENABLED" env-default:"false"`
-	Endpoint    string  `yaml:"endpoint" env:"OBS_TRACING_ENDPOINT"`
-	Insecure    bool    `yaml:"insecure" env:"OBS_TRACING_INSECURE" env-default:"true"`
-	SampleRatio float64 `yaml:"sample_ratio" env:"OBS_TRACING_SAMPLE_RATIO" env-default:"1"`
+	Enabled     bool    `env:"OBS_TRACING_ENABLED"      env-default:"false" yaml:"enabled"`
+	Endpoint    string  `env:"OBS_TRACING_ENDPOINT"     yaml:"endpoint"`
+	Insecure    bool    `env:"OBS_TRACING_INSECURE"     env-default:"true"  yaml:"insecure"`
+	SampleRatio float64 `env:"OBS_TRACING_SAMPLE_RATIO" env-default:"1"     yaml:"sample_ratio"`
 }
 
 func New() Config {
@@ -178,6 +178,7 @@ func normalizeEmails(values []string) []string {
 		if email == "" {
 			continue
 		}
+
 		if _, ok := seen[email]; ok {
 			continue
 		}
@@ -198,6 +199,7 @@ func normalizeList(values []string) []string {
 		if value == "" {
 			continue
 		}
+
 		if _, ok := seen[value]; ok {
 			continue
 		}

@@ -5,18 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"shared/pkg/jwt"
-	"shared/pkg/response"
 	"time"
 
-	"simpleClaw/internal/api/rest/middleware"
-
+	"shared/pkg/jwt"
+	"shared/pkg/response"
+	"simpleClaw/config"
 	"simpleClaw/internal/api/rest/dto"
+	"simpleClaw/internal/api/rest/middleware"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/sql"
-
-	"simpleClaw/config"
-
 	"simpleClaw/internal/service/user/commands"
 
 	"github.com/go-chi/chi/v5"
@@ -83,6 +80,7 @@ func (u *User) Login(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			respondServiceError(w, err)
+
 			return
 		}
 
@@ -101,6 +99,7 @@ func (u *User) Callback(w http.ResponseWriter, r *http.Request) {
 			Code:    http.StatusUnauthorized,
 			Message: "oauth callback failed",
 		})
+
 		return
 	}
 
@@ -112,6 +111,7 @@ func (u *User) Callback(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 
@@ -155,6 +155,7 @@ func (u *User) AddChannel(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 
@@ -168,6 +169,7 @@ func (u *User) Refresh(w http.ResponseWriter, r *http.Request) {
 			Code:    http.StatusUnauthorized,
 			Message: "Refresh token required",
 		})
+
 		return
 	}
 
@@ -176,6 +178,7 @@ func (u *User) Refresh(w http.ResponseWriter, r *http.Request) {
 			Code:    http.StatusUnauthorized,
 			Message: "Refresh token is invalid",
 		})
+
 		return
 	}
 
@@ -219,6 +222,7 @@ func (u *User) UserInfo(w http.ResponseWriter, r *http.Request) {
 	user, err := u.service.UserInfo(r.Context(), userID)
 	if err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 
@@ -237,6 +241,7 @@ func (u *User) Connect(w http.ResponseWriter, r *http.Request) {
 	gothUser, err := gothic.CompleteUserAuth(w, r)
 	if err != nil {
 		gothic.BeginAuthHandler(w, r)
+
 		return
 	}
 
@@ -259,6 +264,7 @@ func (u *User) Connect(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt:    gothUser.ExpiresAt,
 	}); err != nil {
 		respondServiceError(w, err)
+
 		return
 	}
 

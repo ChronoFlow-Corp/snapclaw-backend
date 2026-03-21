@@ -3,6 +3,7 @@ package slctx
 import (
 	"context"
 	"log/slog"
+
 	"shared/pkg/observability"
 )
 

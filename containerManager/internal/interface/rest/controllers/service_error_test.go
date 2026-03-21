@@ -2,10 +2,10 @@ package controllers
 
 import (
 	"net/http"
-	"shared/pkg/hostingapi"
 	"testing"
 
 	"containermanager/internal/service"
+	"shared/pkg/hostingapi"
 )
 
 func TestMapServiceError(t *testing.T) {
@@ -18,6 +18,7 @@ func TestMapServiceError(t *testing.T) {
 		if code != http.StatusConflict {
 			t.Fatalf("code = %d, want %d", code, http.StatusConflict)
 		}
+
 		if payload.Code != hostingapi.ErrCodeServerCapacityExceeded {
 			t.Fatalf("payload code = %q", payload.Code)
 		}
@@ -30,6 +31,7 @@ func TestMapServiceError(t *testing.T) {
 		if code != http.StatusConflict {
 			t.Fatalf("code = %d, want %d", code, http.StatusConflict)
 		}
+
 		if payload.Code != hostingapi.ErrCodeServerMemoryUnavailable {
 			t.Fatalf("payload code = %q", payload.Code)
 		}

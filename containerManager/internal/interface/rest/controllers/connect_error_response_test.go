@@ -4,15 +4,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"shared/pkg/hostingapi"
 	"testing"
+
+	"shared/pkg/hostingapi"
 )
 
 func TestConnectValidationErrorResponse(t *testing.T) {
 	t.Parallel()
 
 	c := &Claw{}
-	req := httptest.NewRequest(http.MethodPost, "/connect?userId=u1&clawId=c1", nil)
+	req := httptest.NewRequest(http.MethodPost, "/connect?userId=u1&clawId=c1", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	c.Connect(rec, req)
@@ -27,13 +28,15 @@ func TestConnectValidationErrorResponse(t *testing.T) {
 	}
 
 	var payload hostingapi.ErrorResponse
-	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+	err := json.NewDecoder(res.Body).Decode(&payload)
+	if err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
 
 	if payload.Code != hostingapi.ErrCodeValidation {
 		t.Fatalf("code = %q, want %q", payload.Code, hostingapi.ErrCodeValidation)
 	}
+
 	if payload.Message != "provider is required" {
 		t.Fatalf("message = %q, want %q", payload.Message, "provider is required")
 	}

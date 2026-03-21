@@ -9,11 +9,10 @@ import (
 	"shared/pkg/observability"
 	"strings"
 
+	"simpleClaw/config"
 	"simpleClaw/internal/api/rest"
 	"simpleClaw/internal/api/rest/controllers"
 	appmw "simpleClaw/internal/api/rest/middleware"
-
-	"simpleClaw/config"
 	"simpleClaw/internal/infra/hosting"
 	"simpleClaw/internal/infra/openrouter"
 	"simpleClaw/internal/infra/sql"
@@ -37,6 +36,7 @@ import (
 func main() {
 	cfg := config.New()
 	logger := setupLogger(cfg.Environment)
+
 	shutdownTracing, err := observability.SetupTracing(
 		context.Background(),
 		observability.TracingConfig{
@@ -51,8 +51,10 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
 	defer func() {
-		if err := shutdownTracing(context.Background()); err != nil {
+		err := shutdownTracing(context.Background())
+		if err != nil {
 			logger.Error("failed to shutdown tracing provider", slog.Any("err", err))
 		}
 	}()
@@ -99,14 +101,17 @@ func main() {
 	}
 
 	metricsRegistry := observability.NewPrometheusRegistry()
+
 	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
 	if err != nil {
 		panic(err)
 	}
+
 	operationMetrics, err := observability.NewOperationMetrics(metricsRegistry, "simpleclaw")
 	if err != nil {
 		panic(err)
 	}
+
 	pubSubMetrics, err := observability.NewPubSubFanoutMetrics(metricsRegistry, "simpleclaw")
 	if err != nil {
 		panic(err)
@@ -146,10 +151,12 @@ func main() {
 		cfg.Auth.Admins,
 		operationMetrics,
 	)
+
 	serverService := serverservice.New(serversStorage, hostingManager, operationMetrics)
 	if err := serverService.SyncCapacities(context.Background()); err != nil {
 		logger.Error("failed to sync server capacities", slog.Any("err", err))
 	}
+
 	clawService := claw.NewClaw(
 		clawStorage,
 		channelsStorage,
@@ -183,6 +190,7 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(corsOptions(cfg)))
 	r.Use(httpMetrics.Middleware(appmw.ClassifyActionFlow, appmw.RoutePattern))
+
 	if cfg.Observability.Metrics.Enabled {
 		r.Handle(cfg.Observability.Metrics.Path, observability.Handler(metricsRegistry))
 	}
@@ -193,6 +201,7 @@ func main() {
 	proxyController.Register(r)
 
 	var handler http.Handler = r
+
 	if cfg.Observability.Tracing.Enabled {
 		handler = observability.WrapHTTPHandler(handler, "simpleclaw.http")
 	}
@@ -249,13 +258,16 @@ func corsOptions(cfg config.Config) cors.Options {
 
 func splitCommaList(s string) []string {
 	parts := strings.Split(s, ",")
+
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
 		}
+
 		out = append(out, p)
 	}
+
 	return out
 }

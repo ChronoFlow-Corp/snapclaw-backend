@@ -4,14 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"shared/pkg/observability"
-
-	"simpleClaw/internal/entities"
-	"simpleClaw/internal/infra/sql"
-	"simpleClaw/internal/infra/sql/models"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"shared/pkg/observability"
+	"simpleClaw/internal/entities"
+	"simpleClaw/internal/infra/sql"
+	"simpleClaw/internal/infra/sql/models"
 )
 
 type Storage struct {
@@ -21,6 +20,7 @@ type Storage struct {
 
 func NewStorage(db *gorm.DB, metrics ...*observability.OperationMetrics) *Storage {
 	var opMetrics *observability.OperationMetrics
+
 	if len(metrics) > 0 {
 		opMetrics = metrics[0]
 	}
@@ -30,8 +30,11 @@ func NewStorage(db *gorm.DB, metrics ...*observability.OperationMetrics) *Storag
 
 func (s *Storage) Create(ctx context.Context, srv entities.Server) error {
 	const op = "storages.Servers.Create"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.servers", "storage.server.create", "server_registry")
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	err = gorm.G[models.Server](s.db).Create(ctx, toModel(srv))
@@ -44,8 +47,11 @@ func (s *Storage) Create(ctx context.Context, srv entities.Server) error {
 
 func (s *Storage) GetAll(ctx context.Context) ([]entities.Server, error) {
 	const op = "storages.Servers.GetAll"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.servers", "storage.server.list", "server_registry")
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	rows, err := gorm.G[models.Server](s.db).Order("created_at ASC").Find(ctx)
@@ -63,8 +69,11 @@ func (s *Storage) GetAll(ctx context.Context) ([]entities.Server, error) {
 
 func (s *Storage) GetAvailable(ctx context.Context) (entities.Server, error) {
 	const op = "storages.Servers.GetAvailable"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.servers", "storage.server.get_available", "server_registry")
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	srv, err := gorm.G[models.Server](s.db).Order("created_at ASC").First(ctx)
@@ -77,8 +86,11 @@ func (s *Storage) GetAvailable(ctx context.Context) (entities.Server, error) {
 
 func (s *Storage) GetByID(ctx context.Context, id uuid.UUID) (entities.Server, error) {
 	const op = "storages.Servers.GetByID"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.servers", "storage.server.get_by_id", "server_registry")
+
 	var err error
+
 	defer func() { finish(err) }()
 
 	srv, err := gorm.G[models.Server](s.db).Where("id = ?", id).First(ctx)
@@ -91,7 +103,9 @@ func (s *Storage) GetByID(ctx context.Context, id uuid.UUID) (entities.Server, e
 
 func (s *Storage) Update(ctx context.Context, srv entities.Server) (err error) {
 	const op = "storages.Servers.Update"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.servers", "storage.server.update", "server_registry")
+
 	defer func() { finish(err) }()
 
 	tx := s.db.WithContext(ctx).Model(&models.Server{}).
@@ -118,7 +132,9 @@ func (s *Storage) Update(ctx context.Context, srv entities.Server) (err error) {
 
 func (s *Storage) Delete(ctx context.Context, id uuid.UUID) (err error) {
 	const op = "storages.Servers.Delete"
+
 	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.servers", "storage.server.delete", "server_registry")
+
 	defer func() { finish(err) }()
 
 	affected, err := gorm.G[models.Server](s.db).Where("id = ?", id).Delete(ctx)

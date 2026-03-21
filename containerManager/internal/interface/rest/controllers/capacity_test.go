@@ -4,15 +4,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"shared/pkg/hostingapi"
 	"testing"
+
+	"shared/pkg/hostingapi"
 )
 
 func TestCapacityResponse(t *testing.T) {
 	t.Parallel()
 
 	c := &Claw{capacity: hostingapi.CapacityResponse{MaxClaws: 7}}
-	req := httptest.NewRequest(http.MethodGet, "/capacity", nil)
+	req := httptest.NewRequest(http.MethodGet, "/capacity", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	c.Capacity(rec, req)
@@ -23,7 +24,8 @@ func TestCapacityResponse(t *testing.T) {
 	}
 
 	var payload hostingapi.CapacityResponse
-	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+	err := json.NewDecoder(res.Body).Decode(&payload)
+	if err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
 
