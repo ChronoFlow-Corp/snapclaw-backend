@@ -16,7 +16,7 @@ const (
 )
 
 type Config struct {
-	Environment   string        `env:"ENVIRONMENT"    env-default:"development" yaml:"environment"`
+	Environment   string        `yaml:"environment"   env:"ENVIRONMENT" env-default:"development"`
 	Http          http          `yaml:"http"`
 	Database      database      `yaml:"database"`
 	Auth          auth          `yaml:"auth"`
@@ -25,6 +25,7 @@ type Config struct {
 	Connect       connect       `yaml:"connect"`
 	Proxy         proxy         `yaml:"proxy"`
 	Observability observability `yaml:"observability"`
+	Payment       payment       `yaml:"payment"`
 }
 
 type http struct {
@@ -39,7 +40,7 @@ type database struct {
 type auth struct {
 	Google google   `yaml:"google"`
 	Jwt    Jwt      `yaml:"jwt"`
-	Admins []string `env:"AUTH_ADMINS" env-separator:"," yaml:"admins"`
+	Admins []string `yaml:"admins" env:"AUTH_ADMINS" env-separator:","`
 }
 
 type google struct {
@@ -53,14 +54,14 @@ type Jwt struct {
 	RefreshSecret       string        `env-required:"true" yaml:"refresh_secret"`
 	AccessSecretPublic  string        `env-required:"true" yaml:"access_secret_public"`
 	AccessSecretPrivate string        `env-required:"true" yaml:"access_secret_private"`
-	AccessExpire        time.Duration `env-default:"24h"   env-required:"true"          yaml:"access_expire"`
-	RefreshExpire       time.Duration `env-default:"148h"  env-required:"true"          yaml:"refresh_expire"`
+	AccessExpire        time.Duration `env-required:"true" yaml:"access_expire"         env-default:"24h"`
+	RefreshExpire       time.Duration `env-required:"true" yaml:"refresh_expire"        env-default:"148h"`
 }
 
 type openrouter struct {
 	BaseURL  string        `env-required:"true" yaml:"base_url"`
 	APIToken string        `env-required:"true" yaml:"api_token"`
-	Timeout  time.Duration `env-default:"15s"   yaml:"timeout"`
+	Timeout  time.Duration `                    yaml:"timeout"   env-default:"15s"`
 }
 
 type hosting struct {
@@ -68,8 +69,8 @@ type hosting struct {
 }
 
 type containerManager struct {
-	Timeout    time.Duration `env-default:"15s"                   yaml:"timeout"`
-	BackupPath string        `env:"CONTAINER_MANAGER_BACKUP_PATH" env-default:"/tmp/simpleclaw/config-archives" yaml:"backup_path"`
+	Timeout    time.Duration `env-default:"15s"                             yaml:"timeout"`
+	BackupPath string        `env-default:"/tmp/simpleclaw/config-archives" yaml:"backup_path" env:"CONTAINER_MANAGER_BACKUP_PATH"`
 }
 
 type connect struct {
@@ -78,21 +79,21 @@ type connect struct {
 
 type proxy struct {
 	Token          string        `env:"PROXY_TOKEN"           yaml:"token"`
-	ForwardTimeout time.Duration `env:"PROXY_FORWARD_TIMEOUT" env-default:"5s"    yaml:"forward_timeout"`
-	RetryCount     int           `env:"PROXY_RETRY_COUNT"     env-default:"2"     yaml:"retry_count"`
-	RetryBackoff   time.Duration `env:"PROXY_RETRY_BACKOFF"   env-default:"250ms" yaml:"retry_backoff"`
+	ForwardTimeout time.Duration `env:"PROXY_FORWARD_TIMEOUT" yaml:"forward_timeout" env-default:"5s"`
+	RetryCount     int           `env:"PROXY_RETRY_COUNT"     yaml:"retry_count"     env-default:"2"`
+	RetryBackoff   time.Duration `env:"PROXY_RETRY_BACKOFF"   yaml:"retry_backoff"   env-default:"250ms"`
 }
 
 type gmail struct {
 	ClientID     string `env-required:"true" yaml:"client_id"`
 	ClientSecret string `env-required:"true" yaml:"client_secret"`
 	CallbackURL  string `env-required:"true" yaml:"callback_url"`
-	Watch        watch  `yaml:"watch"`
+	Watch        watch  `                    yaml:"watch"`
 }
 
 type watch struct {
 	Topic  string   `env:"CONNECT_GMAIL_WATCH_TOPIC"  yaml:"topic"`
-	Labels []string `env:"CONNECT_GMAIL_WATCH_LABELS" env-default:"INBOX" env-separator:"," yaml:"labels"`
+	Labels []string `env:"CONNECT_GMAIL_WATCH_LABELS" yaml:"labels" env-default:"INBOX" env-separator:","`
 }
 
 type observability struct {
@@ -107,9 +108,23 @@ type metrics struct {
 
 type tracing struct {
 	Enabled     bool    `env:"OBS_TRACING_ENABLED"      env-default:"false" yaml:"enabled"`
-	Endpoint    string  `env:"OBS_TRACING_ENDPOINT"     yaml:"endpoint"`
+	Endpoint    string  `env:"OBS_TRACING_ENDPOINT"                         yaml:"endpoint"`
 	Insecure    bool    `env:"OBS_TRACING_INSECURE"     env-default:"true"  yaml:"insecure"`
 	SampleRatio float64 `env:"OBS_TRACING_SAMPLE_RATIO" env-default:"1"     yaml:"sample_ratio"`
+}
+
+type payment struct {
+	Yookassa   yookassa          `yaml:"yookassa"`
+	OpenRouter openrouterPayment `yaml:"openrouter"`
+}
+
+type yookassa struct {
+	StoreID   string `env-required:"true" yaml:"store_id"`
+	SecretKey string `env-required:"true" yaml:"secret_key"`
+}
+
+type openrouterPayment struct {
+	WebhookSecret string `env:"OPENROUTER_WEBHOOK_SECRET" yaml:"webhook_secret"`
 }
 
 func New() Config {

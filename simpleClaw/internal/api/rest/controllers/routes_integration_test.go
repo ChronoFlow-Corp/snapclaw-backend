@@ -23,20 +23,24 @@ import (
 	"simpleClaw/internal/entities"
 	entitychannels "simpleClaw/internal/entities/channels"
 	"simpleClaw/internal/infra/sql"
+	billingservice "simpleClaw/internal/service/billing"
+	billingcommands "simpleClaw/internal/service/billing/commands"
 	clawcommands "simpleClaw/internal/service/claw/commands"
 	servercommands "simpleClaw/internal/service/server/commands"
 	usercommands "simpleClaw/internal/service/user/commands"
 )
 
 type testEnv struct {
-	router        http.Handler
-	user          entities.User
-	sessionID     uuid.UUID
-	accessToken   string
-	refreshToken  string
-	userService   *fakeUserService
-	clawService   *fakeClawService
-	serverService *fakeServerService
+	router                  http.Handler
+	user                    entities.User
+	sessionID               uuid.UUID
+	accessToken             string
+	refreshToken            string
+	openRouterWebhookSecret string
+	userService             *fakeUserService
+	clawService             *fakeClawService
+	serverService           *fakeServerService
+	billingService          *fakeBillingService
 }
 
 func TestRoutesIntegration(t *testing.T) {
@@ -144,6 +148,393 @@ func TestRoutesIntegration(t *testing.T) {
 
 		if payload.UserID != env.user.ID.String() {
 			t.Fatalf("unexpected user ID: %s", payload.UserID)
+		}
+	})
+
+	t.Run("POST /api/me/payment-method", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		body := map[string]any{
+			"title":      "Primary card",
+			"is_default": false,
+		}
+
+		rr := env.request(t, http.MethodPost, "/api/me/payment-method", body, accessCookie(env.accessToken))
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		var payload struct {
+			ID        string `json:"id"`
+			Title     string `json:"title"`
+			IsDefault bool   `json:"is_default"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if payload.ID == "" {
+			t.Fatal("expected non-empty payment method id")
+		}
+
+		if payload.Title != "Primary card" {
+			t.Fatalf("unexpected payment method title: %s", payload.Title)
+		}
+
+		if !payload.IsDefault {
+			t.Fatal("first payment method should become default")
+		}
+	})
+
+	t.Run("GET /api/me/payment-method", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		createBody := map[string]any{
+			"title":      "Primary card",
+			"is_default": false,
+		}
+
+		createRR := env.request(
+			t,
+			http.MethodPost,
+			"/api/me/payment-method",
+			createBody,
+			accessCookie(env.accessToken),
+		)
+		if createRR.Code != http.StatusOK {
+			t.Fatalf("unexpected create status: %d", createRR.Code)
+		}
+
+		rr := env.request(t, http.MethodGet, "/api/me/payment-method", nil, accessCookie(env.accessToken))
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		var payload []struct {
+			ID string `json:"id"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if len(payload) != 1 {
+			t.Fatalf("expected 1 payment method, got %d", len(payload))
+		}
+	})
+
+	t.Run("GET /api/me/payment-method/{id}", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		createBody := map[string]any{
+			"title":      "Primary card",
+			"is_default": false,
+		}
+
+		createRR := env.request(
+			t,
+			http.MethodPost,
+			"/api/me/payment-method",
+			createBody,
+			accessCookie(env.accessToken),
+		)
+		if createRR.Code != http.StatusOK {
+			t.Fatalf("unexpected create status: %d", createRR.Code)
+		}
+
+		var created struct {
+			ID string `json:"id"`
+		}
+		decodeJSON(t, createRR, &created)
+
+		rr := env.request(
+			t,
+			http.MethodGet,
+			"/api/me/payment-method/"+created.ID,
+			nil,
+			accessCookie(env.accessToken),
+		)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		var payload struct {
+			ID string `json:"id"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if payload.ID != created.ID {
+			t.Fatalf("unexpected payment method id: %s", payload.ID)
+		}
+	})
+
+	t.Run("PATCH /api/me/payment-method/{id}", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		firstRR := env.request(
+			t,
+			http.MethodPost,
+			"/api/me/payment-method",
+			map[string]any{"title": "First", "is_default": false},
+			accessCookie(env.accessToken),
+		)
+		if firstRR.Code != http.StatusOK {
+			t.Fatalf("unexpected first create status: %d", firstRR.Code)
+		}
+
+		secondRR := env.request(
+			t,
+			http.MethodPost,
+			"/api/me/payment-method",
+			map[string]any{"title": "Second", "is_default": false},
+			accessCookie(env.accessToken),
+		)
+		if secondRR.Code != http.StatusOK {
+			t.Fatalf("unexpected second create status: %d", secondRR.Code)
+		}
+
+		var second struct {
+			ID string `json:"id"`
+		}
+		decodeJSON(t, secondRR, &second)
+
+		patchRR := env.request(
+			t,
+			http.MethodPatch,
+			"/api/me/payment-method/"+second.ID,
+			map[string]any{"is_default": true},
+			accessCookie(env.accessToken),
+		)
+		if patchRR.Code != http.StatusOK {
+			t.Fatalf("unexpected patch status: %d", patchRR.Code)
+		}
+	})
+
+	t.Run("PATCH /api/me/payment-method/{id} rejects false", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		createRR := env.request(
+			t,
+			http.MethodPost,
+			"/api/me/payment-method",
+			map[string]any{"title": "Primary", "is_default": false},
+			accessCookie(env.accessToken),
+		)
+		if createRR.Code != http.StatusOK {
+			t.Fatalf("unexpected create status: %d", createRR.Code)
+		}
+
+		var created struct {
+			ID string `json:"id"`
+		}
+		decodeJSON(t, createRR, &created)
+
+		rr := env.request(
+			t,
+			http.MethodPatch,
+			"/api/me/payment-method/"+created.ID,
+			map[string]any{"is_default": false},
+			accessCookie(env.accessToken),
+		)
+
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+	})
+
+	t.Run("DELETE /api/me/payment-method/{id}", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		createRR := env.request(
+			t,
+			http.MethodPost,
+			"/api/me/payment-method",
+			map[string]any{"title": "Primary", "is_default": false},
+			accessCookie(env.accessToken),
+		)
+		if createRR.Code != http.StatusOK {
+			t.Fatalf("unexpected create status: %d", createRR.Code)
+		}
+
+		var created struct {
+			ID string `json:"id"`
+		}
+		decodeJSON(t, createRR, &created)
+
+		rr := env.request(
+			t,
+			http.MethodDelete,
+			"/api/me/payment-method/"+created.ID,
+			nil,
+			accessCookie(env.accessToken),
+		)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+	})
+
+	t.Run("GET /api/me/billing", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		rr := env.request(t, http.MethodGet, "/api/me/billing", nil, accessCookie(env.accessToken))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		var payload struct {
+			BalanceMinor int64 `json:"balance_minor"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if payload.BalanceMinor != env.billingService.balance[env.user.ID] {
+			t.Fatalf("unexpected balance: %d", payload.BalanceMinor)
+		}
+	})
+
+	t.Run("POST /api/billing/webhook/openrouter", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		req := httptest.NewRequest(
+			http.MethodPost,
+			"/api/billing/webhook/openrouter",
+			bytes.NewBufferString(`{
+				"resourceSpans": [{
+					"scopeSpans": [{
+						"spans": [{
+							"traceId": "trace-route",
+							"spanId": "span-route",
+							"endTimeUnixNano": "1774526400000000000",
+							"attributes": [
+								{"key":"trace.metadata.openrouter.api_key_name","value":{"stringValue":"snapclaw+2dd0b4f0-6f6a-4f4c-b4de-8e5fa6db6d66"}},
+								{"key":"gen_ai.usage.total_cost","value":{"doubleValue":0.01}}
+							]
+						}]
+					}]
+				}]
+			}`),
+		)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", env.openRouterWebhookSecret)
+
+		rr := httptest.NewRecorder()
+		env.router.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		if env.billingService.lastOpenRouterWebhook.TraceID != "trace-route" {
+			t.Fatalf("unexpected trace id: %s", env.billingService.lastOpenRouterWebhook.TraceID)
+		}
+	})
+
+	t.Run("POST /api/me/subscription", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		plan := env.billingService.seedPlan("starter")
+
+		rr := env.request(
+			t,
+			http.MethodPost,
+			"/api/me/subscription",
+			map[string]any{"plan_id": plan.ID.String()},
+			accessCookie(env.accessToken),
+		)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		var payload struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			PlanID string `json:"plan_id"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if payload.Status != entities.SubscriptionStatusActive {
+			t.Fatalf("unexpected status: %s", payload.Status)
+		}
+
+		if payload.PlanID != plan.ID.String() {
+			t.Fatalf("unexpected plan id: %s", payload.PlanID)
+		}
+	})
+
+	t.Run("DELETE /api/me/subscription", func(t *testing.T) {
+		env := newTestEnv(t)
+		plan := env.billingService.seedPlan("starter")
+		_, err := env.billingService.Subscribe(context.Background(), billingcommands.Subscribe{
+			UserID: env.user.ID,
+			PlanID: plan.ID,
+			Now:    time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatalf("seed subscription: %v", err)
+		}
+
+		rr := env.request(
+			t,
+			http.MethodDelete,
+			"/api/me/subscription",
+			nil,
+			accessCookie(env.accessToken),
+		)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+	})
+
+	t.Run("POST /api/plans", func(t *testing.T) {
+		env := newAdminTestEnv(t)
+
+		rr := env.request(
+			t,
+			http.MethodPost,
+			"/api/plans",
+			map[string]any{
+				"code":                 "starter",
+				"name":                 "Starter",
+				"billing_amount_minor": 99000,
+				"balance_credit_minor": 150000,
+				"currency":             "RUB",
+			},
+			accessCookie(env.accessToken),
+		)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		var payload struct {
+			ID   string `json:"id"`
+			Code string `json:"code"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if payload.ID == "" {
+			t.Fatal("expected non-empty plan id")
+		}
+
+		if payload.Code != "starter" {
+			t.Fatalf("unexpected code: %s", payload.Code)
+		}
+	})
+
+	t.Run("GET /api/plans", func(t *testing.T) {
+		env := newAdminTestEnv(t)
+		env.billingService.seedPlan("starter")
+		env.billingService.seedPlan("pro")
+
+		rr := env.request(t, http.MethodGet, "/api/plans", nil, accessCookie(env.accessToken))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		var payload []struct {
+			ID string `json:"id"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if len(payload) != 2 {
+			t.Fatalf("expected 2 plans, got %d", len(payload))
 		}
 	})
 
@@ -638,25 +1029,30 @@ func newTestEnvWithRole(t *testing.T, role string) *testEnv {
 	uService := newFakeUserService(user, j, sessionID, refresh.Raw)
 	cService := newFakeClawService()
 	sService := newFakeServerService()
+	bService := newFakeBillingService(user.ID)
+	openRouterWebhookSecret := "test-openrouter-webhook-secret"
 
 	api := chi.NewRouter()
 	controllers.NewUser(config.EnvDevelopment, uService, j, "http://example.com").Register(api)
 	controllers.NewClaw(cService, j).Register(api)
 	controllers.NewServer(sService, uService, j).Register(api)
+	controllers.NewBilling(bService, uService, j, openRouterWebhookSecret).Register(api)
 
 	root := chi.NewRouter()
 	controllers.NewPubSubProxy(sService, controllers.PubSubProxyOptions{}).Register(root)
 	root.Mount("/api", api)
 
 	return &testEnv{
-		router:        root,
-		user:          user,
-		sessionID:     sessionID,
-		accessToken:   access.Raw,
-		refreshToken:  refresh.Raw,
-		userService:   uService,
-		clawService:   cService,
-		serverService: sService,
+		router:                  root,
+		user:                    user,
+		sessionID:               sessionID,
+		accessToken:             access.Raw,
+		refreshToken:            refresh.Raw,
+		openRouterWebhookSecret: openRouterWebhookSecret,
+		userService:             uService,
+		clawService:             cService,
+		serverService:           sService,
+		billingService:          bService,
 	}
 }
 
@@ -744,12 +1140,13 @@ func hasCookie(cookies []*http.Cookie, name string) bool {
 }
 
 type fakeUserService struct {
-	j            jwt.JWT
-	sessionID    uuid.UUID
-	users        map[uuid.UUID]entities.User
-	channels     map[uuid.UUID]entities.Channel
-	lastRefresh  map[uuid.UUID]string
-	channelOrder []uuid.UUID
+	j              jwt.JWT
+	sessionID      uuid.UUID
+	users          map[uuid.UUID]entities.User
+	channels       map[uuid.UUID]entities.Channel
+	paymentMethods map[uuid.UUID]entities.PaymentMethod
+	lastRefresh    map[uuid.UUID]string
+	channelOrder   []uuid.UUID
 }
 
 func newFakeUserService(
@@ -759,11 +1156,12 @@ func newFakeUserService(
 	refreshToken string,
 ) *fakeUserService {
 	return &fakeUserService{
-		j:           j,
-		sessionID:   sessionID,
-		users:       map[uuid.UUID]entities.User{user.ID: user},
-		channels:    map[uuid.UUID]entities.Channel{},
-		lastRefresh: map[uuid.UUID]string{user.ID: refreshToken},
+		j:              j,
+		sessionID:      sessionID,
+		users:          map[uuid.UUID]entities.User{user.ID: user},
+		channels:       map[uuid.UUID]entities.Channel{},
+		paymentMethods: map[uuid.UUID]entities.PaymentMethod{},
+		lastRefresh:    map[uuid.UUID]string{user.ID: refreshToken},
 	}
 }
 
@@ -833,6 +1231,113 @@ func (s *fakeUserService) AddChannel(
 	s.channelOrder = append(s.channelOrder, ch.ID)
 
 	return ch, nil
+}
+
+func (s *fakeUserService) AddPaymentMethod(
+	_ context.Context,
+	cm usercommands.AddPaymentMethod,
+) (entities.PaymentMethod, error) {
+	if _, ok := s.users[cm.UserID]; !ok {
+		return entities.PaymentMethod{}, sql.ErrNotFound
+	}
+
+	method := entities.PaymentMethod{
+		ID:        uuid.New(),
+		UserID:    cm.UserID,
+		Title:     cm.Title,
+		IsDefault: cm.IsDefault,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	hasMethods := false
+	for id, existing := range s.paymentMethods {
+		if existing.UserID != cm.UserID {
+			continue
+		}
+
+		hasMethods = true
+		if cm.IsDefault {
+			existing.IsDefault = false
+			s.paymentMethods[id] = existing
+		}
+	}
+
+	if !hasMethods {
+		method.IsDefault = true
+	}
+
+	s.paymentMethods[method.ID] = method
+	return method, nil
+}
+
+func (s *fakeUserService) GetPaymentMethod(
+	_ context.Context,
+	methodID, userID uuid.UUID,
+) (entities.PaymentMethod, error) {
+	method, ok := s.paymentMethods[methodID]
+	if !ok || method.UserID != userID {
+		return entities.PaymentMethod{}, sql.ErrNotFound
+	}
+
+	return method, nil
+}
+
+func (s *fakeUserService) GetPaymentMethods(
+	_ context.Context,
+	userID uuid.UUID,
+) ([]entities.PaymentMethod, error) {
+	methods := make([]entities.PaymentMethod, 0, len(s.paymentMethods))
+	for _, method := range s.paymentMethods {
+		if method.UserID == userID {
+			methods = append(methods, method)
+		}
+	}
+
+	sort.Slice(methods, func(i, j int) bool {
+		if methods[i].IsDefault != methods[j].IsDefault {
+			return methods[i].IsDefault
+		}
+
+		return methods[i].CreatedAt.After(methods[j].CreatedAt)
+	})
+
+	return methods, nil
+}
+
+func (s *fakeUserService) SetDefaultPaymentMethod(
+	_ context.Context,
+	cm usercommands.SetDefaultPaymentMethod,
+) error {
+	method, ok := s.paymentMethods[cm.PaymentMethodID]
+	if !ok || method.UserID != cm.UserID {
+		return sql.ErrNotFound
+	}
+
+	for id, existing := range s.paymentMethods {
+		if existing.UserID != cm.UserID {
+			continue
+		}
+
+		existing.IsDefault = false
+		s.paymentMethods[id] = existing
+	}
+
+	method.IsDefault = true
+	s.paymentMethods[method.ID] = method
+	return nil
+}
+
+func (s *fakeUserService) RemovePaymentMethod(
+	_ context.Context,
+	methodID, userID uuid.UUID,
+) error {
+	method, ok := s.paymentMethods[methodID]
+	if !ok || method.UserID != userID {
+		return sql.ErrNotFound
+	}
+
+	delete(s.paymentMethods, methodID)
+	return nil
 }
 
 func (s *fakeUserService) Connect(
@@ -999,6 +1504,210 @@ func (s *fakeClawService) Delete(
 	delete(s.claws, cm.ClawID)
 
 	return nil
+}
+
+type fakeBillingService struct {
+	plans                 map[uuid.UUID]entities.Plan
+	subscriptions         map[uuid.UUID]entities.UserSubscription
+	balance               map[uuid.UUID]int64
+	lastWebhook           billingcommands.PaymentEvent
+	lastOpenRouterWebhook billingcommands.OpenRouterUsageEvent
+	webhookErr            error
+	openRouterWebhookErr  error
+}
+
+func newFakeBillingService(userID uuid.UUID) *fakeBillingService {
+	return &fakeBillingService{
+		plans:         map[uuid.UUID]entities.Plan{},
+		subscriptions: map[uuid.UUID]entities.UserSubscription{},
+		balance:       map[uuid.UUID]int64{userID: 0},
+	}
+}
+
+func (s *fakeBillingService) seedPlan(code string) entities.Plan {
+	now := time.Now().UTC()
+	plan := entities.Plan{
+		ID:                 uuid.New(),
+		Code:               code,
+		Name:               "Plan " + code,
+		BillingAmountMinor: 99000,
+		BalanceCreditMinor: 150000,
+		Currency:           entities.RUB,
+		IsActive:           true,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	s.plans[plan.ID] = plan
+
+	return plan
+}
+
+func (s *fakeBillingService) CreatePlan(_ context.Context, cm billingcommands.CreatePlan) (entities.Plan, error) {
+	now := time.Now().UTC()
+	plan := entities.Plan{
+		ID:                 uuid.New(),
+		Code:               cm.Code,
+		Name:               cm.Name,
+		BillingAmountMinor: cm.BillingAmountMinor,
+		BalanceCreditMinor: cm.BalanceCreditMinor,
+		Currency:           cm.Currency,
+		IsActive:           true,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	s.plans[plan.ID] = plan
+
+	return plan, nil
+}
+
+func (s *fakeBillingService) GetPlan(_ context.Context, id uuid.UUID) (entities.Plan, error) {
+	plan, ok := s.plans[id]
+	if !ok {
+		return entities.Plan{}, sql.ErrNotFound
+	}
+
+	return plan, nil
+}
+
+func (s *fakeBillingService) ListPlans(_ context.Context, includeInactive bool) ([]entities.Plan, error) {
+	plans := make([]entities.Plan, 0, len(s.plans))
+	for _, plan := range s.plans {
+		if !includeInactive && !plan.IsActive {
+			continue
+		}
+		plans = append(plans, plan)
+	}
+
+	sort.Slice(plans, func(i, j int) bool {
+		return plans[i].Code < plans[j].Code
+	})
+
+	return plans, nil
+}
+
+func (s *fakeBillingService) UpdatePlan(_ context.Context, cm billingcommands.UpdatePlan) (entities.Plan, error) {
+	plan, ok := s.plans[cm.ID]
+	if !ok {
+		return entities.Plan{}, sql.ErrNotFound
+	}
+
+	plan.Code = cm.Code
+	plan.Name = cm.Name
+	plan.BillingAmountMinor = cm.BillingAmountMinor
+	plan.BalanceCreditMinor = cm.BalanceCreditMinor
+	plan.Currency = cm.Currency
+	plan.IsActive = cm.IsActive
+	plan.UpdatedAt = time.Now().UTC()
+	s.plans[plan.ID] = plan
+
+	return plan, nil
+}
+
+func (s *fakeBillingService) DeactivatePlan(_ context.Context, id uuid.UUID) error {
+	plan, ok := s.plans[id]
+	if !ok {
+		return sql.ErrNotFound
+	}
+
+	plan.IsActive = false
+	s.plans[id] = plan
+	return nil
+}
+
+func (s *fakeBillingService) Subscribe(_ context.Context, cm billingcommands.Subscribe) (string, error) {
+	if _, ok := s.plans[cm.PlanID]; !ok {
+		return "", sql.ErrNotFound
+	}
+
+	subscription := entities.UserSubscription{
+		ID:                 uuid.New(),
+		UserID:             cm.UserID,
+		PlanID:             cm.PlanID,
+		Status:             entities.SubscriptionStatusActive,
+		StartedAt:          cm.Now,
+		CurrentPeriodStart: cm.Now,
+		CurrentPeriodEnd:   cm.Now.AddDate(0, 1, 0),
+		CreatedAt:          cm.Now,
+		UpdatedAt:          cm.Now,
+	}
+	s.subscriptions[cm.UserID] = subscription
+	return "http://example.com/checkout/" + subscription.ID.String(), nil
+}
+
+func (s *fakeBillingService) ChangePlan(_ context.Context, cm billingcommands.ChangePlan) (entities.UserSubscription, error) {
+	subscription, ok := s.subscriptions[cm.UserID]
+	if !ok {
+		return entities.UserSubscription{}, sql.ErrNotFound
+	}
+
+	subscription.PlanID = cm.PlanID
+	subscription.UpdatedAt = cm.Now
+	s.subscriptions[cm.UserID] = subscription
+	return subscription, nil
+}
+
+func (s *fakeBillingService) CancelSubscription(_ context.Context, cm billingcommands.CancelSubscription) error {
+	subscription, ok := s.subscriptions[cm.UserID]
+	if !ok {
+		return sql.ErrNotFound
+	}
+
+	subscription.Status = entities.SubscriptionStatusCanceled
+	subscription.CanceledAt = &cm.Now
+	subscription.UpdatedAt = cm.Now
+	s.subscriptions[cm.UserID] = subscription
+	return nil
+}
+
+func (s *fakeBillingService) GetCurrentSubscription(_ context.Context, userID uuid.UUID) (*billingservice.SubscriptionSummary, error) {
+	subscription, ok := s.subscriptions[userID]
+	if !ok || subscription.Status != entities.SubscriptionStatusActive {
+		return nil, nil
+	}
+
+	plan, ok := s.plans[subscription.PlanID]
+	if !ok {
+		return nil, sql.ErrNotFound
+	}
+
+	return &billingservice.SubscriptionSummary{
+		Subscription: subscription,
+		Plan:         plan,
+	}, nil
+}
+
+func (s *fakeBillingService) GetBillingSummary(_ context.Context, userID uuid.UUID) (billingservice.BillingSummary, error) {
+	var nextChargeAt *time.Time
+	if subscription, ok := s.subscriptions[userID]; ok && subscription.Status == entities.SubscriptionStatusActive {
+		next := subscription.CurrentPeriodEnd
+		nextChargeAt = &next
+	}
+
+	summary := billingservice.BillingSummary{
+		BalanceMinor: s.balance[userID],
+		NextChargeAt: nextChargeAt,
+	}
+
+	current, err := s.GetCurrentSubscription(context.Background(), userID)
+	if err != nil {
+		return billingservice.BillingSummary{}, err
+	}
+	summary.CurrentSubscription = current
+
+	return summary, nil
+}
+
+func (s *fakeBillingService) PaymentEventHandler(_ context.Context, event billingcommands.PaymentEvent) error {
+	s.lastWebhook = event
+	return s.webhookErr
+}
+
+func (s *fakeBillingService) HandleOpenRouterUsageWebhook(
+	_ context.Context,
+	event billingcommands.OpenRouterUsageEvent,
+) error {
+	s.lastOpenRouterWebhook = event
+	return s.openRouterWebhookErr
 }
 
 type fakeServerService struct {

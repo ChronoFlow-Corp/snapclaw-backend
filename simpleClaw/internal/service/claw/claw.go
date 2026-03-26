@@ -13,13 +13,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"shared/consts"
 	"shared/pkg/observability"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/hosting"
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/service/claw/commands"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -52,23 +53,6 @@ var (
 	ErrProviderUnsupported       = errors.New("provider is not supported")
 	ErrGmailTokenRequired        = errors.New("gmail token is required")
 	ErrGmailWatchTopicRequired   = errors.New("gmail watch topic is required")
-
-	errUserIDRequired            = ErrUserIDRequired
-	errClawIDRequired            = ErrClawIDRequired
-	errNameRequired              = ErrNameRequired
-	errModelRequired             = ErrModelRequired
-	errChannelNotFound           = ErrChannelNotFound
-	errHostingMissing            = ErrHostingMissing
-	errOpenRouterClient          = ErrOpenRouterClient
-	errServerIDRequired          = ErrServerIDRequired
-	errContainerIDRequired       = ErrContainerIDRequired
-	errNoServerCapacity          = ErrNoServerCapacity
-	errConfigArchivePathRequired = ErrConfigArchivePathRequired
-	errPairingCodeRequired       = ErrPairingCodeRequired
-	errPairingCodeInvalid        = ErrPairingCodeInvalid
-	errProviderUnsupported       = ErrProviderUnsupported
-	errGmailTokenRequired        = ErrGmailTokenRequired
-	errGmailWatchTopicRequired   = ErrGmailWatchTopicRequired
 )
 
 type UpdateStageError struct {
@@ -162,19 +146,19 @@ func (s *Service) Create(
 	defer func() { finish(err) }()
 
 	if cm.UserID == uuid.Nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errUserIDRequired)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrUserIDRequired)
 	}
 
 	if cm.Name == "" {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errNameRequired)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrNameRequired)
 	}
 
 	if cm.Model == "" {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errModelRequired)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrModelRequired)
 	}
 
 	if s.hosting == nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errHostingMissing)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrHostingMissing)
 	}
 
 	user, err := s.users.GetByID(ctx, cm.UserID)
@@ -204,7 +188,7 @@ func (s *Service) Create(
 			}
 
 			if len(chs) != len(channelIDs) {
-				return entities.Claw{}, fmt.Errorf("%s: %w", op, errChannelNotFound)
+				return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrChannelNotFound)
 			}
 		}
 	}
@@ -212,7 +196,7 @@ func (s *Service) Create(
 	keyValue := user.OpenRouterApiKey
 	if keyValue == "" || user.OpenRouterKeyID == "" {
 		if s.keys == nil {
-			return entities.Claw{}, fmt.Errorf("%s: %w", op, errOpenRouterClient)
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrOpenRouterClient)
 		}
 
 		monthly := normalizeLimits(cm.ApiKeyLimit)
@@ -306,11 +290,11 @@ func (s *Service) GetByID(
 	defer func() { finish(err) }()
 
 	if userID == uuid.Nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errUserIDRequired)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrUserIDRequired)
 	}
 
 	if clawID == uuid.Nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errClawIDRequired)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrClawIDRequired)
 	}
 
 	cl, err := s.claws.GetByID(ctx, clawID, userID)
@@ -341,7 +325,7 @@ func (s *Service) GetByUserID(
 	defer func() { finish(err) }()
 
 	if userID == uuid.Nil {
-		return nil, fmt.Errorf("%s: %w", op, errUserIDRequired)
+		return nil, fmt.Errorf("%s: %w", op, ErrUserIDRequired)
 	}
 
 	cls, err := s.claws.GetByUserID(ctx, userID)
@@ -372,11 +356,11 @@ func (s *Service) Update(
 	defer func() { finish(err) }()
 
 	if cm.UserID == uuid.Nil {
-		return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errUserIDRequired)
+		return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, ErrUserIDRequired)
 	}
 
 	if cm.ClawID == uuid.Nil {
-		return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errClawIDRequired)
+		return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, ErrClawIDRequired)
 	}
 
 	existing, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
@@ -390,7 +374,7 @@ func (s *Service) Update(
 	if cm.Name != nil {
 		name = strings.TrimSpace(*cm.Name)
 		if name == "" {
-			return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errNameRequired)
+			return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, ErrNameRequired)
 		}
 	}
 
@@ -406,7 +390,7 @@ func (s *Service) Update(
 			}
 
 			if len(chs) != len(channelUpdate.ChannelIDs) {
-				return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errChannelNotFound)
+				return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, ErrChannelNotFound)
 			}
 		}
 	}
@@ -433,7 +417,11 @@ func (s *Service) Update(
 		keyValue = user.OpenRouterApiKey
 		if keyValue == "" || user.OpenRouterKeyID == "" {
 			if s.keys == nil {
-				return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errOpenRouterClient)
+				return entities.Claw{}, wrapUpdateStage(
+					op,
+					updateStageValidate,
+					ErrOpenRouterClient,
+				)
 			}
 
 			monthly := normalizeLimits(cm.ApiKeyLimit)
@@ -457,11 +445,11 @@ func (s *Service) Update(
 	if cm.Model != nil {
 		model := strings.TrimSpace(*cm.Model)
 		if model == "" {
-			return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errModelRequired)
+			return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, ErrModelRequired)
 		}
 
 		if s.keys == nil {
-			return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errOpenRouterClient)
+			return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, ErrOpenRouterClient)
 		}
 
 		primaryModel, err = s.keys.ResolveModel(ctx, model)
@@ -471,7 +459,7 @@ func (s *Service) Update(
 	}
 
 	if primaryModel == "" {
-		return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, errModelRequired)
+		return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, ErrModelRequired)
 	}
 
 	updatedCfg := applyBaseUpdates(desired.Config, primaryModel, keyValue)
@@ -491,7 +479,7 @@ func (s *Service) Update(
 
 	if desired.ContainerID != "" && desired.ServerID != uuid.Nil {
 		if s.hosting == nil {
-			return entities.Claw{}, wrapUpdateStage(op, updateStageHostingUpdate, errHostingMissing)
+			return entities.Claw{}, wrapUpdateStage(op, updateStageHostingUpdate, ErrHostingMissing)
 		}
 
 		availableSrv, err := s.servers.GetByID(ctx, desired.ServerID)
@@ -523,11 +511,11 @@ func (s *Service) DeleteByID(
 	const op = "service.Claw.DeleteByID"
 
 	if userID == uuid.Nil {
-		return fmt.Errorf("%s: %w", op, errUserIDRequired)
+		return fmt.Errorf("%s: %w", op, ErrUserIDRequired)
 	}
 
 	if clawID == uuid.Nil {
-		return fmt.Errorf("%s: %w", op, errClawIDRequired)
+		return fmt.Errorf("%s: %w", op, ErrClawIDRequired)
 	}
 
 	return s.Delete(ctx, commands.DeleteClaw{
@@ -556,15 +544,15 @@ func (s *Service) Start(
 	defer func() { finish(err) }()
 
 	if cm.UserID == uuid.Nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errUserIDRequired)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrUserIDRequired)
 	}
 
 	if cm.ClawID == uuid.Nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errClawIDRequired)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrClawIDRequired)
 	}
 
 	if s.hosting == nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errHostingMissing)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrHostingMissing)
 	}
 
 	cl, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
@@ -643,15 +631,15 @@ func (s *Service) Stop(
 	defer func() { finish(err) }()
 
 	if cm.UserID == uuid.Nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errUserIDRequired)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrUserIDRequired)
 	}
 
 	if cm.ClawID == uuid.Nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errClawIDRequired)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrClawIDRequired)
 	}
 
 	if s.hosting == nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errHostingMissing)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrHostingMissing)
 	}
 
 	cl, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
@@ -660,11 +648,11 @@ func (s *Service) Stop(
 	}
 
 	if cl.ContainerID == "" {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errContainerIDRequired)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrContainerIDRequired)
 	}
 
 	if cl.ServerID == uuid.Nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, errServerIDRequired)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrServerIDRequired)
 	}
 
 	srv, err := s.servers.GetByID(ctx, cl.ServerID)
@@ -715,20 +703,20 @@ func (s *Service) ApprovePairing(
 	defer func() { finish(err) }()
 
 	if cm.UserID == uuid.Nil {
-		return fmt.Errorf("%s: %w", op, errUserIDRequired)
+		return fmt.Errorf("%s: %w", op, ErrUserIDRequired)
 	}
 
 	if cm.ClawID == uuid.Nil {
-		return fmt.Errorf("%s: %w", op, errClawIDRequired)
+		return fmt.Errorf("%s: %w", op, ErrClawIDRequired)
 	}
 
 	code := strings.TrimSpace(cm.Code)
 	if code == "" {
-		return fmt.Errorf("%s: %w", op, errPairingCodeRequired)
+		return fmt.Errorf("%s: %w", op, ErrPairingCodeRequired)
 	}
 
 	if s.hosting == nil {
-		return fmt.Errorf("%s: %w", op, errHostingMissing)
+		return fmt.Errorf("%s: %w", op, ErrHostingMissing)
 	}
 
 	cl, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
@@ -737,11 +725,11 @@ func (s *Service) ApprovePairing(
 	}
 
 	if cl.ContainerID == "" {
-		return fmt.Errorf("%s: %w", op, errContainerIDRequired)
+		return fmt.Errorf("%s: %w", op, ErrContainerIDRequired)
 	}
 
 	if cl.ServerID == uuid.Nil {
-		return fmt.Errorf("%s: %w", op, errServerIDRequired)
+		return fmt.Errorf("%s: %w", op, ErrServerIDRequired)
 	}
 
 	srv, err := s.servers.GetByID(ctx, cl.ServerID)
@@ -751,7 +739,7 @@ func (s *Service) ApprovePairing(
 
 	if err := s.hosting.ApprovePairing(ctx, cl, srv, code); err != nil {
 		if errors.Is(err, hosting.ErrInvalidCode) {
-			return fmt.Errorf("%s: %w", op, errPairingCodeInvalid)
+			return fmt.Errorf("%s: %w", op, ErrPairingCodeInvalid)
 		}
 
 		return fmt.Errorf("%s: %w", op, err)
@@ -778,15 +766,15 @@ func (s *Service) Connect(
 	defer func() { finish(err) }()
 
 	if cm.UserID == uuid.Nil {
-		return fmt.Errorf("%s: %w", op, errUserIDRequired)
+		return fmt.Errorf("%s: %w", op, ErrUserIDRequired)
 	}
 
 	if cm.ClawID == uuid.Nil {
-		return fmt.Errorf("%s: %w", op, errClawIDRequired)
+		return fmt.Errorf("%s: %w", op, ErrClawIDRequired)
 	}
 
 	if s.hosting == nil {
-		return fmt.Errorf("%s: %w", op, errHostingMissing)
+		return fmt.Errorf("%s: %w", op, ErrHostingMissing)
 	}
 
 	provider := strings.TrimSpace(cm.Provider)
@@ -795,13 +783,13 @@ func (s *Service) Connect(
 	}
 
 	if !strings.EqualFold(provider, consts.ProviderGmail) {
-		return fmt.Errorf("%s: %w", op, errProviderUnsupported)
+		return fmt.Errorf("%s: %w", op, ErrProviderUnsupported)
 	}
 
 	token, err := s.users.GetGmailToken(ctx, cm.UserID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNotFound) {
-			return fmt.Errorf("%s: %w", op, errGmailTokenRequired)
+			return fmt.Errorf("%s: %w", op, ErrGmailTokenRequired)
 		}
 
 		return fmt.Errorf("%s: %w", op, err)
@@ -816,7 +804,7 @@ func (s *Service) Connect(
 	}
 
 	if token.Token.RefreshToken == "" {
-		return fmt.Errorf("%s: %w", op, errGmailTokenRequired)
+		return fmt.Errorf("%s: %w", op, ErrGmailTokenRequired)
 	}
 
 	cl, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
@@ -825,11 +813,11 @@ func (s *Service) Connect(
 	}
 
 	if cl.ContainerID == "" {
-		return fmt.Errorf("%s: %w", op, errContainerIDRequired)
+		return fmt.Errorf("%s: %w", op, ErrContainerIDRequired)
 	}
 
 	if cl.ServerID == uuid.Nil {
-		return fmt.Errorf("%s: %w", op, errServerIDRequired)
+		return fmt.Errorf("%s: %w", op, ErrServerIDRequired)
 	}
 
 	srv, err := s.servers.GetByID(ctx, cl.ServerID)
@@ -851,7 +839,7 @@ func (s *Service) Connect(
 	}
 
 	if watchTopic == "" {
-		return fmt.Errorf("%s: %w", op, errGmailWatchTopicRequired)
+		return fmt.Errorf("%s: %w", op, ErrGmailWatchTopicRequired)
 	}
 
 	payload, err := json.Marshal(struct {
@@ -896,11 +884,11 @@ func (s *Service) Delete(
 	defer func() { finish(err) }()
 
 	if cm.UserID == uuid.Nil {
-		return fmt.Errorf("%s: %w", op, errUserIDRequired)
+		return fmt.Errorf("%s: %w", op, ErrUserIDRequired)
 	}
 
 	if cm.ClawID == uuid.Nil {
-		return fmt.Errorf("%s: %w", op, errClawIDRequired)
+		return fmt.Errorf("%s: %w", op, ErrClawIDRequired)
 	}
 
 	cl, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
@@ -910,11 +898,11 @@ func (s *Service) Delete(
 
 	if cl.ContainerID != "" {
 		if s.hosting == nil {
-			return fmt.Errorf("%s: %w", op, errHostingMissing)
+			return fmt.Errorf("%s: %w", op, ErrHostingMissing)
 		}
 
 		if cl.ServerID == uuid.Nil {
-			return fmt.Errorf("%s: %w", op, errServerIDRequired)
+			return fmt.Errorf("%s: %w", op, ErrServerIDRequired)
 		}
 
 		srv, err := s.servers.GetByID(ctx, cl.ServerID)
@@ -943,11 +931,11 @@ func (s *Service) backupConfigArchive(
 	const op = "service.Claw.backupConfigArchive"
 
 	if s.archivePath == "" {
-		return fmt.Errorf("%s: %w", op, errConfigArchivePathRequired)
+		return fmt.Errorf("%s: %w", op, ErrConfigArchivePathRequired)
 	}
 
 	if s.hosting == nil {
-		return fmt.Errorf("%s: %w", op, errHostingMissing)
+		return fmt.Errorf("%s: %w", op, ErrHostingMissing)
 	}
 
 	body, err := s.hosting.ConfigArchive(ctx, cl, server, deleteAfter)
@@ -1028,7 +1016,7 @@ func (s *Service) writeArchiveFromConfig(cl entities.Claw) error {
 	const op = "service.Claw.writeArchiveFromConfig"
 
 	if s.archivePath == "" {
-		return fmt.Errorf("%s: %w", op, errConfigArchivePathRequired)
+		return fmt.Errorf("%s: %w", op, ErrConfigArchivePathRequired)
 	}
 
 	archiveFile, err := s.archiveFilePath(cl)
@@ -1084,11 +1072,11 @@ func (s *Service) restoreConfigArchive(
 	const op = "service.Claw.restoreConfigArchive"
 
 	if s.archivePath == "" {
-		return fmt.Errorf("%s: %w", op, errConfigArchivePathRequired)
+		return fmt.Errorf("%s: %w", op, ErrConfigArchivePathRequired)
 	}
 
 	if s.hosting == nil {
-		return fmt.Errorf("%s: %w", op, errHostingMissing)
+		return fmt.Errorf("%s: %w", op, ErrHostingMissing)
 	}
 
 	archiveFile, err := s.archiveFilePath(cl)
@@ -1115,7 +1103,7 @@ func (s *Service) restoreConfigArchive(
 
 func (s *Service) archiveFilePath(cl entities.Claw) (string, error) {
 	if s.archivePath == "" {
-		return "", errConfigArchivePathRequired
+		return "", ErrConfigArchivePathRequired
 	}
 
 	return filepath.Join(s.archivePath, cl.UserID.String(), cl.ID.String()+".tar"), nil
@@ -1144,7 +1132,8 @@ func (s *Service) selectAvailableServer(ctx context.Context) (entities.Server, e
 			continue
 		}
 
-		if !selectedSet || free > selectedFree || (free == selectedFree && srv.CreatedAt.Before(selected.CreatedAt)) {
+		if !selectedSet || free > selectedFree ||
+			(free == selectedFree && srv.CreatedAt.Before(selected.CreatedAt)) {
 			selected = srv
 			selectedSet = true
 			selectedFree = free
@@ -1152,7 +1141,7 @@ func (s *Service) selectAvailableServer(ctx context.Context) (entities.Server, e
 	}
 
 	if !selectedSet {
-		return entities.Server{}, errNoServerCapacity
+		return entities.Server{}, ErrNoServerCapacity
 	}
 
 	return selected, nil

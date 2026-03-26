@@ -5,22 +5,24 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
-	"time"
-
-	"github.com/google/uuid"
 	"shared/consts"
 	"shared/pkg/jwt"
 	"shared/pkg/observability"
+	"strings"
+	"time"
+
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/service/user/commands"
+
+	"github.com/google/uuid"
 )
 
 type Service struct {
 	j       jwt.JWT
 	uSt     UStorage
 	chSt    ChannelStorage
+	pmSt    paymentMethodStorage
 	keys    apiKeyManager
 	admins  map[string]struct{}
 	metrics *observability.OperationMetrics
@@ -30,6 +32,7 @@ func NewUser(
 	j jwt.JWT,
 	uSt UStorage,
 	chSt ChannelStorage,
+	pmSt paymentMethodStorage,
 	keys apiKeyManager,
 	admins []string,
 	metrics ...*observability.OperationMetrics,
@@ -44,6 +47,7 @@ func NewUser(
 		j:       j,
 		uSt:     uSt,
 		chSt:    chSt,
+		pmSt:    pmSt,
 		keys:    keys,
 		admins:  buildAdminSet(admins),
 		metrics: opMetrics,
@@ -434,6 +438,189 @@ func (s *Service) Connect(ctx context.Context, cm commands.ConnectCommand) (err 
 	}
 
 	if err := s.uSt.UpsertGmailToken(ctx, cm.UserID, token); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Service) AddPaymentMethod(
+	ctx context.Context,
+	cm commands.AddPaymentMethod,
+) (entities.PaymentMethod, error) {
+	const op = "service.Service.AddPaymentMethod"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"payment_method.add",
+		"payment_method",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
+	title := strings.TrimSpace(cm.Title)
+	if cm.UserID == uuid.Nil || title == "" {
+		return entities.PaymentMethod{}, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	count, err := s.pmSt.CountByUserID(ctx, cm.UserID)
+	if err != nil {
+		return entities.PaymentMethod{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	isDefault := cm.IsDefault
+	if count == 0 {
+		isDefault = true
+	} else if cm.IsDefault {
+		if err = s.pmSt.ClearDefaultByUserID(ctx, cm.UserID); err != nil {
+			return entities.PaymentMethod{}, fmt.Errorf("%s: %w", op, err)
+		}
+	}
+
+	method := entities.PaymentMethod{
+		ID:        uuid.New(),
+		UserID:    cm.UserID,
+		Title:     title,
+		IsDefault: isDefault,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	if err = s.pmSt.Create(ctx, method); err != nil {
+		return entities.PaymentMethod{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return method, nil
+}
+
+func (s *Service) GetPaymentMethod(
+	ctx context.Context,
+	methodID, userID uuid.UUID,
+) (entities.PaymentMethod, error) {
+	const op = "service.Service.GetPaymentMethod"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"payment_method.get",
+		"payment_method",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
+	if methodID == uuid.Nil || userID == uuid.Nil {
+		return entities.PaymentMethod{}, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	method, err := s.pmSt.GetByID(ctx, methodID, userID)
+	if err != nil {
+		return entities.PaymentMethod{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return method, nil
+}
+
+func (s *Service) GetPaymentMethods(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]entities.PaymentMethod, error) {
+	const op = "service.Service.GetPaymentMethods"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"payment_method.list",
+		"payment_method",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
+	if userID == uuid.Nil {
+		return nil, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	methods, err := s.pmSt.GetByUserID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return methods, nil
+}
+
+func (s *Service) SetDefaultPaymentMethod(
+	ctx context.Context,
+	cm commands.SetDefaultPaymentMethod,
+) error {
+	const op = "service.Service.SetDefaultPaymentMethod"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"payment_method.default.set",
+		"payment_method",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
+	if cm.UserID == uuid.Nil || cm.PaymentMethodID == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	if _, err = s.pmSt.GetByID(ctx, cm.PaymentMethodID, cm.UserID); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err = s.pmSt.ClearDefaultByUserID(ctx, cm.UserID); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err = s.pmSt.UpdateDefault(ctx, cm.PaymentMethodID, cm.UserID, true); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Service) RemovePaymentMethod(
+	ctx context.Context,
+	methodID, userID uuid.UUID,
+) error {
+	const op = "service.Service.RemovePaymentMethod"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"payment_method.delete",
+		"payment_method",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
+	if methodID == uuid.Nil || userID == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	if err = s.pmSt.Delete(ctx, methodID, userID); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 

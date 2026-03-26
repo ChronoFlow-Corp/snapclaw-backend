@@ -1,8 +1,9 @@
 package sql
 
 import (
-	"gorm.io/gorm"
 	"simpleClaw/internal/infra/sql/models"
+
+	"gorm.io/gorm"
 )
 
 func Migration(db *gorm.DB) error {
@@ -13,5 +14,11 @@ func Migration(db *gorm.DB) error {
 		&models.Channel{},
 		&models.Server{},
 		&models.Claw{},
+		&models.Payment{},
+		&models.PaymentMethod{},
+		&models.Plan{},
+		&models.UserSubscription{},
+		&models.UserBalanceEntry{},
+		&models.OpenRouterUsageEvent{},
 	)
 }

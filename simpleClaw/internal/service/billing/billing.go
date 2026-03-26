@@ -1,0 +1,1101 @@
+package billing
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"math"
+	"shared/pkg/observability"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+
+	"simpleClaw/internal/entities"
+	"simpleClaw/internal/infra/sql"
+	"simpleClaw/internal/service/billing/commands"
+)
+
+var (
+	ErrInsufficientBalance = errors.New("insufficient balance")
+	ErrPlanInactive        = errors.New("plan inactive")
+	ErrUnsupportedCurrency = errors.New("unsupported currency")
+)
+
+const defaultOpenRouterCostCurrency = "USD"
+
+type Service struct {
+	plans         planStorage
+	subscriptions subscriptionStorage
+	balance       balanceEntryStorage
+	users         userStorage
+	payments      paymentStorage
+	payInfra      paymentInfra
+	usageAmounts  usageAmountConverter
+	metrics       *observability.OperationMetrics
+}
+
+type SubscriptionSummary struct {
+	Subscription entities.UserSubscription
+	Plan         entities.Plan
+}
+
+type BillingSummary struct {
+	BalanceMinor        int64
+	CurrentSubscription *SubscriptionSummary
+	NextChargeAt        *time.Time
+}
+
+func NewService(
+	plans planStorage,
+	subscriptions subscriptionStorage,
+	balance balanceEntryStorage,
+	users userStorage,
+	payments paymentStorage,
+	payInfra paymentInfra,
+	metrics ...*observability.OperationMetrics,
+) *Service {
+	var opMetrics *observability.OperationMetrics
+
+	if len(metrics) > 0 {
+		opMetrics = metrics[0]
+	}
+
+	return &Service{
+		plans:         plans,
+		subscriptions: subscriptions,
+		balance:       balance,
+		users:         users,
+		payments:      payments,
+		payInfra:      payInfra,
+		usageAmounts:  defaultUsageAmountConverter{},
+		metrics:       opMetrics,
+	}
+}
+
+func (s *Service) CreatePlan(
+	ctx context.Context,
+	cmd commands.CreatePlan,
+) (plan entities.Plan, err error) {
+	const op = "service.billing.CreatePlan"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"plan.create",
+		"billing_plan",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.plans == nil {
+		return entities.Plan{}, fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	now := time.Now().UTC()
+	plan = entities.Plan{
+		ID:                 uuid.New(),
+		Code:               strings.TrimSpace(cmd.Code),
+		Name:               strings.TrimSpace(cmd.Name),
+		BillingAmountMinor: cmd.BillingAmountMinor,
+		BalanceCreditMinor: cmd.BalanceCreditMinor,
+		Currency:           strings.TrimSpace(cmd.Currency),
+		IsActive:           true,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+
+	if err := validatePlan(plan); err != nil {
+		return entities.Plan{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := s.plans.Create(ctx, plan); err != nil {
+		return entities.Plan{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return plan, nil
+}
+
+func (s *Service) GetPlan(ctx context.Context, id uuid.UUID) (plan entities.Plan, err error) {
+	const op = "service.billing.GetPlan"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"plan.get",
+		"billing_plan",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.plans == nil {
+		return entities.Plan{}, fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	if id == uuid.Nil {
+		return entities.Plan{}, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	plan, err = s.plans.GetByID(ctx, id)
+	if err != nil {
+		return entities.Plan{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return plan, nil
+}
+
+func (s *Service) ListPlans(
+	ctx context.Context,
+	includeInactive bool,
+) (plans []entities.Plan, err error) {
+	const op = "service.billing.ListPlans"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"plan.list",
+		"billing_plan",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.plans == nil {
+		return nil, fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	plans, err = s.plans.List(ctx, includeInactive)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return plans, nil
+}
+
+func (s *Service) UpdatePlan(
+	ctx context.Context,
+	cmd commands.UpdatePlan,
+) (plan entities.Plan, err error) {
+	const op = "service.billing.UpdatePlan"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"plan.update",
+		"billing_plan",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.plans == nil {
+		return entities.Plan{}, fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	plan, err = s.plans.GetByID(ctx, cmd.ID)
+	if err != nil {
+		return entities.Plan{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	plan.Code = strings.TrimSpace(cmd.Code)
+	plan.Name = strings.TrimSpace(cmd.Name)
+	plan.BillingAmountMinor = cmd.BillingAmountMinor
+	plan.BalanceCreditMinor = cmd.BalanceCreditMinor
+	plan.Currency = strings.TrimSpace(cmd.Currency)
+	plan.IsActive = cmd.IsActive
+	plan.UpdatedAt = time.Now().UTC()
+
+	if err := validatePlan(plan); err != nil {
+		return entities.Plan{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := s.plans.Update(ctx, plan); err != nil {
+		return entities.Plan{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return plan, nil
+}
+
+func (s *Service) DeactivatePlan(ctx context.Context, id uuid.UUID) (err error) {
+	const op = "service.billing.DeactivatePlan"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"plan.deactivate",
+		"billing_plan",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.plans == nil {
+		return fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	if id == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	if err := s.plans.Deactivate(ctx, id); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Service) Subscribe(
+	ctx context.Context,
+	cmd commands.Subscribe,
+) (confirmationURL string, err error) {
+	const op = "service.billing.Subscribe"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"subscription.subscribe",
+		"billing_subscription",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.plans == nil || s.subscriptions == nil {
+		return "", fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	if cmd.UserID == uuid.Nil || cmd.PlanID == uuid.Nil || cmd.Now.IsZero() {
+		return "", fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	plan, err := s.plans.GetByID(ctx, cmd.PlanID)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", op, err)
+	}
+
+	if !plan.IsActive {
+		return "", fmt.Errorf("%s: %w", op, ErrPlanInactive)
+	}
+
+	subscription := entities.UserSubscription{
+		ID:                 uuid.New(),
+		UserID:             cmd.UserID,
+		PlanID:             plan.ID,
+		Status:             entities.SubscriptionStatusPending,
+		StartedAt:          cmd.Now,
+		CurrentPeriodStart: cmd.Now,
+		CurrentPeriodEnd:   cmd.Now.AddDate(0, 1, 0),
+		CreatedAt:          cmd.Now,
+		UpdatedAt:          cmd.Now,
+	}
+
+	if err := s.subscriptions.Create(ctx, subscription); err != nil {
+		return "", fmt.Errorf("%s: %w", op, err)
+	}
+
+	payment, err := s.payInfra.CreatePayment(
+		ctx,
+		entities.Amount{
+			Value:    strconv.FormatInt(plan.BillingAmountMinor, 10),
+			Currency: plan.Currency,
+		},
+	)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", op, err)
+	}
+
+	if payment.Confirmation.ConfirmationURL == nil {
+		return "", fmt.Errorf("%s: %w", op, errors.New("unexpected confirmation url"))
+	}
+
+	payment.SubscriptionID = &subscription.ID
+	payment.UserID = cmd.UserID
+	payment.Purpose = entities.PaymentPurposeSubscription
+
+	err = s.payments.Create(ctx, payment)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", op, err)
+	}
+
+	return *payment.Confirmation.ConfirmationURL, nil
+}
+
+func (s *Service) ChangePlan(
+	ctx context.Context,
+	cmd commands.ChangePlan,
+) (subscription entities.UserSubscription, err error) {
+	const op = "service.billing.ChangePlan"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"subscription.change_plan",
+		"billing_subscription",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.plans == nil || s.subscriptions == nil {
+		return entities.UserSubscription{}, fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	if cmd.UserID == uuid.Nil || cmd.PlanID == uuid.Nil || cmd.Now.IsZero() {
+		return entities.UserSubscription{}, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	plan, err := s.plans.GetByID(ctx, cmd.PlanID)
+	if err != nil {
+		return entities.UserSubscription{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if !plan.IsActive {
+		return entities.UserSubscription{}, fmt.Errorf("%s: %w", op, ErrPlanInactive)
+	}
+
+	subscription, err = s.subscriptions.GetActiveByUserID(ctx, cmd.UserID)
+	if err != nil {
+		return entities.UserSubscription{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	subscription.PlanID = cmd.PlanID
+	subscription.UpdatedAt = cmd.Now
+
+	if err := s.subscriptions.Update(ctx, subscription); err != nil {
+		return entities.UserSubscription{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return subscription, nil
+}
+
+func (s *Service) CancelSubscription(
+	ctx context.Context,
+	cmd commands.CancelSubscription,
+) (err error) {
+	const op = "service.billing.CancelSubscription"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"subscription.cancel",
+		"billing_subscription",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.subscriptions == nil {
+		return fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	if cmd.UserID == uuid.Nil || cmd.Now.IsZero() {
+		return fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	subscription, err := s.subscriptions.GetActiveByUserID(ctx, cmd.UserID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := s.subscriptions.Cancel(ctx, subscription.ID, cmd.UserID, cmd.Now); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Service) GetCurrentSubscription(
+	ctx context.Context,
+	userID uuid.UUID,
+) (summary *SubscriptionSummary, err error) {
+	const op = "service.billing.GetCurrentSubscription"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"subscription.get",
+		"billing_subscription",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.subscriptions == nil || s.plans == nil {
+		return nil, fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	if userID == uuid.Nil {
+		return nil, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	subscription, err := s.subscriptions.GetActiveByUserID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	plan, err := s.plans.GetByID(ctx, subscription.PlanID)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return &SubscriptionSummary{
+		Subscription: subscription,
+		Plan:         plan,
+	}, nil
+}
+
+func (s *Service) ListBalanceEntries(
+	ctx context.Context,
+	userID uuid.UUID,
+	limit int,
+) (entries []entities.UserBalanceEntry, err error) {
+	const op = "service.billing.ListBalanceEntries"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"balance.entry.list",
+		"billing_balance",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.balance == nil {
+		return nil, fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	if userID == uuid.Nil {
+		return nil, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	entries, err = s.balance.ListByUserID(ctx, userID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return entries, nil
+}
+
+func (s *Service) ApplySuccessfulTopUp(ctx context.Context, payment entities.Payment) (err error) {
+	const op = "service.billing.ApplySuccessfulTopUp"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"payment.apply_top_up",
+		"billing_payment",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.balance == nil {
+		return fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	if err := validateSuccessfulPayment(payment, entities.PaymentPurposeTopUp); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	processed, err := s.alreadyProcessed(
+		ctx,
+		payment.UserID,
+		payment.ID,
+		entities.BalanceEntryTypeTopUpCredit,
+	)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	if processed {
+		return nil
+	}
+
+	amountMinor, err := parseMinorAmount(payment.Amount.Value)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	payment, err = s.payInfra.Capture(ctx, &payment)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	paymentID := payment.ID
+	_, err = s.balance.ApplyCredit(ctx, entities.UserBalanceEntry{
+		ID:          uuid.New(),
+		UserID:      payment.UserID,
+		Type:        entities.BalanceEntryTypeTopUpCredit,
+		AmountMinor: amountMinor,
+		PaymentID:   &paymentID,
+		Description: payment.Description,
+		CreatedAt:   payment.CreatedAt,
+	}, payment)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Service) ApplySuccessfulSubscriptionPayment(
+	ctx context.Context,
+	payment entities.Payment,
+) (err error) {
+	const op = "service.billing.ApplySuccessfulSubscriptionPayment"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"payment.apply_subscription",
+		"billing_payment",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.plans == nil || s.subscriptions == nil || s.balance == nil {
+		return fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	if err := validateSuccessfulPayment(payment, entities.PaymentPurposeSubscription); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	processed, err := s.alreadyProcessed(
+		ctx,
+		payment.UserID,
+		payment.ID,
+		entities.BalanceEntryTypeSubscriptionCredit,
+	)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	if processed {
+		return nil
+	}
+
+	subscription, err := s.subscriptions.GetActiveByUserID(ctx, payment.UserID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	plan, err := s.plans.GetByID(ctx, subscription.PlanID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	payment, err = s.payInfra.Capture(ctx, &payment)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	paymentID := payment.ID
+	subscriptionID := subscription.ID
+	_, err = s.balance.ApplyCredit(ctx, entities.UserBalanceEntry{
+		ID:             uuid.New(),
+		UserID:         payment.UserID,
+		Type:           entities.BalanceEntryTypeSubscriptionCredit,
+		AmountMinor:    plan.BalanceCreditMinor,
+		PaymentID:      &paymentID,
+		SubscriptionID: &subscriptionID,
+		Description:    payment.Description,
+		CreatedAt:      payment.CreatedAt,
+	}, payment)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Service) TopUp(ctx context.Context, cm commands.TopUp) (confirmURL string, err error) {
+	const op = "service.billing.TopUp"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"balance.charge_usage",
+		"billing_balance",
+	)
+
+	defer func() { finish(err) }()
+
+	p, err := s.payInfra.CreatePayment(ctx, entities.Amount{
+		Value:    strconv.FormatInt(cm.Amount, 10),
+		Currency: entities.RUB,
+	})
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", op, err)
+	}
+
+	if p.Confirmation.ConfirmationURL == nil {
+		return "", fmt.Errorf("%s: %w", op, errors.New("no confirmation url"))
+	}
+
+	p.UserID = cm.UserID
+	p.Purpose = entities.PaymentPurposeTopUp
+
+	err = s.payments.Create(ctx, p)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", op, err)
+	}
+
+	return *p.Confirmation.ConfirmationURL, nil
+}
+
+func (s *Service) ChargeUsage(
+	ctx context.Context,
+	cmd commands.ChargeUsage,
+) (balance int64, err error) {
+	const op = "service.billing.ChargeUsage"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"balance.charge_usage",
+		"billing_balance",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.balance == nil {
+		return 0, fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	if cmd.UserID == uuid.Nil || cmd.AmountMinor <= 0 || cmd.Now.IsZero() {
+		return 0, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	balance, err = s.balance.ApplyUsageDebit(ctx, entities.UserBalanceEntry{
+		ID:          uuid.New(),
+		UserID:      cmd.UserID,
+		Type:        entities.BalanceEntryTypeUsageDebit,
+		AmountMinor: cmd.AmountMinor,
+		Description: cmd.Description,
+		CreatedAt:   cmd.Now,
+	})
+	if err != nil {
+		if isInsufficientBalanceErr(err) {
+			return 0, fmt.Errorf("%s: %w", op, ErrInsufficientBalance)
+		}
+		return 0, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return balance, nil
+}
+
+func (s *Service) PaymentEventHandler(ctx context.Context, e commands.PaymentEvent) (err error) {
+	const op = "service.billing.PaymentEventHandler"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"payment.event_handler",
+		"billing_payment",
+	)
+
+	defer func() { finish(err) }()
+
+	if e.Type != "notification" {
+		return fmt.Errorf("%s: %w", op, errors.New("invalid event type"))
+	}
+
+	if !e.Object.Paid {
+		return fmt.Errorf("%s: %w", op, errors.New("payment not paid"))
+	}
+
+	payment, err := s.payments.GetByID(ctx, e.Object.ID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	payment = applyPaymentEventSnapshot(payment, entities.PaymentEvent{
+		Type:   e.Type,
+		Event:  e.Event,
+		Object: e.Object,
+	})
+
+	if payment.Status == entities.Canceled {
+		err = s.payments.Update(ctx, payment)
+		if err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+
+		return nil
+	}
+
+	if payment.SubscriptionID == nil && payment.Status == entities.WaitingForCapture {
+		err = s.ApplySuccessfulTopUp(ctx, payment)
+		if err != nil {
+			return fmt.Errorf("%s: %w", op, err)
+		}
+
+		return nil
+	}
+
+	err = s.ApplySuccessfulSubscriptionPayment(ctx, payment)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Service) HandleOpenRouterUsageWebhook(
+	ctx context.Context,
+	event commands.OpenRouterUsageEvent,
+) (err error) {
+	const op = "service.billing.HandleOpenRouterUsageWebhook"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"usage.openrouter_webhook",
+		"billing_usage",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.balance == nil {
+		return fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	if strings.TrimSpace(event.TraceID) == "" ||
+		strings.TrimSpace(event.SpanID) == "" ||
+		strings.TrimSpace(event.APIKeyName) == "" ||
+		strings.TrimSpace(event.TotalCost) == "" ||
+		event.OccurredAt.IsZero() {
+		return fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	userID, err := parseUserIDFromOpenRouterAPIKeyName(event.APIKeyName)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	amountMinor, err := s.usageAmounts.ToMinor(
+		event.TotalCost,
+		defaultOpenRouterCostCurrency,
+		defaultOpenRouterCostCurrency,
+	)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if amountMinor <= 0 {
+		return nil
+	}
+
+	description := strings.TrimSpace(event.Description)
+	if description == "" {
+		description = fmt.Sprintf(
+			"openrouter usage model=%s trace=%s span=%s",
+			strings.TrimSpace(event.Model),
+			strings.TrimSpace(event.TraceID),
+			strings.TrimSpace(event.SpanID),
+		)
+	}
+
+	_, applied, err := s.balance.ApplyUsageDebitOnce(ctx, entities.UserBalanceEntry{
+		ID:          uuid.New(),
+		UserID:      userID,
+		Type:        entities.BalanceEntryTypeUsageDebit,
+		AmountMinor: amountMinor,
+		Description: description,
+		CreatedAt:   event.OccurredAt,
+	}, entities.OpenRouterUsageEvent{
+		ID:         uuid.New(),
+		Provider:   "openrouter",
+		TraceID:    strings.TrimSpace(event.TraceID),
+		SpanID:     strings.TrimSpace(event.SpanID),
+		UserID:     userID,
+		Model:      strings.TrimSpace(event.Model),
+		APIKeyName: strings.TrimSpace(event.APIKeyName),
+		CreatedAt:  event.OccurredAt,
+	})
+	if err != nil {
+		if isInsufficientBalanceErr(err) {
+			return fmt.Errorf("%s: %w", op, ErrInsufficientBalance)
+		}
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if !applied {
+		return nil
+	}
+
+	return nil
+}
+
+func (s *Service) GetBillingSummary(
+	ctx context.Context,
+	userID uuid.UUID,
+) (summary BillingSummary, err error) {
+	const op = "service.billing.GetBillingSummary"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"billing.summary.get",
+		"billing_balance",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.users == nil {
+		return BillingSummary{}, fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	if userID == uuid.Nil {
+		return BillingSummary{}, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return BillingSummary{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	summary = BillingSummary{BalanceMinor: user.BalanceMinor}
+
+	if s.subscriptions != nil && s.plans != nil {
+		subscription, err := s.subscriptions.GetActiveByUserID(ctx, userID)
+		if err == nil {
+			plan, planErr := s.plans.GetByID(ctx, subscription.PlanID)
+			if planErr != nil {
+				return BillingSummary{}, fmt.Errorf("%s: %w", op, planErr)
+			}
+
+			summary.CurrentSubscription = &SubscriptionSummary{
+				Subscription: subscription,
+				Plan:         plan,
+			}
+		} else if !errors.Is(err, sql.ErrNotFound) {
+			return BillingSummary{}, fmt.Errorf("%s: %w", op, err)
+		}
+	}
+
+	if s.payments != nil {
+		payment, err := s.payments.GetLatestSucceededByPurpose(
+			ctx,
+			userID,
+			entities.PaymentPurposeSubscription,
+		)
+		if err == nil {
+			nextCharge := payment.CreatedAt.AddDate(0, 1, 0)
+			summary.NextChargeAt = &nextCharge
+		} else if !errors.Is(err, sql.ErrNotFound) {
+			return BillingSummary{}, fmt.Errorf("%s: %w", op, err)
+		}
+	}
+
+	return summary, nil
+}
+
+func applyPaymentEventSnapshot(
+	current entities.Payment,
+	event entities.PaymentEvent,
+) entities.Payment {
+	in := event.Object
+
+	current.ID = in.ID
+	current.Status = in.Status
+	current.Paid = in.Paid
+	current.Amount = in.Amount
+	current.AuthorizationDetails = in.AuthorizationDetails
+	current.CreatedAt = in.CreatedAt
+	current.Description = in.Description
+	current.Confirmation = in.Confirmation
+	current.ExpiresAt = in.ExpiresAt
+	current.Metadata = in.Metadata
+	current.PaymentMethod = in.PaymentMethod
+	current.Recipient = in.Recipient
+	current.Refundable = in.Refundable
+	current.Test = in.Test
+	current.IncomeAmount = in.IncomeAmount
+
+	return current
+}
+
+func (s *Service) alreadyProcessed(
+	ctx context.Context,
+	userID uuid.UUID,
+	paymentID, entryType string,
+) (bool, error) {
+	entries, err := s.balance.ListByUserID(ctx, userID, 100)
+	if err != nil {
+		return false, err
+	}
+
+	for _, entry := range entries {
+		if entry.PaymentID == nil {
+			continue
+		}
+
+		if *entry.PaymentID == paymentID && entry.Type == entryType {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func validatePlan(plan entities.Plan) error {
+	switch {
+	case plan.ID == uuid.Nil:
+		return sql.ErrInvalid
+	case plan.Code == "":
+		return sql.ErrInvalid
+	case plan.Name == "":
+		return sql.ErrInvalid
+	case plan.BillingAmountMinor <= 0:
+		return sql.ErrInvalid
+	case plan.BalanceCreditMinor <= 0:
+		return sql.ErrInvalid
+	case plan.Currency == "":
+		return sql.ErrInvalid
+	default:
+		return nil
+	}
+}
+
+func validateSuccessfulPayment(
+	payment entities.Payment,
+	wantPurpose entities.PaymentPurpose,
+) error {
+	switch {
+	case payment.ID == "":
+		return sql.ErrInvalid
+	case payment.UserID == uuid.Nil:
+		return sql.ErrInvalid
+	case payment.Status != entities.Succeeded:
+		return sql.ErrInvalid
+	case !payment.Paid:
+		return sql.ErrInvalid
+	case payment.CreatedAt.IsZero():
+		return sql.ErrInvalid
+	case normalizePurpose(payment.Purpose) != wantPurpose:
+		return sql.ErrInvalid
+	default:
+		return nil
+	}
+}
+
+func normalizePurpose(purpose entities.PaymentPurpose) entities.PaymentPurpose {
+	if purpose == "" {
+		return entities.PaymentPurposeTopUp
+	}
+
+	return purpose
+}
+
+func parseMinorAmount(value string) (int64, error) {
+	if value == "" {
+		return 0, sql.ErrInvalid
+	}
+
+	whole, frac, ok := strings.Cut(value, ".")
+	if !ok {
+		wholeValue, err := strconv.ParseInt(whole, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse amount: %w", sql.ErrInvalid)
+		}
+
+		return wholeValue * 100, nil
+	}
+
+	if len(frac) == 1 {
+		frac += "0"
+	}
+	if len(frac) != 2 {
+		return 0, sql.ErrInvalid
+	}
+
+	wholeValue, err := strconv.ParseInt(whole, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse amount: %w", sql.ErrInvalid)
+	}
+
+	fracValue, err := strconv.ParseInt(frac, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse amount: %w", sql.ErrInvalid)
+	}
+
+	return wholeValue*100 + fracValue, nil
+}
+
+func isInsufficientBalanceErr(err error) bool {
+	return errors.Is(err, ErrInsufficientBalance) ||
+		strings.Contains(strings.ToLower(err.Error()), "insufficient balance")
+}
+
+func parseUserIDFromOpenRouterAPIKeyName(raw string) (uuid.UUID, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return uuid.Nil, sql.ErrInvalid
+	}
+
+	idx := strings.LastIndex(raw, "+")
+	if idx < 0 || idx == len(raw)-1 {
+		return uuid.Nil, sql.ErrInvalid
+	}
+
+	userID, err := uuid.Parse(raw[idx+1:])
+	if err != nil {
+		return uuid.Nil, sql.ErrInvalid
+	}
+
+	return userID, nil
+}
+
+type defaultUsageAmountConverter struct{}
+
+func (defaultUsageAmountConverter) ToMinor(
+	totalCost string,
+	sourceCurrency, targetCurrency string,
+) (int64, error) {
+	if strings.TrimSpace(sourceCurrency) != defaultOpenRouterCostCurrency ||
+		strings.TrimSpace(targetCurrency) != defaultOpenRouterCostCurrency {
+		return 0, ErrUnsupportedCurrency
+	}
+
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(totalCost), 64)
+	if err != nil {
+		return 0, sql.ErrInvalid
+	}
+
+	if parsed < 0 {
+		return 0, sql.ErrInvalid
+	}
+
+	return int64(math.Round(parsed * 100)), nil
+}

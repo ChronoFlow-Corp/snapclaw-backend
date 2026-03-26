@@ -17,6 +17,14 @@ func classifySimpleClawActionFlow(method, path string) (string, string) {
 		return "health.check", "health"
 	case "/pubsub":
 		return "pubsub.forward", "gmail_pubsub_fanout"
+	case "/api/billing/webhook/yookassa":
+		if method == "POST" {
+			return "payment.webhook.receive", "billing_payment"
+		}
+	case "/api/billing/webhook/openrouter":
+		if method == "POST" {
+			return "usage.webhook.receive", "billing_usage"
+		}
 	}
 
 	if strings.HasPrefix(path, "/api/auth/") {

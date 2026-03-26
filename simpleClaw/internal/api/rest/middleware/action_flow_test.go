@@ -27,6 +27,20 @@ func TestClassifyActionFlow(t *testing.T) {
 			wantFlow:   "channel_connect",
 		},
 		{
+			name:       "yookassa webhook route",
+			method:     "POST",
+			path:       "/api/billing/webhook/yookassa",
+			wantAction: "payment.webhook.receive",
+			wantFlow:   "billing_payment",
+		},
+		{
+			name:       "openrouter webhook route",
+			method:     "POST",
+			path:       "/api/billing/webhook/openrouter",
+			wantAction: "usage.webhook.receive",
+			wantFlow:   "billing_usage",
+		},
+		{
 			name:       "unknown route",
 			method:     "GET",
 			path:       "/unknown",

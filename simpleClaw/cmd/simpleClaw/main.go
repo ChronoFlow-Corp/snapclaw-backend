@@ -9,6 +9,14 @@ import (
 	"shared/pkg/observability"
 	"strings"
 
+	"simpleClaw/internal/infra/payment"
+
+	"simpleClaw/internal/infra/storages/balanceentries"
+	"simpleClaw/internal/infra/storages/paymentmethods"
+	"simpleClaw/internal/infra/storages/payments"
+	"simpleClaw/internal/infra/storages/plans"
+	"simpleClaw/internal/infra/storages/subscriptions"
+
 	"simpleClaw/config"
 	"simpleClaw/internal/api/rest"
 	"simpleClaw/internal/api/rest/controllers"
@@ -20,6 +28,7 @@ import (
 	"simpleClaw/internal/infra/storages/claws"
 	"simpleClaw/internal/infra/storages/servers"
 	"simpleClaw/internal/infra/storages/users"
+	billingservice "simpleClaw/internal/service/billing"
 	"simpleClaw/internal/service/claw"
 	serverservice "simpleClaw/internal/service/server"
 	"simpleClaw/internal/service/user"
@@ -121,6 +130,11 @@ func main() {
 	channelsStorage := channels.NewStorage(db)
 	clawStorage := claws.NewStorage(db, operationMetrics)
 	serversStorage := servers.NewStorage(db, operationMetrics)
+	paymentMethodStorage := paymentmethods.NewStorage(db)
+	paymentStorage := payments.NewStorage(db)
+	plansStorage := plans.NewStorage(db)
+	subscriptionsStorage := subscriptions.NewStorage(db)
+	balanceEntriesStorage := balanceentries.NewStorage(db)
 
 	j := jwt.New(
 		[]byte(cfg.Auth.Jwt.AccessSecretPrivate),
@@ -142,13 +156,29 @@ func main() {
 	}
 
 	hostingManager := hosting.NewManager(operationMetrics)
+	paymentManager := payment.NewYooKassa(
+		cfg.Environment,
+		cfg.Payment.Yookassa.StoreID,
+		cfg.Payment.Yookassa.SecretKey,
+		cfg.Auth.Google.FrontendURL,
+	)
 
 	uService := user.NewUser(
 		j,
 		userStorage,
 		channelsStorage,
+		paymentMethodStorage,
 		orManager,
 		cfg.Auth.Admins,
+		operationMetrics,
+	)
+	billingSvc := billingservice.NewService(
+		plansStorage,
+		subscriptionsStorage,
+		balanceEntriesStorage,
+		userStorage,
+		paymentStorage,
+		paymentManager,
 		operationMetrics,
 	)
 
@@ -175,6 +205,12 @@ func main() {
 	uController := controllers.NewUser(cfg.Environment, uService, j, cfg.Auth.Google.FrontendURL)
 	clawController := controllers.NewClaw(clawService, j)
 	serverController := controllers.NewServer(serverService, uService, j)
+	billingController := controllers.NewBilling(
+		billingSvc,
+		uService,
+		j,
+		cfg.Payment.OpenRouter.WebhookSecret,
+	)
 	proxyController := controllers.NewPubSubProxy(serverService, controllers.PubSubProxyOptions{
 		Token:          cfg.Proxy.Token,
 		ForwardTimeout: cfg.Proxy.ForwardTimeout,
@@ -198,6 +234,7 @@ func main() {
 	uController.Register(r)
 	clawController.Register(r)
 	serverController.Register(r)
+	billingController.Register(r)
 	proxyController.Register(r)
 
 	var handler http.Handler = r

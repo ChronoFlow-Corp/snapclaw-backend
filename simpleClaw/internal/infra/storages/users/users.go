@@ -52,6 +52,7 @@ func (s *Storage) Create(ctx context.Context, u entities.User) error {
 		Role:             u.Role,
 		OpenRouterApiKey: u.OpenRouterApiKey,
 		OpenRouterKeyID:  u.OpenRouterKeyID,
+		BalanceMinor:     u.BalanceMinor,
 		CreatedAt:        u.CreatedAt,
 	})
 	if err != nil {
@@ -125,6 +126,7 @@ func (s *Storage) GetByEmail(ctx context.Context, email string) (entities.User, 
 		Role:             uDB.Role,
 		OpenRouterApiKey: uDB.OpenRouterApiKey,
 		OpenRouterKeyID:  uDB.OpenRouterKeyID,
+		BalanceMinor:     uDB.BalanceMinor,
 		CreatedAt:        uDB.CreatedAt,
 	}, nil
 }
@@ -173,6 +175,7 @@ func (s *Storage) GetByID(ctx context.Context, id uuid.UUID) (entities.User, err
 		Role:             uDB.Role,
 		OpenRouterApiKey: uDB.OpenRouterApiKey,
 		OpenRouterKeyID:  uDB.OpenRouterKeyID,
+		BalanceMinor:     uDB.BalanceMinor,
 		CreatedAt:        uDB.CreatedAt,
 	}, nil
 }

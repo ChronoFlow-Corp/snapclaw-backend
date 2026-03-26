@@ -24,6 +24,7 @@ type User struct {
 	Email            string
 	OpenRouterKeyID  string
 	OpenRouterApiKey string
+	BalanceMinor     int64
 	Role             string
 	CreatedAt        time.Time
 }

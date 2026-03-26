@@ -36,6 +36,20 @@ type service interface {
 		ctx context.Context,
 		cm commands.AddChannel,
 	) (entities.Channel, error)
+	AddPaymentMethod(
+		ctx context.Context,
+		cm commands.AddPaymentMethod,
+	) (entities.PaymentMethod, error)
+	GetPaymentMethod(
+		ctx context.Context,
+		methodID, userID uuid.UUID,
+	) (entities.PaymentMethod, error)
+	GetPaymentMethods(
+		ctx context.Context,
+		userID uuid.UUID,
+	) ([]entities.PaymentMethod, error)
+	SetDefaultPaymentMethod(ctx context.Context, cm commands.SetDefaultPaymentMethod) error
+	RemovePaymentMethod(ctx context.Context, methodID, userID uuid.UUID) error
 	Connect(ctx context.Context, cm commands.ConnectCommand) error
 }
 type User struct {
@@ -65,6 +79,11 @@ func (u *User) Register(r chi.Router) {
 		r.Use(middleware.AuthJwt(u.j))
 		r.Get("/user-info", u.UserInfo)
 		r.Post("/channel", u.AddChannel)
+		r.Post("/payment-method", u.AddPaymentMethod)
+		r.Get("/payment-method", u.ListPaymentMethods)
+		r.Get("/payment-method/{id}", u.GetPaymentMethod)
+		r.Patch("/payment-method/{id}", u.SetDefaultPaymentMethod)
+		r.Delete("/payment-method/{id}", u.RemovePaymentMethod)
 		r.Get("/connect/{provider}", u.Connect)
 		r.Get("/connect/{provider}/callback", u.Connect)
 	})
@@ -162,6 +181,182 @@ func (u *User) AddChannel(w http.ResponseWriter, r *http.Request) {
 	response.RespondOK(w, ch)
 }
 
+func (u *User) AddPaymentMethod(w http.ResponseWriter, r *http.Request) {
+	var req dto.AddPaymentMethodRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid request body",
+		})
+
+		return
+	}
+
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	method, err := u.service.AddPaymentMethod(r.Context(), commands.AddPaymentMethod{
+		UserID:    userID,
+		Title:     req.Title,
+		IsDefault: req.IsDefault,
+	})
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	response.RespondOK(w, paymentMethodResponse(method))
+}
+
+func (u *User) ListPaymentMethods(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	methods, err := u.service.GetPaymentMethods(r.Context(), userID)
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	result := make([]dto.PaymentMethodResponse, 0, len(methods))
+	for _, method := range methods {
+		result = append(result, paymentMethodResponse(method))
+	}
+
+	response.RespondOK(w, result)
+}
+
+func (u *User) GetPaymentMethod(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	methodID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid payment method id",
+		})
+
+		return
+	}
+
+	method, err := u.service.GetPaymentMethod(r.Context(), methodID, userID)
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	response.RespondOK(w, paymentMethodResponse(method))
+}
+
+func (u *User) SetDefaultPaymentMethod(w http.ResponseWriter, r *http.Request) {
+	var req dto.SetDefaultPaymentMethodRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid request body",
+		})
+
+		return
+	}
+
+	if !req.IsDefault {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "is_default must be true",
+		})
+
+		return
+	}
+
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	methodID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid payment method id",
+		})
+
+		return
+	}
+
+	if err := u.service.SetDefaultPaymentMethod(r.Context(), commands.SetDefaultPaymentMethod{
+		UserID:          userID,
+		PaymentMethodID: methodID,
+	}); err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	response.RespondOK(w, map[string]any{"updated": true})
+}
+
+func (u *User) RemovePaymentMethod(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	methodID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid payment method id",
+		})
+
+		return
+	}
+
+	if err := u.service.RemovePaymentMethod(r.Context(), methodID, userID); err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	response.RespondOK(w, map[string]any{"deleted": true})
+}
+
 func (u *User) Refresh(w http.ResponseWriter, r *http.Request) {
 	refreshCookie, err := r.Cookie("refresh_token")
 	if err != nil {
@@ -227,13 +422,14 @@ func (u *User) UserInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.RespondOK(w, dto.UserInfoResponse{
-		ID:        user.ID.String(),
-		Name:      user.Name,
-		Email:     user.Email,
-		NickName:  user.Nickname,
-		AvatarURL: user.AvatarURL,
-		Role:      user.Role,
-		CreatedAt: user.CreatedAt,
+		ID:           user.ID.String(),
+		Name:         user.Name,
+		Email:        user.Email,
+		NickName:     user.Nickname,
+		AvatarURL:    user.AvatarURL,
+		BalanceMinor: user.BalanceMinor,
+		Role:         user.Role,
+		CreatedAt:    user.CreatedAt,
 	})
 }
 
@@ -286,4 +482,14 @@ func (u *User) setCookie(w http.ResponseWriter, path, name, value string, expire
 	}
 
 	http.SetCookie(w, cookie)
+}
+
+func paymentMethodResponse(method entities.PaymentMethod) dto.PaymentMethodResponse {
+	return dto.PaymentMethodResponse{
+		ID:         method.ID.String(),
+		Title:      method.Title,
+		IsDefault:  method.IsDefault,
+		CreatedAt:  method.CreatedAt,
+		LastUsedAt: method.LastUsedAt,
+	}
 }
