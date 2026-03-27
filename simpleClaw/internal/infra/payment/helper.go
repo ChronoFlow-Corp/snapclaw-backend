@@ -11,7 +11,7 @@ import (
 	yoopayment "github.com/rvinnie/yookassa-sdk-go/yookassa/payment"
 )
 
-func mapPayment(old entities.Payment, in *yoopayment.Payment) (entities.Payment, error) {
+func mapPayment(in *yoopayment.Payment) (entities.Payment, error) {
 	if in == nil {
 		return entities.Payment{}, errors.New("nil payment")
 	}
@@ -30,8 +30,6 @@ func mapPayment(old entities.Payment, in *yoopayment.Payment) (entities.Payment,
 
 	return entities.Payment{
 		ID:                   in.ID,
-		UserID:               old.UserID,
-		SubscriptionID:       old.SubscriptionID,
 		Status:               mapStatus(in.Status),
 		Paid:                 in.Paid,
 		Amount:               mapAmountValue(in.Amount),

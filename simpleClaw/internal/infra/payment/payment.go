@@ -55,7 +55,12 @@ func (y *YooKassa) CreatePayment(
 		return entities.Payment{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	return mapPayment(p)
+	pNew, err := mapPayment(p)
+	if err != nil {
+		return entities.Payment{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return pNew, nil
 }
 
 func (y *YooKassa) Capture(
@@ -71,7 +76,14 @@ func (y *YooKassa) Capture(
 		return entities.Payment{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	return mapPayment(p)
+	pNew, err := mapPayment(p)
+	if err != nil {
+		return entities.Payment{}, fmt.Errorf("%s: %w", op, err)
+	}
+	pNew.UserID = payment.UserID
+	pNew.SubscriptionID = payment.SubscriptionID
+
+	return pNew, nil
 }
 
 func (y *YooKassa) Cancel(ctx context.Context, paymentID string) (entities.Payment, error) {
