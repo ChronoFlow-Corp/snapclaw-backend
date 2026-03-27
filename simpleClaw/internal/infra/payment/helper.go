@@ -172,9 +172,6 @@ func mapStatusBack(s entities.Status) yoopayment.Status {
 }
 
 func mapAmountBackValue(in entities.Amount) *yoocommon.Amount {
-	// если хочешь не создавать пустой amount, можно добавить проверку:
-	// if in.Value == "" && in.Currency == "" { return nil }
-
 	return &yoocommon.Amount{
 		Value:    in.Value,
 		Currency: in.Currency,

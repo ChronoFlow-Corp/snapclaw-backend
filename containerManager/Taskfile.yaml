@@ -1,0 +1,17 @@
+version: '3'
+
+env:
+  CONFIG_PATH: ./config.yaml
+
+tasks:
+  up:
+    desc: Run containerManager locally
+    cmd: go run ./cmd/containerManager
+
+  test:
+    desc: Run containerManager tests
+    cmd: GOCACHE=/tmp/go-build-cache go test ./... -count=1
+
+  fmt:
+    desc: Format containerManager packages
+    cmd: go fmt ./...

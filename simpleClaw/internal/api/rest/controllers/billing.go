@@ -408,7 +408,7 @@ func (b *Billing) Subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	subscription, err := b.service.Subscribe(r.Context(), commands.Subscribe{
+	confirm, err := b.service.Subscribe(r.Context(), commands.Subscribe{
 		UserID: userID,
 		PlanID: planID,
 		Now:    time.Now().UTC(),
@@ -418,7 +418,7 @@ func (b *Billing) Subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, subscription, http.StatusTemporaryRedirect)
+	http.Redirect(w, r, confirm, http.StatusSeeOther)
 }
 
 func (b *Billing) TopUp(w http.ResponseWriter, r *http.Request) {
@@ -458,7 +458,7 @@ func (b *Billing) TopUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, u, http.StatusTemporaryRedirect)
+	http.Redirect(w, r, u, http.StatusSeeOther)
 }
 
 func (b *Billing) ChangePlan(w http.ResponseWriter, r *http.Request) {

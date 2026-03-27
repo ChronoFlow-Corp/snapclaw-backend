@@ -1,0 +1,17 @@
+version: '3'
+
+env:
+  CONFIG_PATH: ./config.yaml
+
+tasks:
+  up:
+    desc: Run simpleClaw locally
+    cmd: go run ./cmd/simpleClaw
+
+  test:
+    desc: Run simpleClaw tests
+    cmd: GOCACHE=/tmp/go-build-cache go test ./... -count=1
+
+  fmt:
+    desc: Format simpleClaw packages
+    cmd: go fmt ./...

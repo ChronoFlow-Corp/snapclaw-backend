@@ -8,7 +8,7 @@ services:
       - --storage.tsdb.path=/prometheus
       - --web.enable-remote-write-receiver
     volumes:
-      - ./deploy/prometheus/config.yaml:/etc/prometheus/prometheus.yml:ro
+      - ${PROMETHEUS_CONFIG_VOLUME}
       - prometheus_data:/prometheus
     ports:
       - "127.0.0.1:9090:9090"
@@ -17,7 +17,7 @@ services:
     image: grafana/tempo:2.6.1
     command: ["-config.file=/etc/tempo/config.yaml"]
     volumes:
-      - ./deploy/tempo/config.yaml:/etc/tempo/config.yaml:ro
+      - ${TEMPO_CONFIG_VOLUME}
       - tempo_data:/var/tempo
     ports:
       - "127.0.0.1:3200:3200"
@@ -27,7 +27,7 @@ services:
     image: grafana/loki:2.9.4
     command: -config.file=/etc/loki/config.yaml
     volumes:
-      - ./deploy/loki/config.yaml:/etc/loki/config.yaml:ro
+      - ${LOKI_CONFIG_VOLUME}
       - loki_data:/loki
     ports:
       - "127.0.0.1:3100:3100"
@@ -35,12 +35,14 @@ services:
   grafana:
     image: grafana/grafana:10.4.3
     environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: ${GRAFANA_ALLOW_SIGN_UP}
+      GF_SERVER_ROOT_URL: ${GRAFANA_SERVER_ROOT_URL}
+      GF_SERVER_SERVE_FROM_SUB_PATH: ${GRAFANA_SERVER_SERVE_FROM_SUB_PATH}
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ${GRAFANA_PROVISIONING_VOLUME}
     ports:
       - "3000:3000"
     depends_on:
@@ -56,8 +58,8 @@ services:
       - --storage.path=/var/lib/alloy/data
       - /etc/alloy/config.alloy
     volumes:
-      - ./deploy/alloy/config.alloy:/etc/alloy/config.alloy:ro
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${ALLOY_CONFIG_VOLUME}
+      - ${DOCKER_SOCKET_VOLUME}
       - alloy_data:/var/lib/alloy/data
     ports:
       - "127.0.0.1:12345:12345"
@@ -97,8 +99,8 @@ services:
       CONFIG_PATH: /config/dev-config.yaml
       LOG_LEVEL: info
     volumes:
-      - ./deploy/simpleClaw/config.yaml:/config/dev-config.yaml:ro
-      - ./deploy/simpleClaw/keys:/config/keys:ro
+      - ${SIMPLECLAW_CONFIG_VOLUME}
+      - ${SIMPLECLAW_KEYS_VOLUME}
       - simpleclaw_backups:/data/simpleclaw/backups
     ports:
       - "127.0.0.1:1337:1337"
@@ -115,10 +117,10 @@ services:
       LOG_LEVEL: info
     user: "0"
     volumes:
-      - ./deploy/containerManager/config.yaml:/config/dev-config.yaml:ro
-      - ./:/workspace:ro
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /Users/kodokuus/work/go/snapclaw-backend/claw-configs:/Users/kodokuus/work/go/snapclaw-backend/claw-configs:rw
+      - ${CONTAINERMANAGER_CONFIG_VOLUME}
+      - ${WORKSPACE_VOLUME}
+      - ${DOCKER_SOCKET_VOLUME}
+      - ${CLAW_CONFIGS_VOLUME}
     ports:
       - "8080:8080"
     depends_on:

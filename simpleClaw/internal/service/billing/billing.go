@@ -594,12 +594,27 @@ func (s *Service) ApplySuccessfulSubscriptionPayment(
 		return nil
 	}
 
-	subscription, err := s.subscriptions.GetActiveByUserID(ctx, payment.UserID)
+	if payment.SubscriptionID == nil {
+		return fmt.Errorf("%s: payment with ID %v has no subscription", op, payment.ID)
+	}
+
+	subscription, err := s.subscriptions.GetByID(ctx, *payment.SubscriptionID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
+	if subscription.Status != entities.SubscriptionStatusPending {
+		return fmt.Errorf("%s: subscription with ID %v is not pending", op, subscription.ID)
+	}
+
 	plan, err := s.plans.GetByID(ctx, subscription.PlanID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	subscription.Status = entities.SubscriptionStatusActive
+
+	err = s.subscriptions.Update(ctx, subscription)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -726,10 +741,6 @@ func (s *Service) PaymentEventHandler(ctx context.Context, e commands.PaymentEve
 		return fmt.Errorf("%s: %w", op, errors.New("invalid event type"))
 	}
 
-	if !e.Object.Paid {
-		return fmt.Errorf("%s: %w", op, errors.New("payment not paid"))
-	}
-
 	payment, err := s.payments.GetByID(ctx, e.Object.ID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
@@ -748,6 +759,10 @@ func (s *Service) PaymentEventHandler(ctx context.Context, e commands.PaymentEve
 		}
 
 		return nil
+	}
+
+	if !e.Object.Paid {
+		return fmt.Errorf("%s: %w", op, errors.New("payment not paid"))
 	}
 
 	if payment.SubscriptionID == nil && payment.Status == entities.WaitingForCapture {
@@ -996,8 +1011,6 @@ func validateSuccessfulPayment(
 	case payment.ID == "":
 		return sql.ErrInvalid
 	case payment.UserID == uuid.Nil:
-		return sql.ErrInvalid
-	case payment.Status != entities.Succeeded:
 		return sql.ErrInvalid
 	case !payment.Paid:
 		return sql.ErrInvalid

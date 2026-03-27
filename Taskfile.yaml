@@ -1,0 +1,27 @@
+version: '3'
+
+dotenv:
+  - .env
+
+tasks:
+  up:
+    desc: Start docker compose stack
+    cmd: docker compose --env-file .env up -d
+
+  down:
+    desc: Stop docker compose stack
+    cmd: docker compose --env-file .env down
+
+  restart:
+    desc: Restart docker compose stack
+    cmds:
+      - task: down
+      - task: up
+
+  logs:
+    desc: Follow docker compose logs
+    cmd: docker compose --env-file .env logs -f
+
+  ps:
+    desc: Show docker compose services
+    cmd: docker compose --env-file .env ps

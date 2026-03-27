@@ -1,345 +1,444 @@
 # Snapclaw Backend (Go)
 
-## Что Это За Проект
+## Что Это За Репозиторий
 
-`snapclaw-backend` — backend для управления пользовательскими `claw`-инстансами OpenClaw.
-Проект разделён на control plane и execution plane:
+`snapclaw-backend` — backend-платформа для multi-tenant управления пользовательскими `claw`-инстансами OpenClaw.
+Репозиторий разделён на control plane, execution plane и общий контракт между ними:
 
-- `simpleClaw` — внешний API и control plane. Здесь живут OAuth/JWT, пользователи, каналы, реестр серверов, создание и управление claw, интеграции с OpenRouter и проксирование Pub/Sub.
-- `containerManager` — execution plane. Этот сервис разворачивает и обслуживает реальные контейнеры OpenClaw, хранит их runtime-состояние, конфиги и выполняет approve/connect/archive/restore, их может быть несколько на разных машинах.
-- `shared` — общие контракты и инфраструктурные пакеты, которые используют оба сервиса.
+- `simpleClaw/` — внешний API и control plane. Здесь живут OAuth/JWT, пользователи, каналы, реестр execution-серверов, создание и lifecycle `claw`, OpenRouter, billing, payment webhooks и Pub/Sub fan-out.
+- `containerManager/` — execution plane. Этот сервис пишет runtime-конфиги, собирает Docker image OpenClaw, создаёт/обновляет контейнеры, держит runtime-state, делает approve/connect/archive/restore и принимает Gmail Pub/Sub fan-out.
+- `shared/` — общий контракт и инфраструктурные пакеты, которые используют оба сервиса: hosting API, JWT, observability, HTTP response helpers.
 
-На практике система делает следующее:
+На практике система делает не только lifecycle контейнеров, но и пользовательский биллинг:
 
 - пользователь логинится через Google;
-- на пользователя заводится OpenRouter API key и session;
-- пользователь подключает каналы и создаёт `claw`;
-- `simpleClaw` собирает конфиг `claw`, выбирает хост-сервер и вызывает `containerManager`;
-- `containerManager` создаёт/обновляет Docker-контейнер OpenClaw и хранит runtime-запись;
-- дальше `simpleClaw` управляет жизненным циклом `claw`, а `containerManager` выполняет низкоуровневые операции.
+- на пользователя заводится OpenRouter API key и server-side session;
+- пользователь подключает канал и при необходимости Gmail;
+- пользователь создаёт `claw`, а `simpleClaw` собирает OpenClaw config и выбирает execution-хост;
+- `containerManager` создаёт/обновляет реальный Docker container OpenClaw;
+- пользователь оформляет подписку или пополняет баланс;
+- OpenRouter usage webhook списывает стоимость usage в user balance;
+- Gmail Pub/Sub webhook приходит в `simpleClaw`, а дальше fan-out'ится на execution-сервера.
 
-## Назначение Проекта Для Контекста
+## Как Читать Workspace
 
-Если вы работаете в этом репозитории как агент, думайте о системе так:
-
-- это не просто CRUD API, а backend-платформа для multi-tenant управления AI/automation-агентами;
-- `simpleClaw` отвечает за бизнес-правила, владельцев, конфиги, выбор сервера и интеграции;
-- `containerManager` отвечает за исполнение, ресурсы хоста, Docker, файловые конфиги и runtime-операции;
-- `shared` фиксирует общий контракт между сервисами, чтобы control plane и execution plane не расходились по API и наблюдаемости.
-
-`claw` в контексте проекта — это пользовательский экземпляр OpenClaw с собственным конфигом, каналами, моделью, секретами и Docker-runtime.
-
-## Workspace И Модули
-
-Репозиторий — Go workspace (`go.work`) с несколькими модулями. В корне нет `go.mod`.
-Почти все Go-команды запускайте из конкретного модуля:
+Это Go workspace с несколькими модулями. В корне нет `go.mod`, поэтому Go-команды почти всегда запускайте из конкретного модуля:
 
 - `simpleClaw/`
 - `containerManager/`
 - `shared/`
 
+`go.work` подключает именно эти три модуля.
+
+Важная деталь: директория называется `containerManager/`, но module import path — `containermanager/...`.
+Если меняете импорты или ищете пакет через `go list`, ориентируйтесь на `containermanager`, а не на `containerManager`.
+
+Практически:
+
+- root `Taskfile.yaml` управляет `docker compose` стеком;
+- `simpleClaw/Taskfile.yaml` и `containerManager/Taskfile.yaml` дают локальные `up`, `test`, `fmt`;
+- Go-команды из корня репозитория не запускайте, если им нужен `go.mod`.
+
+## Реальный Технический Стек
+
+Не ориентируйтесь на generic Go defaults, ориентируйтесь на код проекта:
+
+- HTTP router: `chi`
+- middleware и observability: `shared/pkg/observability`
+- JSON responses: `shared/pkg/response`
+- config loading: `cleanenv` + `CONFIG_PATH`
+- `simpleClaw` persistence: `gorm` + Postgres
+- `containerManager` persistence: `pgx` + `golang-migrate`
+- OAuth: `goth` / Google provider
+- auth tokens: `shared/pkg/jwt`
+- external model/provider integration: OpenRouter
+- payment provider: YooKassa
+- container runtime: Docker SDK
+- metrics/tracing: Prometheus-style metrics + tracing wrappers из `shared/pkg/observability`
+
+Если задача зависит от текущего поведения внешней библиотеки или SDK, сначала используйте Context7 MCP и только потом делайте выводы по памяти.
+
+## Архитектурная Картина
+
+Думайте о системе так:
+
+- `simpleClaw` — источник истины для пользователей, каналов, billing-сущностей, `claw`-метаданных и бизнес-правил.
+- `containerManager` — источник истины для runtime-контейнеров, файловых конфигов, Docker-операций и host-level ограничений.
+- `shared/pkg/hostingapi` — единый контракт общения между control plane и execution plane.
+
+Если нужно понять, где должен жить код:
+
+- user/business/billing/config ownership — обычно `simpleClaw`;
+- runtime/container/file-system execution — обычно `containerManager`;
+- общий wire contract, DTO, error payload, route constants — `shared`.
+
 ## Ключевые Сущности
 
-### В `simpleClaw`
+### В `simpleClaw/internal/entities`
 
-- `User` — владелец claw и каналов. Хранит профиль, роль (`user`/`admin`) и привязку к OpenRouter API key.
-- `Session` — серверная refresh-session для JWT-пары access/refresh.
-- `Channel` — пользовательский канал интеграции, который потом встраивается в `claw`-конфиг. Сейчас основной сценарий — Telegram, но модели уже подготовлены под Discord / WhatsApp / Slack.
-- `Claw` — верхнеуровневая доменная сущность пользовательского инстанса. Содержит owner, server binding, container id, статус и runtime-конфиг.
-- `ClawConfig` — большой конфиг OpenClaw: env, auth profiles, tools, session policy, channels, hooks, gateway, skills, agents, models, cron.
-- `Server` — запись о доступном execution-хосте с URL, `proxy_url`, API key и capacity (`max_claws`).
+- `User` — владелец claw, каналов, баланса, подписки и OpenRouter key linkage.
+- `Session` — серверная refresh-session для JWT пары.
+- `Channel` — пользовательский канал интеграции. Активный user-facing сценарий сейчас Telegram.
+- `Claw` — верхнеуровневая доменная сущность пользовательского инстанса с owner, server binding, container id, status и config.
+- `ClawConfig` — большой OpenClaw config: env, auth, tools, sandbox, session, channels, hooks, gateway, skills, agents, models, cron, heartbeat.
+- `Server` — запись execution-хоста: URL, `proxy_url`, secret/api key, capacity.
 - `GmailToken` — сохранённый OAuth token для Gmail connect/watch сценариев.
-- `OpenRouterKey` — OpenRouter API key, который выделяется на пользователя и используется в конфиге `claw`.
+- `OpenRouterKey` — OpenRouter API key, который либо создаётся при sign-in, либо при создании claw, если key ещё не связан с user.
+- `PaymentMethod` — сохранённый платёжный метод пользователя.
+- `Plan` — тариф с ценой, credit amount и активностью.
+- `UserSubscription` — текущая или прошлая подписка пользователя на план.
+- `UserBalanceEntry` — ledger записи начислений/списаний баланса.
+- `Payment` — доменная модель YooKassa платежа и webhook payload.
+- `OpenRouterUsageEvent` — нормализованный usage event, из которого списывается стоимость в balance.
 
-### В `containerManager`
+### В `containerManager/internal/entities`
 
-- `Container` — runtime-запись контейнера OpenClaw: кому принадлежит, какой `claw` обслуживает, Docker container id, порт, статус, признак первого запуска.
-- `entities.ClawConfig` — файловое представление конфигурации, которое можно записать на файловую систему, архивировать и восстанавливать.
+- `Container` — runtime-запись контейнера OpenClaw: user, claw, docker container id, port, status, `HasStartedOnce`.
+- `ClawConfig` — файловое представление config bundle, которое записывается на диск, архивируется и восстанавливается.
+
+### В `shared`
+
+- `hostingapi` — routes, DTO, query params, provider mapping и error payloads для `simpleClaw` ↔ `containerManager`.
+- `jwt` — общая генерация и валидация access/refresh JWT.
+- `observability` — HTTP metrics, operation metrics, tracing, error classification, Pub/Sub fan-out metrics.
+- `response` — единый формат success/error HTTP responses.
 
 ## Основные Flows
 
-### 1. Аутентификация пользователя
+### 1. User Auth
 
 - Клиент идёт в `simpleClaw /auth/connect/google`.
-- После OAuth callback сервис ищет или создаёт `User`.
+- После Google OAuth callback сервис ищет или создаёт `User`.
 - Для нового пользователя сразу создаётся OpenRouter API key.
-- Создаётся `Session`, генерируются JWT access/refresh, refresh token хранится в БД.
+- Создаётся `Session`, генерируется JWT access/refresh pair.
+- Токены пишутся в cookies, refresh session хранится в БД.
 
-### 2. Подключение канала
+### 2. Channel Connect
 
-- Пользователь вызывает `/me/channel`.
-- `simpleClaw` валидирует payload и создаёт `Channel`, привязанный к `User`.
-- Позже этот channel включается в `ClawConfig` при создании или обновлении `claw`.
+- Пользователь вызывает `POST /me/channel`.
+- Сейчас сервис реально создаёт Telegram channel config.
+- Структуры под Discord / WhatsApp / Slack есть в config schema, но user flow сейчас ориентирован на Telegram.
 
-### 3. Создание `claw`
+### 3. Payment Method Management
 
-- Пользователь вызывает `POST /claws`.
-- `simpleClaw` валидирует owner/model/channel ids.
-- Сервис выбирает доступный `Server` по данным capacity.
-- Сервис резолвит модель в OpenRouter, собирает `ClawConfig`, внедряет OpenRouter key и channel config.
-- `simpleClaw` сохраняет `Claw` в своей БД.
-- Затем control plane вызывает `containerManager`, который пишет конфиги и создаёт Docker-контейнер.
-- Возвращённый `container_id` сохраняется обратно в `Claw`.
+- Пользователь может создать, прочитать, выбрать default и удалить payment method через `/me/payment-method`.
+- Это отдельный user flow и отдельные storage/service ветки, не смешивайте его с подписками или top-up.
 
-### 4. Update / Start / Stop / Delete `claw`
+### 4. Create / Update / Start / Stop / Delete `claw`
 
-- Все пользовательские lifecycle-команды приходят в `simpleClaw`.
-- `simpleClaw` проверяет владельца, актуализирует конфиг и вызывает `containerManager`.
-- `containerManager` уже делает Docker/file-system операции и обновляет свою runtime-запись.
-- При delete/archive/restore участвует backup path и файловый архив конфигов.
+- Пользователь вызывает `POST /claws` или lifecycle endpoints в `simpleClaw`.
+- `simpleClaw` валидирует owner/model/channel ids, выбирает `Server`, резолвит модель через OpenRouter, собирает `ClawConfig`.
+- `simpleClaw` сохраняет `Claw` у себя в БД.
+- Затем control plane вызывает `containerManager` по `shared/pkg/hostingapi`.
+- `containerManager` пишет конфиги, создаёт или обновляет Docker container и возвращает runtime metadata.
+- `simpleClaw` синхронизирует container/server/status обратно в свою БД.
 
-### 5. Pairing / Connect flow
+### 5. Pairing / Connect
 
-- Для interactive-подключений `simpleClaw` вызывает `containerManager` endpoints `approve` и `connect`.
-- `containerManager` либо подтверждает pairing-код, либо выполняет runtime connect внутрь контейнера.
-- Это execution-level операции, поэтому бизнес-решение остаётся в `simpleClaw`, а фактическое исполнение — в `containerManager`.
+- Pairing и interactive connect инициируются из `simpleClaw`, но исполняются в `containerManager`.
+- `approve` и `connect` — execution-level операции, не переносите бизнес-решение в execution plane.
 
-### 6. Gmail connect и Pub/Sub fan-out
+### 6. Gmail Connect И Pub/Sub
 
-- Пользователь может подключить Gmail через `/me/connect/gmail`.
-- Токены сохраняются в `simpleClaw`, а watch-конфиг попадает в `ClawConfig`.
-- Входящий Pub/Sub webhook приходит в `simpleClaw /pubsub`.
-- `simpleClaw` не обрабатывает событие сам, а fan-out'ит его на все `Server.ProxyURL`.
-- Каждый `containerManager` принимает `/gmail-pubsub`, дедуплицирует события и направляет их в соответствующие runtime-инстансы.
+- Пользователь может пройти `/me/connect/gmail`.
+- Gmail refresh token сохраняется в `simpleClaw`, а watch config попадает в `ClawConfig`.
+- Pub/Sub webhook приходит в `simpleClaw /pubsub`.
+- `simpleClaw` делает fan-out на `Server.ProxyURL`.
+- Каждый `containerManager` принимает `/gmail-pubsub`, делает dedup, готовит `gog`-payload и форвардит событие в нужный runtime-instance.
 
-### 7. Реестр серверов и capacity
+### 7. Billing / Plans / Subscriptions
 
-- Админ управляет списком execution-серверов через `/servers`.
-- `simpleClaw` хранит URL, `proxy_url`, auth token и статус сервера.
-- При create/update/sync сервис забирает capacity из `containerManager /capacity`.
-- Выбор хоста для нового `claw` идёт через этот реестр.
+- Админ управляет тарифами через `/plans`.
+- Пользователь запрашивает текущее billing summary через `/me/billing`.
+- Подписка создаётся, меняется и отменяется через `/me/subscription`.
+- Для оплаты используются YooKassa payment flows и webhook `POST /billing/webhook/yookassa`.
 
-## Как Думать Об Архитектуре
+### 8. Balance Top-Up И OpenRouter Usage Debit
 
-- `simpleClaw` — источник истины для пользователей, каналов, claw-метаданных и бизнес-правил.
-- `containerManager` — источник истины для runtime-контейнеров и файловых конфигов на execution-хосте.
-- Контракт между ними проходит через HTTP-клиент `simpleClaw/internal/infra/hosting` и DTO/routes из `shared/pkg/hostingapi`.
-- У обоих сервисов есть отдельные transport/controller, service и storage/infra слои.
-- Наблюдаемость вынесена в `shared/pkg/observability`, чтобы action/flow/metrics были согласованы между сервисами.
+- Пользователь может пополнить баланс через `POST /me/topUp`.
+- `simpleClaw` создаёт payment intent через YooKassa и ждёт webhook.
+- OpenRouter usage webhook приходит в `POST /billing/webhook/openrouter`.
+- Сервис извлекает trace/span usage cost и пишет debit в balance ledger.
+
+### 9. Server Registry И Capacity
+
+- Админ управляет execution host registry через `/servers`.
+- `simpleClaw` хранит host URL, `proxy_url`, `secret_key`, статус и `max_claws`.
+- Capacity подтягивается из `containerManager /capacity`.
+- При выборе сервера для нового `claw` учитываются статус и capacity.
+
+## Важные Контракты И Ограничения
+
+- Не меняйте transport contract между `simpleClaw` и `containerManager` в одном сервисе локально. Источник истины — `shared/pkg/hostingapi`.
+- В hosting API уже есть неочевидные verb choices:
+  - `GET /claws/start`
+  - `GET /claws/stop`
+  - `GET /approve`
+  - `POST /connect`
+  - `GET /capacity`
+- Не "исправляйте REST" без согласованного изменения shared contract и обоих сервисов.
+- В user-facing API тоже есть исторические naming choices вроде `/me/topUp`; не переименовывайте их без отдельной миграции API.
 
 ## Пакеты И Их Назначение
-
-Ниже перечислены реальные Go-пакеты из `go list ./...`.
 
 ### `simpleClaw`
 
 - `simpleClaw/cmd/simpleClaw`
-  - Что делает: entrypoint сервиса, wiring зависимостей, bootstrap OAuth providers, DB, observability, HTTP router.
-  - Зачем: это composition root, где собирается весь `simpleClaw`.
+  - Composition root: config, DB, OAuth providers, observability, storages, services, controllers.
 
 - `simpleClaw/config`
-  - Что делает: загружает и нормализует runtime-конфиг сервиса.
-  - Зачем: держит все внешние настройки в одном месте и не размазывает env/config parsing по слоям.
+  - Runtime config `simpleClaw`: HTTP, DB, auth, OpenRouter, hosting, Gmail connect/watch, proxy, observability, payment.
 
 - `simpleClaw/internal/api/rest`
-  - Что делает: тонкая обёртка над HTTP server lifecycle.
-  - Зачем: изолирует запуск сервера от логики controller'ов и main.
+  - HTTP server lifecycle wrapper.
 
 - `simpleClaw/internal/api/rest/controllers`
-  - Что делает: HTTP endpoints для auth, me, channels, claws, servers, health, pubsub.
-  - Зачем: адаптирует HTTP transport к command/use-case слою, не смешивая transport и бизнес-логику.
+  - Transport layer для auth, me, claws, servers, billing, payment webhooks, OpenRouter webhook, pubsub proxy.
 
 - `simpleClaw/internal/api/rest/dto`
-  - Что делает: request/response DTO для REST API.
-  - Зачем: отделяет transport schema от доменных сущностей и защищает service-слой от HTTP-деталей.
+  - Request/response DTO для claws, users, billing, payment methods, servers и webhook payloads.
 
 - `simpleClaw/internal/api/rest/middleware`
-  - Что делает: JWT auth, admin-only guard, request logging, action/flow classification для metrics.
-  - Зачем: общие HTTP concerns должны жить отдельно от controller'ов.
+  - JWT auth, admin guard, request logging, action/flow classification.
 
 - `simpleClaw/internal/entities`
-  - Что делает: доменные сущности `User`, `Session`, `Channel`, `Claw`, `Server`, `ClawConfig`, hooks, gateway, skills, models.
-  - Зачем: это главный слой доменной модели control plane.
+  - Домен control plane: users, channels, claws, config schema, gateway, skills, agents, billing entities.
 
 - `simpleClaw/internal/entities/channels`
-  - Что делает: channel-specific конфиг и константы, сейчас в основном Telegram.
-  - Зачем: изолирует детали конкретных каналов от остального доменного пакета.
+  - Channel-specific config и константы, сейчас practically Telegram-first.
 
 - `simpleClaw/internal/infra/hosting`
-  - Что делает: HTTP-клиент и manager для вызовов `containerManager` (`create/start/stop/update/delete/connect/approve/archive/restore/capacity`).
-  - Зачем: инкапсулирует внешний execution API и скрывает детали HTTP-контракта от service-слоя.
+  - HTTP client/manager для вызовов `containerManager`: create, update, start, stop, delete, approve, connect, archive, restore, capacity.
 
 - `simpleClaw/internal/infra/openrouter`
-  - Что делает: управление OpenRouter API keys и резолв моделей через OpenRouter API.
-  - Зачем: отдельная интеграция со сторонним провайдером должна быть вынесена из use-case слоя.
+  - OpenRouter API key management и model resolution.
+
+- `simpleClaw/internal/infra/payment`
+  - YooKassa integration и mapping provider objects ↔ domain payment model.
 
 - `simpleClaw/internal/infra/sql`
-  - Что делает: инициализация SQL/GORM, миграции и общие DB-specific ошибки.
-  - Зачем: держит SQL bootstrap и DB plumbing отдельно от домена и storage.
+  - GORM bootstrap, migration helpers, DB-level common errors.
 
 - `simpleClaw/internal/infra/sql/models`
-  - Что делает: GORM-модели таблиц и mapping-структуры persistence-слоя.
-  - Зачем: ORM-модели не должны протекать в domain entities.
+  - GORM models для users, claws, servers, billing, payments, subscriptions и related tables.
 
 - `simpleClaw/internal/infra/storages/channels`
-  - Что делает: persistence для `Channel`.
-  - Зачем: даёт service-слою интерфейс работы с каналами без знания GORM/SQL.
+  - Persistence для `Channel`.
 
 - `simpleClaw/internal/infra/storages/claws`
-  - Что делает: persistence для `Claw` и связей `claw_channels`.
-  - Зачем: хранит агрегат claw и его channel bindings.
+  - Persistence для `Claw` и `claw_channels`.
 
 - `simpleClaw/internal/infra/storages/servers`
-  - Что делает: persistence для реестра execution-серверов.
-  - Зачем: отделяет server registry от бизнес-правил выбора capacity.
+  - Persistence для server registry.
 
 - `simpleClaw/internal/infra/storages/users`
-  - Что делает: persistence для `User`, `Session`, Gmail tokens и OpenRouter key linkage.
-  - Зачем: user/auth state — отдельный агрегат со своей DB-логикой.
+  - Persistence для `User`, `Session`, Gmail tokens и OpenRouter key linkage.
+
+- `simpleClaw/internal/infra/storages/paymentmethods`
+  - Persistence для `PaymentMethod`.
+
+- `simpleClaw/internal/infra/storages/payments`
+  - Persistence для `Payment`.
+
+- `simpleClaw/internal/infra/storages/plans`
+  - Persistence для `Plan`.
+
+- `simpleClaw/internal/infra/storages/subscriptions`
+  - Persistence для `UserSubscription`.
+
+- `simpleClaw/internal/infra/storages/balanceentries`
+  - Persistence для balance ledger entries.
 
 - `simpleClaw/internal/pkg/slctx`
-  - Что делает: request-scoped `slog` logger из контекста.
-  - Зачем: даёт единый способ доставать и обогащать logger внутри HTTP/request flow.
-
-- `simpleClaw/internal/service/claw`
-  - Что делает: use-cases жизненного цикла `claw`: create, update, start, stop, delete, approve pairing, connect, config/archive sync.
-  - Зачем: это ядро бизнес-логики продукта.
-
-- `simpleClaw/internal/service/claw/commands`
-  - Что делает: command-структуры для операций с `claw`.
-  - Зачем: фиксирует явный контракт между controller'ами и service-слоем.
-
-- `simpleClaw/internal/service/server`
-  - Что делает: use-cases реестра серверов, валидация полей, sync capacities.
-  - Зачем: правила работы с execution-хостами не должны жить в controller'ах или storage.
-
-- `simpleClaw/internal/service/server/commands`
-  - Что делает: command-структуры для server use-cases.
-  - Зачем: сохраняет service API явным и устойчивым к transport-изменениям.
+  - Request-scoped `slog` logger helper.
 
 - `simpleClaw/internal/service/user`
-  - Что делает: auth/sign-in/refresh, profile, channel management, provider connect.
-  - Зачем: инкапсулирует пользовательские сценарии и политику ролей.
+  - Auth/sign-in/refresh, profile, channels, payment methods, provider connect.
 
 - `simpleClaw/internal/service/user/commands`
-  - Что делает: command-структуры для user use-cases.
-  - Зачем: убирает зависимость service-слоя от HTTP DTO.
+  - Command types для user service.
+
+- `simpleClaw/internal/service/claw`
+  - Business logic lifecycle `claw`: create/update/start/stop/delete, approve pairing, connect, archive sync, Gmail watch config injection.
+
+- `simpleClaw/internal/service/claw/commands`
+  - Command types для claw service.
+
+- `simpleClaw/internal/service/server`
+  - Server registry, validation, capacity sync.
+
+- `simpleClaw/internal/service/server/commands`
+  - Command types для server service.
+
+- `simpleClaw/internal/service/billing`
+  - Plans, subscriptions, billing summary, top-up, payment webhook handling, OpenRouter usage debit.
+
+- `simpleClaw/internal/service/billing/commands`
+  - Command types для billing service.
 
 ### `containerManager`
 
 - `containermanager/cmd/containerManager`
-  - Что делает: entrypoint сервиса, загрузка конфига, миграции, pgx pool, Docker client/manager, wiring service/controller.
-  - Зачем: composition root execution plane.
+  - Composition root execution plane: config, migrations, pgx, configurer, Docker client, service, controllers.
 
 - `containermanager/config`
-  - Что делает: конфиг Postgres, HTTP, API key, image build, pubsub, max claws, observability.
-  - Зачем: централизует runtime-настройки orchestration-сервиса.
+  - Runtime config: Postgres, HTTP/API key, image build, `max_claws`, `gog`, pubsub, migrations, observability.
 
 - `containermanager/internal/entities`
-  - Что делает: доменные сущности runtime-слоя, в первую очередь `Container` и файловый `ClawConfig`.
-  - Зачем: описывает execution-domain независимо от REST, Docker SDK и SQL.
+  - Runtime domain entities, прежде всего `Container` и filesystem-level `ClawConfig`.
 
 - `containermanager/internal/infrastucture/pkg/configurer`
-  - Что делает: пишет конфиги OpenClaw на файловую систему, управляет pairing-файлами, архивированием и восстановлением.
-  - Зачем: файловый layout инстанса — отдельная инфраструктурная ответственность.
+  - Запись config bundle на диск, pairing files, archive/restore.
 
 - `containermanager/internal/infrastucture/pkg/docker`
-  - Что делает: обёртка над Docker SDK: build image, create/start/stop/remove container, exec/connect.
-  - Зачем: изолирует Docker API от service-слоя и упрощает тестирование.
+  - Обёртка над Docker SDK: build image, create/start/stop/remove container, exec/connect.
 
 - `containermanager/internal/infrastucture/sql/migrations`
-  - Что делает: запускает SQL миграции через `golang-migrate`.
-  - Зачем: execution DB schema должна подниматься отдельно от main/service логики.
+  - Run SQL migrations.
 
 - `containermanager/internal/infrastucture/sql/pgx`
-  - Что делает: создаёт и настраивает `pgx` pool.
-  - Зачем: инкапсулирует подключение к Postgres.
+  - pgx pool bootstrap.
 
 - `containermanager/internal/infrastucture/sql/storage`
-  - Что делает: Postgres persistence для runtime-контейнеров.
-  - Зачем: хранит state контейнеров независимо от Docker runtime и HTTP слоя.
+  - Postgres persistence для runtime containers.
 
 - `containermanager/internal/interface/rest`
-  - Что делает: HTTP server wrapper.
-  - Зачем: отделяет lifecycle веб-сервера от handlers.
+  - HTTP server wrapper.
 
 - `containermanager/internal/interface/rest/controllers`
-  - Что делает: HTTP endpoints для `create/update/start/stop/delete`, config archive/restore, approve, connect, capacity, gmail pubsub.
-  - Зачем: transport-адаптер между shared hosting API и execution use-cases.
+  - Hosting API transport: create/update/start/stop/delete, archive/restore, approve, connect, capacity, Gmail Pub/Sub ingress.
 
 - `containermanager/internal/interface/rest/middleware`
-  - Что делает: API key auth, request logging, action/flow classification.
-  - Зачем: инфраструктурные HTTP concerns не должны смешиваться с orchestration-кодом.
+  - API key auth, request logging, action/flow classification.
 
 - `containermanager/internal/pkg/logctx`
-  - Что делает: request-scoped logger helper для execution-сервиса.
-  - Зачем: обеспечивает единый structured logging в runtime-flow.
+  - Request-scoped logger helper.
 
 - `containermanager/internal/service`
-  - Что делает: orchestration use-cases контейнеров, port allocation, memory/capacity guard, approve/connect, archive/restore.
-  - Зачем: это основной execution-domain слой, где принимаются runtime-решения.
+  - Runtime orchestration: port allocation, capacity/memory guard, Docker lifecycle, approve/connect, archive/restore, `gog` import payload normalization, Gmail Pub/Sub forwarding.
 
 - `containermanager/internal/service/commands`
-  - Что делает: command-структуры service-слоя.
-  - Зачем: стабилизирует контракт между REST controller'ами и orchestration-логикой.
+  - Command types execution-layer service.
 
 ### `shared`
 
 - `shared/consts`
-  - Что делает: общие строковые константы, например provider ids.
-  - Зачем: чтобы `simpleClaw` и `containerManager` не расходились по базовым идентификаторам.
+  - Shared constants вроде provider ids.
 
 - `shared/pkg/hostingapi`
-  - Что делает: общий HTTP-контракт между control plane и execution plane: routes, query params, DTO, provider mapping, error payloads.
-  - Зачем: это единый source of truth для API общения `simpleClaw` ↔ `containerManager`.
+  - Общий control-plane ↔ execution-plane contract.
 
 - `shared/pkg/jwt`
-  - Что делает: генерация и валидация access/refresh JWT, typed errors.
-  - Зачем: auth logic должна быть общей и одинаковой во всех сервисах.
+  - Access/refresh JWT.
 
 - `shared/pkg/observability`
-  - Что делает: tracing, Prometheus metrics, HTTP instrumentation, action/flow/component labelling, error classification.
-  - Зачем: унифицирует наблюдаемость по всем сервисам и сценариям.
+  - Metrics, tracing, error attrs, HTTP instrumentation, Pub/Sub fan-out metrics.
 
 - `shared/pkg/response`
-  - Что делает: унифицированные JSON HTTP-ответы и ошибки.
-  - Зачем: transport layer должен отдавать одинаковый формат ошибок и success payloads.
+  - Единые JSON responses.
 
 ## Непакетные Директории И Артефакты
 
 - `deploy/`
-  - Что делает: dev/runtime конфиги для `simpleClaw`, `containerManager`, Alloy, Grafana и ключей.
-  - Зачем: инфраструктурный bootstrap и локальный/deployment контекст.
+  - Dev/runtime configs для `simpleClaw`, `containerManager`, Alloy, Grafana и JWT keys.
 
-- `docs/`
-  - Что делает: рабочие планы и внутренние инженерные заметки.
-  - Зачем: хранит проектные решения и контекст по крупным изменениям.
+- `containerManager/migrations/`
+  - SQL migrations execution-plane БД.
+
+- `containerManager/images/openclaw/`
+  - Docker build assets для runtime OpenClaw image.
 
 - `docker-compose.yml`
-  - Что делает: локально поднимает оба сервиса и observability stack.
-  - Зачем: удобная интеграционная среда для разработки и проверки.
+  - Локальный compose stack для обоих сервисов и observability.
 
-## Общие Правила Для Go-Кода
+- `README.md`
+  - Deploy notes по bind mounts, config paths и локальному запуску compose stack.
 
-- Форматирование: всегда `gofmt` (`go fmt ./...` внутри конкретного модуля).
-- Импорты: держать в порядке; если в модуле используется `goimports`, применяйте его.
-- Ошибки: оборачивать контекстом через `fmt.Errorf("...: %w", err)`, не глотать.
-- `context.Context`: передавать первым аргументом во все IO/network/DB операции и прокидывать вниз по стеку.
-- Границы пакетов: доменная логика живёт в `internal/service` и `internal/entities`, инфраструктура — в `internal/infra` или `internal/infrastucture`.
-- Не смешивать DTO, ORM models и domain entities.
-- Для новых сценариев сначала определяйте, в каком сервисе живёт source of truth:
-  - control/data ownership — обычно `simpleClaw`;
-  - runtime/container/file-system execution — обычно `containerManager`.
+- `Taskfile.yaml`
+  - Root tasks для compose stack.
 
-## Проверка Перед PR
+## Где Смотреть Сначала
 
-- `(cd simpleClaw && GOCACHE=/tmp/go-build-cache go test ./... -count=1 && golangci-lint run ./...)`
-- `(cd containerManager && GOCACHE=/tmp/go-build-cache go test ./... -count=1 && golangci-lint run ./...)`
-- `(cd shared && GOCACHE=/tmp/go-build-cache go test ./... -count=1 && golangci-lint run ./...)`
+Если задача про lifecycle `claw`:
 
-## Практические Замечания Для Агентов
+- `simpleClaw/internal/service/claw`
+- `simpleClaw/internal/infra/hosting`
+- `shared/pkg/hostingapi`
+- `containerManager/internal/service`
+
+Если задача про auth/user/connect:
+
+- `simpleClaw/internal/api/rest/controllers/users.go`
+- `simpleClaw/internal/service/user`
+- `shared/pkg/jwt`
+
+Если задача про billing/payments/subscriptions:
+
+- `simpleClaw/internal/api/rest/controllers/billing.go`
+- `simpleClaw/internal/service/billing`
+- `simpleClaw/internal/infra/payment`
+- `simpleClaw/internal/infra/storages/payments`
+- `simpleClaw/internal/infra/storages/plans`
+- `simpleClaw/internal/infra/storages/subscriptions`
+- `simpleClaw/internal/infra/storages/balanceentries`
+
+Если задача про Pub/Sub или Gmail connect:
+
+- `simpleClaw/internal/api/rest/controllers/pubsub_proxy.go`
+- `containerManager/internal/interface/rest/controllers/claws.go`
+- `containerManager/internal/service/gog_payload.go`
+- `containerManager/internal/service/gog_watch_port.go`
+
+Если задача про server registry/capacity:
+
+- `simpleClaw/internal/service/server`
+- `simpleClaw/internal/infra/storages/servers`
+- `containerManager/internal/interface/rest/controllers/claws.go`
+
+## Общие Правила Для Агентов
+
+- Всегда передавайте `context.Context` первым аргументом во всех IO/DB/network операциях.
+- Ошибки оборачивайте через `fmt.Errorf("...: %w", err)`.
+- Не смешивайте domain entities, HTTP DTO и ORM models.
+- В transport layer следуйте существующему паттерну `shared/pkg/response` и `respondServiceError`.
+- В `simpleClaw` не тащите Docker/runtime/file-system код.
+- В `containerManager` не переносите business ownership, user/billing policy и control-plane state.
+- Если меняете shared hosting contract, одновременно проверяйте оба сервиса.
+- Если меняете billing flow, проверяйте не только service/storage, но и webhook DTO, controllers и entity mapping.
+- Если меняете Gmail/PubSub flow, учитывайте ingress auth token, fan-out retry/backoff, dedup и downstream payload normalization.
+
+## Команды И Проверка
+
+Форматирование:
+
+- `cd simpleClaw && go fmt ./...`
+- `cd containerManager && go fmt ./...`
+- `cd shared && go fmt ./...`
+
+Тесты:
+
+- `cd simpleClaw && GOCACHE=/tmp/go-build-cache go test ./... -count=1`
+- `cd containerManager && GOCACHE=/tmp/go-build-cache go test ./... -count=1`
+- `cd shared && GOCACHE=/tmp/go-build-cache go test ./... -count=1`
+
+Линтинг перед PR, если `golangci-lint` установлен:
+
+- `cd simpleClaw && golangci-lint run ./...`
+- `cd containerManager && golangci-lint run ./...`
+- `cd shared && golangci-lint run ./...`
+
+Compose stack:
+
+- `task up`
+- `task down`
+- `task logs`
+- `task ps`
+
+## Практические Замечания
 
 - Не запускайте Go-команды из корня workspace, если команда ожидает `go.mod`.
-- Если нужно понять поведение создания/обновления `claw`, смотрите сначала:
-  - `simpleClaw/internal/service/claw`
-  - `simpleClaw/internal/infra/hosting`
-  - `containerManager/internal/service`
-  - `shared/pkg/hostingapi`
-- Если нужно понять auth/user flow, смотрите сначала:
-  - `simpleClaw/internal/api/rest/controllers/users.go`
-  - `simpleClaw/internal/service/user`
-  - `shared/pkg/jwt`
-- Если нужно понять Pub/Sub или Gmail flow, смотрите сначала:
-  - `simpleClaw/internal/api/rest/controllers/pubsub_proxy.go`
-  - `containerManager/internal/interface/rest/controllers/claws.go`
-  - `containerManager/internal/service`
+- Для `simpleClaw` migrations живут в коде через GORM bootstrap, а не отдельной папкой миграций.
+- `containerManager` при старте реально собирает Docker image; не считайте запуск сервиса cheap operation.
+- `max_claws` в `containerManager` может резолвиться автоматически на Linux, а не только читаться как статичное число.
+- У execution-plane есть memory guard для cold start / warm start. Если меняете start semantics, проверьте `containerManager/internal/service/container.go`.
+- Если вносите изменения в OpenClaw config schema, проверьте и доменную сборку config в `simpleClaw`, и файловую запись/restore path в `containerManager`.

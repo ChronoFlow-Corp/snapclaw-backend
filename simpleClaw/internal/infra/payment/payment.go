@@ -55,8 +55,6 @@ func (y *YooKassa) CreatePayment(
 		return entities.Payment{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	fmt.Println(p.Confirmation)
-
 	return mapPayment(p)
 }
 
@@ -69,6 +67,18 @@ func (y *YooKassa) Capture(
 	h := yookassa.NewPaymentHandler(y.cl)
 
 	p, err := h.CapturePayment(ctx, mapPaymentBack(payment))
+	if err != nil {
+		return entities.Payment{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return mapPayment(p)
+}
+
+func (y *YooKassa) Cancel(ctx context.Context, paymentID string) (entities.Payment, error) {
+	const op = "payment.Cancel"
+	h := yookassa.NewPaymentHandler(y.cl)
+
+	p, err := h.CancelPayment(ctx, paymentID)
 	if err != nil {
 		return entities.Payment{}, fmt.Errorf("%s: %w", op, err)
 	}
