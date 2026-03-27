@@ -278,7 +278,12 @@ func (s *Service) Subscribe(
 	}
 
 	if !plan.IsActive {
-		return "", fmt.Errorf("%s: validate plan %s: %w", op, plan.ID, decorateValidation(ErrPlanInactive))
+		return "", fmt.Errorf(
+			"%s: validate plan %s: %w",
+			op,
+			plan.ID,
+			decorateValidation(ErrPlanInactive),
+		)
 	}
 
 	subscription := entities.UserSubscription{
@@ -393,7 +398,12 @@ func (s *Service) ChangePlan(
 
 	subscription, err = s.subscriptions.GetActiveByUserID(ctx, cmd.UserID)
 	if err != nil {
-		return entities.UserSubscription{}, fmt.Errorf("%s: load active subscription user=%s: %w", op, cmd.UserID, err)
+		return entities.UserSubscription{}, fmt.Errorf(
+			"%s: load active subscription user=%s: %w",
+			op,
+			cmd.UserID,
+			err,
+		)
 	}
 
 	subscription.PlanID = cmd.PlanID
@@ -443,7 +453,13 @@ func (s *Service) CancelSubscription(
 	}
 
 	if err := s.subscriptions.Cancel(ctx, subscription.ID, cmd.UserID, cmd.Now); err != nil {
-		return fmt.Errorf("%s: cancel subscription %s user=%s: %w", op, subscription.ID, cmd.UserID, err)
+		return fmt.Errorf(
+			"%s: cancel subscription %s user=%s: %w",
+			op,
+			subscription.ID,
+			cmd.UserID,
+			err,
+		)
 	}
 
 	return nil
@@ -546,7 +562,13 @@ func (s *Service) ApplySuccessfulTopUp(ctx context.Context, payment entities.Pay
 	}
 
 	if err := validateSuccessfulPayment(payment, entities.PaymentPurposeTopUp); err != nil {
-		return fmt.Errorf("%s: validate top-up payment %s user=%s: %w", op, payment.ID, payment.UserID, err)
+		return fmt.Errorf(
+			"%s: validate top-up payment %s user=%s: %w",
+			op,
+			payment.ID,
+			payment.UserID,
+			err,
+		)
 	}
 
 	processed, err := s.alreadyProcessed(
@@ -556,7 +578,13 @@ func (s *Service) ApplySuccessfulTopUp(ctx context.Context, payment entities.Pay
 		entities.BalanceEntryTypeTopUpCredit,
 	)
 	if err != nil {
-		return fmt.Errorf("%s: check top-up payment dedup payment=%s user=%s: %w", op, payment.ID, payment.UserID, err)
+		return fmt.Errorf(
+			"%s: check top-up payment dedup payment=%s user=%s: %w",
+			op,
+			payment.ID,
+			payment.UserID,
+			err,
+		)
 	}
 	if processed {
 		return nil
@@ -564,12 +592,24 @@ func (s *Service) ApplySuccessfulTopUp(ctx context.Context, payment entities.Pay
 
 	amountMinor, err := parseMinorAmount(payment.Amount.Value)
 	if err != nil {
-		return fmt.Errorf("%s: parse top-up amount payment=%s value=%q: %w", op, payment.ID, payment.Amount.Value, err)
+		return fmt.Errorf(
+			"%s: parse top-up amount payment=%s value=%q: %w",
+			op,
+			payment.ID,
+			payment.Amount.Value,
+			err,
+		)
 	}
 
 	payment, err = s.payInfra.Capture(ctx, &payment)
 	if err != nil {
-		return fmt.Errorf("%s: capture top-up payment %s user=%s: %w", op, payment.ID, payment.UserID, decorateExternal(err))
+		return fmt.Errorf(
+			"%s: capture top-up payment %s user=%s: %w",
+			op,
+			payment.ID,
+			payment.UserID,
+			decorateExternal(err),
+		)
 	}
 
 	paymentID := payment.ID
@@ -583,7 +623,13 @@ func (s *Service) ApplySuccessfulTopUp(ctx context.Context, payment entities.Pay
 		CreatedAt:   payment.CreatedAt,
 	}, payment)
 	if err != nil {
-		return fmt.Errorf("%s: apply top-up credit payment=%s user=%s: %w", op, payment.ID, payment.UserID, err)
+		return fmt.Errorf(
+			"%s: apply top-up credit payment=%s user=%s: %w",
+			op,
+			payment.ID,
+			payment.UserID,
+			err,
+		)
 	}
 
 	return nil
@@ -611,7 +657,13 @@ func (s *Service) ApplySuccessfulSubscriptionPayment(
 	}
 
 	if err := validateSuccessfulPayment(payment, entities.PaymentPurposeSubscription); err != nil {
-		return fmt.Errorf("%s: validate subscription payment %s user=%s: %w", op, payment.ID, payment.UserID, err)
+		return fmt.Errorf(
+			"%s: validate subscription payment %s user=%s: %w",
+			op,
+			payment.ID,
+			payment.UserID,
+			err,
+		)
 	}
 
 	processed, err := s.alreadyProcessed(
@@ -621,7 +673,13 @@ func (s *Service) ApplySuccessfulSubscriptionPayment(
 		entities.BalanceEntryTypeSubscriptionCredit,
 	)
 	if err != nil {
-		return fmt.Errorf("%s: check subscription payment dedup payment=%s user=%s: %w", op, payment.ID, payment.UserID, err)
+		return fmt.Errorf(
+			"%s: check subscription payment dedup payment=%s user=%s: %w",
+			op,
+			payment.ID,
+			payment.UserID,
+			err,
+		)
 	}
 	if processed {
 		return nil
@@ -639,7 +697,13 @@ func (s *Service) ApplySuccessfulSubscriptionPayment(
 
 	subscription, err := s.subscriptions.GetByID(ctx, *payment.SubscriptionID)
 	if err != nil {
-		return fmt.Errorf("%s: load subscription %s for payment %s: %w", op, *payment.SubscriptionID, payment.ID, err)
+		return fmt.Errorf(
+			"%s: load subscription %s for payment %s: %w",
+			op,
+			*payment.SubscriptionID,
+			payment.ID,
+			err,
+		)
 	}
 
 	if subscription.Status != entities.SubscriptionStatusPending {
@@ -654,14 +718,26 @@ func (s *Service) ApplySuccessfulSubscriptionPayment(
 
 	plan, err := s.plans.GetByID(ctx, subscription.PlanID)
 	if err != nil {
-		return fmt.Errorf("%s: load plan %s for subscription %s: %w", op, subscription.PlanID, subscription.ID, err)
+		return fmt.Errorf(
+			"%s: load plan %s for subscription %s: %w",
+			op,
+			subscription.PlanID,
+			subscription.ID,
+			err,
+		)
 	}
 
 	subscription.Status = entities.SubscriptionStatusActive
 
 	err = s.subscriptions.Update(ctx, subscription)
 	if err != nil {
-		return fmt.Errorf("%s: activate subscription %s for payment %s: %w", op, subscription.ID, payment.ID, err)
+		return fmt.Errorf(
+			"%s: activate subscription %s for payment %s: %w",
+			op,
+			subscription.ID,
+			payment.ID,
+			err,
+		)
 	}
 
 	payment, err = s.payInfra.Capture(ctx, &payment)
@@ -720,11 +796,23 @@ func (s *Service) TopUp(ctx context.Context, cm commands.TopUp) (confirmURL stri
 		Currency: entities.RUB,
 	})
 	if err != nil {
-		return "", fmt.Errorf("%s: create top-up payment user=%s amount=%d: %w", op, cm.UserID, cm.Amount, decorateExternal(err))
+		return "", fmt.Errorf(
+			"%s: create top-up payment user=%s amount=%d: %w",
+			op,
+			cm.UserID,
+			cm.Amount,
+			decorateExternal(err),
+		)
 	}
 
 	if p.Confirmation.ConfirmationURL == nil {
-		return "", fmt.Errorf("%s: create top-up payment user=%s amount=%d: %w", op, cm.UserID, cm.Amount, decorateInternal(ErrPaymentConfirmationMissing))
+		return "", fmt.Errorf(
+			"%s: create top-up payment user=%s amount=%d: %w",
+			op,
+			cm.UserID,
+			cm.Amount,
+			decorateInternal(ErrPaymentConfirmationMissing),
+		)
 	}
 
 	p.UserID = cm.UserID
@@ -796,7 +884,12 @@ func (s *Service) PaymentEventHandler(ctx context.Context, e commands.PaymentEve
 	defer func() { finish(err) }()
 
 	if e.Type != "notification" {
-		return fmt.Errorf("%s: validate payment event type %q: %w", op, e.Type, decorateValidation(ErrPaymentEventTypeInvalid))
+		return fmt.Errorf(
+			"%s: validate payment event type %q: %w",
+			op,
+			e.Type,
+			decorateValidation(ErrPaymentEventTypeInvalid),
+		)
 	}
 
 	payment, err := s.payments.GetByID(ctx, e.Object.ID)
@@ -820,7 +913,12 @@ func (s *Service) PaymentEventHandler(ctx context.Context, e commands.PaymentEve
 	}
 
 	if !e.Object.Paid {
-		return fmt.Errorf("%s: validate paid payment %s: %w", op, payment.ID, decorateValidation(ErrPaymentNotPaid))
+		return fmt.Errorf(
+			"%s: validate paid payment %s: %w",
+			op,
+			payment.ID,
+			decorateValidation(ErrPaymentNotPaid),
+		)
 	}
 
 	if payment.SubscriptionID == nil && payment.Status == entities.WaitingForCapture {
@@ -986,7 +1084,13 @@ func (s *Service) GetBillingSummary(
 		if err == nil {
 			plan, planErr := s.plans.GetByID(ctx, subscription.PlanID)
 			if planErr != nil {
-				return BillingSummary{}, fmt.Errorf("%s: load plan %s for subscription %s: %w", op, subscription.PlanID, subscription.ID, planErr)
+				return BillingSummary{}, fmt.Errorf(
+					"%s: load plan %s for subscription %s: %w",
+					op,
+					subscription.PlanID,
+					subscription.ID,
+					planErr,
+				)
 			}
 
 			summary.CurrentSubscription = &SubscriptionSummary{
