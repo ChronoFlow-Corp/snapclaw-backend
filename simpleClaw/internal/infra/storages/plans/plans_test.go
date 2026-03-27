@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,6 +190,47 @@ func TestStorageRejectsInvalidData(t *testing.T) {
 
 	if err := store.Deactivate(context.Background(), uuid.Nil); !errors.Is(err, infraSQL.ErrInvalid) {
 		t.Fatalf("Deactivate() nil id error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestStorageCreateReturnsDetailedPlanValidationError(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	store := NewStorage(db)
+
+	plan := newPlan("", true, time.Now().UTC())
+	err := store.Create(context.Background(), plan)
+	if err == nil {
+		t.Fatal("Create() error = nil, want non-nil")
+	}
+
+	if !errors.Is(err, infraSQL.ErrInvalid) {
+		t.Fatalf("Create() error = %v, want ErrInvalid", err)
+	}
+
+	if !strings.Contains(err.Error(), "plan code is required") {
+		t.Fatalf("Create() error = %q, want to contain %q", err.Error(), "plan code is required")
+	}
+}
+
+func TestStorageDeactivateReturnsDetailedValidationError(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	store := NewStorage(db)
+
+	err := store.Deactivate(context.Background(), uuid.Nil)
+	if err == nil {
+		t.Fatal("Deactivate() error = nil, want non-nil")
+	}
+
+	if !errors.Is(err, infraSQL.ErrInvalid) {
+		t.Fatalf("Deactivate() error = %v, want ErrInvalid", err)
+	}
+
+	if !strings.Contains(err.Error(), "plan id is required") {
+		t.Fatalf("Deactivate() error = %q, want to contain %q", err.Error(), "plan id is required")
 	}
 }
 

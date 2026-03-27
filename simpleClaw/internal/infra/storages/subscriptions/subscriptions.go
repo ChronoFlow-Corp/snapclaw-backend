@@ -40,7 +40,7 @@ func (s *Storage) GetByID(ctx context.Context, id uuid.UUID) (entities.UserSubsc
 	const op = "storages.Subscriptions.GetByID"
 
 	if id == uuid.Nil {
-		return entities.UserSubscription{}, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+		return entities.UserSubscription{}, fmt.Errorf("%s: %w", op, invalidSubscription("subscription id is required"))
 	}
 
 	model, err := gorm.G[models.UserSubscription](s.db).Where("id = ?", id).First(ctx)
@@ -55,7 +55,7 @@ func (s *Storage) GetActiveByUserID(ctx context.Context, userID uuid.UUID) (enti
 	const op = "storages.Subscriptions.GetActiveByUserID"
 
 	if userID == uuid.Nil {
-		return entities.UserSubscription{}, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+		return entities.UserSubscription{}, fmt.Errorf("%s: %w", op, invalidSubscription("subscription user_id is required"))
 	}
 
 	model, err := gorm.G[models.UserSubscription](s.db).
@@ -101,8 +101,8 @@ func (s *Storage) Update(ctx context.Context, subscription entities.UserSubscrip
 func (s *Storage) Cancel(ctx context.Context, id, userID uuid.UUID, canceledAt time.Time) error {
 	const op = "storages.Subscriptions.Cancel"
 
-	if id == uuid.Nil || userID == uuid.Nil || canceledAt.IsZero() {
-		return fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	if err := validateCancelInput(id, userID, canceledAt); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
 	}
 
 	tx := s.db.WithContext(ctx).Model(&models.UserSubscription{}).
@@ -126,26 +126,43 @@ func (s *Storage) Cancel(ctx context.Context, id, userID uuid.UUID, canceledAt t
 func validateSubscription(subscription entities.UserSubscription) error {
 	switch {
 	case subscription.ID == uuid.Nil:
-		return sql.ErrInvalid
+		return invalidSubscription("subscription id is required")
 	case subscription.UserID == uuid.Nil:
-		return sql.ErrInvalid
+		return invalidSubscription("subscription user_id is required")
 	case subscription.PlanID == uuid.Nil:
-		return sql.ErrInvalid
+		return invalidSubscription("subscription plan_id is required")
 	case subscription.Status == "":
-		return sql.ErrInvalid
+		return invalidSubscription("subscription status is required")
 	case subscription.StartedAt.IsZero():
-		return sql.ErrInvalid
+		return invalidSubscription("subscription started_at is required")
 	case subscription.CurrentPeriodStart.IsZero():
-		return sql.ErrInvalid
+		return invalidSubscription("subscription current_period_start is required")
 	case subscription.CurrentPeriodEnd.IsZero():
-		return sql.ErrInvalid
+		return invalidSubscription("subscription current_period_end is required")
 	case subscription.CreatedAt.IsZero():
-		return sql.ErrInvalid
+		return invalidSubscription("subscription created_at is required")
 	case subscription.UpdatedAt.IsZero():
-		return sql.ErrInvalid
+		return invalidSubscription("subscription updated_at is required")
 	default:
 		return nil
 	}
+}
+
+func validateCancelInput(id, userID uuid.UUID, canceledAt time.Time) error {
+	switch {
+	case id == uuid.Nil:
+		return invalidSubscription("subscription id is required")
+	case userID == uuid.Nil:
+		return invalidSubscription("subscription user_id is required")
+	case canceledAt.IsZero():
+		return invalidSubscription("subscription canceled_at is required")
+	default:
+		return nil
+	}
+}
+
+func invalidSubscription(reason string) error {
+	return fmt.Errorf("%s: %w", reason, sql.ErrInvalid)
 }
 
 func mapToModel(subscription entities.UserSubscription) models.UserSubscription {

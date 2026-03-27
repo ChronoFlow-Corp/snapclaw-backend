@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,6 +170,49 @@ func TestStorageRejectsInvalidData(t *testing.T) {
 
 	if err := store.Cancel(context.Background(), uuid.Nil, user.ID, time.Now().UTC()); !errors.Is(err, infraSQL.ErrInvalid) {
 		t.Fatalf("Cancel() nil id error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestStorageCreateReturnsDetailedSubscriptionValidationError(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	store := NewStorage(db)
+	plan := seedPlan(t, db, "starter")
+	subscription := newSubscription(uuid.Nil, plan.ID, entities.SubscriptionStatusActive, time.Now().UTC())
+
+	err := store.Create(context.Background(), subscription)
+	if err == nil {
+		t.Fatal("Create() error = nil, want non-nil")
+	}
+
+	if !errors.Is(err, infraSQL.ErrInvalid) {
+		t.Fatalf("Create() error = %v, want ErrInvalid", err)
+	}
+
+	if !strings.Contains(err.Error(), "subscription user_id is required") {
+		t.Fatalf("Create() error = %q, want to contain %q", err.Error(), "subscription user_id is required")
+	}
+}
+
+func TestStorageCancelReturnsDetailedValidationError(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	store := NewStorage(db)
+	user := seedUser(t, db)
+
+	err := store.Cancel(context.Background(), uuid.Nil, user.ID, time.Now().UTC())
+	if err == nil {
+		t.Fatal("Cancel() error = nil, want non-nil")
+	}
+
+	if !errors.Is(err, infraSQL.ErrInvalid) {
+		t.Fatalf("Cancel() error = %v, want ErrInvalid", err)
+	}
+
+	if !strings.Contains(err.Error(), "subscription id is required") {
+		t.Fatalf("Cancel() error = %q, want to contain %q", err.Error(), "subscription id is required")
 	}
 }
 

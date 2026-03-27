@@ -217,11 +217,11 @@ func (s *Storage) apply(
 		if payment != nil && payment.ID != "" {
 			pDB, err := payments.MapPaymentToModel(*payment)
 			if err != nil {
-				return sql.TranslateError(err)
+				return fmt.Errorf("map payment snapshot %s: %w", payment.ID, err)
 			}
 			_, err = gorm.G[models.Payment](tx).Where("id = ?", payment.ID).Updates(ctx, pDB)
 			if err != nil {
-				return sql.TranslateError(err)
+				return fmt.Errorf("update payment snapshot %s: %w", payment.ID, sql.TranslateError(err))
 			}
 		}
 
@@ -237,15 +237,15 @@ func (s *Storage) apply(
 func validateEntry(entry entities.UserBalanceEntry) error {
 	switch {
 	case entry.ID == uuid.Nil:
-		return sql.ErrInvalid
+		return invalidEntry("entry id is required")
 	case entry.UserID == uuid.Nil:
-		return sql.ErrInvalid
+		return invalidEntry("entry user_id is required")
 	case entry.Type == "":
-		return sql.ErrInvalid
+		return invalidEntry("entry type is required")
 	case entry.AmountMinor <= 0:
-		return sql.ErrInvalid
+		return invalidEntry("entry amount_minor must be greater than 0")
 	case entry.CreatedAt.IsZero():
-		return sql.ErrInvalid
+		return invalidEntry("entry created_at is required")
 	default:
 		return nil
 	}
@@ -254,22 +254,30 @@ func validateEntry(entry entities.UserBalanceEntry) error {
 func validateUsageEvent(event entities.OpenRouterUsageEvent) error {
 	switch {
 	case event.ID == uuid.Nil:
-		return sql.ErrInvalid
+		return invalidUsageEvent("usage event id is required")
 	case event.Provider == "":
-		return sql.ErrInvalid
+		return invalidUsageEvent("usage event provider is required")
 	case event.TraceID == "":
-		return sql.ErrInvalid
+		return invalidUsageEvent("usage event trace_id is required")
 	case event.SpanID == "":
-		return sql.ErrInvalid
+		return invalidUsageEvent("usage event span_id is required")
 	case event.UserID == uuid.Nil:
-		return sql.ErrInvalid
+		return invalidUsageEvent("usage event user_id is required")
 	case event.APIKeyName == "":
-		return sql.ErrInvalid
+		return invalidUsageEvent("usage event api_key_name is required")
 	case event.CreatedAt.IsZero():
-		return sql.ErrInvalid
+		return invalidUsageEvent("usage event created_at is required")
 	default:
 		return nil
 	}
+}
+
+func invalidEntry(reason string) error {
+	return fmt.Errorf("%s: %w", reason, sql.ErrInvalid)
+}
+
+func invalidUsageEvent(reason string) error {
+	return fmt.Errorf("%s: %w", reason, sql.ErrInvalid)
 }
 
 func isDuplicateUsageEventErr(err error) bool {

@@ -439,23 +439,39 @@ func TestRoutesIntegration(t *testing.T) {
 			map[string]any{"plan_id": plan.ID.String()},
 			accessCookie(env.accessToken),
 		)
-		if rr.Code != http.StatusOK {
+		if rr.Code != http.StatusSeeOther {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		if location := rr.Header().Get("Location"); location == "" {
+			t.Fatal("expected redirect location")
+		}
+	})
+
+	t.Run("POST /api/me/subscription maps inactive plan error", func(t *testing.T) {
+		env := newTestEnv(t)
+		plan := env.billingService.seedPlan("starter")
+		env.billingService.subscribeErr = billingservice.ErrPlanInactive
+
+		rr := env.request(
+			t,
+			http.MethodPost,
+			"/api/me/subscription",
+			map[string]any{"plan_id": plan.ID.String()},
+			accessCookie(env.accessToken),
+		)
+		if rr.Code != http.StatusConflict {
 			t.Fatalf("unexpected status: %d", rr.Code)
 		}
 
 		var payload struct {
-			ID     string `json:"id"`
-			Status string `json:"status"`
-			PlanID string `json:"plan_id"`
+			Code    int    `json:"code"`
+			Message string `json:"message"`
 		}
 		decodeJSON(t, rr, &payload)
 
-		if payload.Status != entities.SubscriptionStatusActive {
-			t.Fatalf("unexpected status: %s", payload.Status)
-		}
-
-		if payload.PlanID != plan.ID.String() {
-			t.Fatalf("unexpected plan id: %s", payload.PlanID)
+		if payload.Message != "plan is inactive" {
+			t.Fatalf("unexpected message: %s", payload.Message)
 		}
 	})
 
@@ -1512,6 +1528,7 @@ type fakeBillingService struct {
 	balance               map[uuid.UUID]int64
 	lastWebhook           billingcommands.PaymentEvent
 	lastOpenRouterWebhook billingcommands.OpenRouterUsageEvent
+	subscribeErr          error
 	webhookErr            error
 	openRouterWebhookErr  error
 }
@@ -1615,6 +1632,10 @@ func (s *fakeBillingService) DeactivatePlan(_ context.Context, id uuid.UUID) err
 }
 
 func (s *fakeBillingService) Subscribe(_ context.Context, cm billingcommands.Subscribe) (string, error) {
+	if s.subscribeErr != nil {
+		return "", s.subscribeErr
+	}
+
 	if _, ok := s.plans[cm.PlanID]; !ok {
 		return "", sql.ErrNotFound
 	}
@@ -1708,6 +1729,14 @@ func (s *fakeBillingService) HandleOpenRouterUsageWebhook(
 ) error {
 	s.lastOpenRouterWebhook = event
 	return s.openRouterWebhookErr
+}
+
+func (s *fakeBillingService) TopUp(_ context.Context, cm billingcommands.TopUp) (string, error) {
+	if cm.UserID == uuid.Nil || cm.Amount <= 0 {
+		return "", sql.ErrInvalid
+	}
+
+	return "http://example.com/topup", nil
 }
 
 type fakeServerService struct {

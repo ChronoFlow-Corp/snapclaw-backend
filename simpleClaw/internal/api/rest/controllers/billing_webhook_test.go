@@ -5,6 +5,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"shared/pkg/response"
+	billingservice "simpleClaw/internal/service/billing"
 )
 
 func TestBillingHandleYooKassaWebhook(t *testing.T) {
@@ -101,6 +104,42 @@ func TestBillingHandleYooKassaWebhook(t *testing.T) {
 
 		if rr.Code != http.StatusUnsupportedMediaType {
 			t.Fatalf("status = %d, want %d", rr.Code, http.StatusUnsupportedMediaType)
+		}
+	})
+
+	t.Run("maps invalid payment event type error", func(t *testing.T) {
+		env := newTestEnv(t)
+		env.billingService.webhookErr = billingservice.ErrPaymentEventTypeInvalid
+
+		req := httptest.NewRequest(
+			http.MethodPost,
+			"/api/billing/webhook/yookassa",
+			strings.NewReader(`{
+				"type":"notification",
+				"event":"payment.succeeded",
+				"object":{
+					"id":"pay_123",
+					"status":"succeeded",
+					"paid":true,
+					"amount":{"value":"1000.00","currency":"RUB"},
+					"created_at":"2026-03-25T10:00:00Z"
+				}
+			}`),
+		)
+		req.Header.Set("Content-Type", "application/json")
+
+		rr := httptest.NewRecorder()
+		env.router.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+		}
+
+		var payload response.Error
+		decodeJSON(t, rr, &payload)
+
+		if payload.Message != "invalid payment event type" {
+			t.Fatalf("message = %q, want %q", payload.Message, "invalid payment event type")
 		}
 	})
 }

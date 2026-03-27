@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,6 +115,60 @@ func TestSubscribeCreatesPendingSubscription(t *testing.T) {
 	}
 }
 
+func TestSubscribeReturnsPlanInactive(t *testing.T) {
+	t.Parallel()
+
+	planStorage := newFakePlanStorage()
+	subscriptionStorage := newFakeSubscriptionStorage()
+	plan := newActivePlan()
+	plan.IsActive = false
+	planStorage.plans[plan.ID] = plan
+
+	service := NewService(
+		planStorage,
+		subscriptionStorage,
+		nil,
+		nil,
+		&fakePaymentStorage{},
+		&fakePaymentInfra{},
+	)
+
+	_, err := service.Subscribe(context.Background(), commands.Subscribe{
+		UserID: uuid.New(),
+		PlanID: plan.ID,
+		Now:    time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+	})
+	if !errors.Is(err, ErrPlanInactive) {
+		t.Fatalf("Subscribe() error = %v, want ErrPlanInactive", err)
+	}
+}
+
+func TestSubscribeIncludesPlanLoadStageInError(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(
+		newFakePlanStorage(),
+		newFakeSubscriptionStorage(),
+		nil,
+		nil,
+		&fakePaymentStorage{},
+		&fakePaymentInfra{},
+	)
+
+	_, err := service.Subscribe(context.Background(), commands.Subscribe{
+		UserID: uuid.New(),
+		PlanID: uuid.New(),
+		Now:    time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+	})
+	if err == nil {
+		t.Fatal("Subscribe() error = nil, want non-nil")
+	}
+
+	if !strings.Contains(err.Error(), "load plan") {
+		t.Fatalf("Subscribe() error = %q, want to contain %q", err.Error(), "load plan")
+	}
+}
+
 func TestApplySuccessfulTopUpIsIdempotentAndCreditsAmount(t *testing.T) {
 	t.Parallel()
 
@@ -170,7 +225,7 @@ func TestApplySuccessfulSubscriptionPaymentCreditsPlanBalance(t *testing.T) {
 		ID:                 uuid.New(),
 		UserID:             userID,
 		PlanID:             plan.ID,
-		Status:             entities.SubscriptionStatusActive,
+		Status:             entities.SubscriptionStatusPending,
 		StartedAt:          time.Now().UTC(),
 		CurrentPeriodStart: time.Now().UTC(),
 		CurrentPeriodEnd:   time.Now().UTC().Add(30 * 24 * time.Hour),
@@ -183,12 +238,13 @@ func TestApplySuccessfulSubscriptionPaymentCreditsPlanBalance(t *testing.T) {
 	balanceStore := newFakeBalanceEntryStorage()
 
 	payment := entities.Payment{
-		ID:        "pay_subscription",
-		UserID:    userID,
-		Purpose:   entities.PaymentPurposeSubscription,
-		Status:    entities.Succeeded,
-		Paid:      true,
-		CreatedAt: time.Now().UTC(),
+		ID:             "pay_subscription",
+		UserID:         userID,
+		Purpose:        entities.PaymentPurposeSubscription,
+		Status:         entities.Succeeded,
+		Paid:           true,
+		SubscriptionID: &subscription.ID,
+		CreatedAt:      time.Now().UTC(),
 	}
 
 	service := NewService(planStorage, subscriptionStore, balanceStore, &fakeUserStorage{
@@ -198,6 +254,8 @@ func TestApplySuccessfulSubscriptionPaymentCreditsPlanBalance(t *testing.T) {
 	}, &fakePaymentStorage{}, &fakePaymentInfra{
 		captureResult: payment,
 	})
+
+	subscriptionStore.byID[subscription.ID] = subscription
 
 	if err := service.ApplySuccessfulSubscriptionPayment(context.Background(), payment); err != nil {
 		t.Fatalf("ApplySuccessfulSubscriptionPayment() error = %v", err)
@@ -283,6 +341,14 @@ func TestHandleOpenRouterUsageWebhookRejectsMalformedAPIKeyName(t *testing.T) {
 	if err == nil {
 		t.Fatal("HandleOpenRouterUsageWebhook() error = nil, want non-nil")
 	}
+
+	if !errors.Is(err, ErrOpenRouterAPIKeyInvalid) {
+		t.Fatalf("HandleOpenRouterUsageWebhook() error = %v, want ErrOpenRouterAPIKeyInvalid", err)
+	}
+
+	if !strings.Contains(err.Error(), "parse api key name") {
+		t.Fatalf("HandleOpenRouterUsageWebhook() error = %q, want to contain %q", err.Error(), "parse api key name")
+	}
 }
 
 func TestHandleOpenRouterUsageWebhookReturnsInsufficientBalance(t *testing.T) {
@@ -363,6 +429,96 @@ func TestGetBillingSummaryUsesLatestSubscriptionPaymentForNextCharge(t *testing.
 	want := lastPaymentTime.AddDate(0, 1, 0)
 	if !summary.NextChargeAt.Equal(want) {
 		t.Fatalf("NextChargeAt = %s, want %s", summary.NextChargeAt, want)
+	}
+}
+
+func TestPaymentEventHandlerReturnsInvalidEventType(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(nil, nil, nil, nil, &fakePaymentStorage{}, &fakePaymentInfra{})
+
+	err := service.PaymentEventHandler(context.Background(), commands.PaymentEvent{
+		PaymentEvent: entities.PaymentEvent{
+			Type:  "unexpected",
+			Event: "payment.succeeded",
+			Object: entities.Payment{
+				ID: "pay_123",
+			},
+		},
+	})
+	if !errors.Is(err, ErrPaymentEventTypeInvalid) {
+		t.Fatalf("PaymentEventHandler() error = %v, want ErrPaymentEventTypeInvalid", err)
+	}
+}
+
+func TestBillingErrorClassificationPlanInactive(t *testing.T) {
+	t.Parallel()
+
+	planStorage := newFakePlanStorage()
+	plan := newActivePlan()
+	plan.IsActive = false
+	planStorage.plans[plan.ID] = plan
+
+	service := NewService(
+		planStorage,
+		newFakeSubscriptionStorage(),
+		nil,
+		nil,
+		&fakePaymentStorage{},
+		&fakePaymentInfra{},
+	)
+
+	_, err := service.Subscribe(context.Background(), commands.Subscribe{
+		UserID: uuid.New(),
+		PlanID: plan.ID,
+		Now:    time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+	})
+	if err == nil {
+		t.Fatal("Subscribe() error = nil, want non-nil")
+	}
+
+	attrs := observability.ClassifyError(err)
+	if attrs.Result != observability.ResultValidationError {
+		t.Fatalf("result = %q, want %q", attrs.Result, observability.ResultValidationError)
+	}
+
+	if attrs.Source != observability.ErrorSourceService {
+		t.Fatalf("source = %q, want %q", attrs.Source, observability.ErrorSourceService)
+	}
+}
+
+func TestBillingErrorClassificationExternalPaymentFailure(t *testing.T) {
+	t.Parallel()
+
+	planStorage := newFakePlanStorage()
+	plan := newActivePlan()
+	planStorage.plans[plan.ID] = plan
+
+	service := NewService(
+		planStorage,
+		newFakeSubscriptionStorage(),
+		nil,
+		nil,
+		&fakePaymentStorage{},
+		&fakePaymentInfra{createPaymentErr: errors.New("provider down")},
+	)
+
+	_, err := service.Subscribe(context.Background(), commands.Subscribe{
+		UserID: uuid.New(),
+		PlanID: plan.ID,
+		Now:    time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+	})
+	if err == nil {
+		t.Fatal("Subscribe() error = nil, want non-nil")
+	}
+
+	attrs := observability.ClassifyError(err)
+	if attrs.Source != observability.ErrorSourceExternal {
+		t.Fatalf("source = %q, want %q", attrs.Source, observability.ErrorSourceExternal)
+	}
+
+	if attrs.Result != observability.ResultError {
+		t.Fatalf("result = %q, want %q", attrs.Result, observability.ResultError)
 	}
 }
 

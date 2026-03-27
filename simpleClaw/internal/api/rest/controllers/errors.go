@@ -8,6 +8,7 @@ import (
 	"simpleClaw/internal/infra/hosting"
 	"simpleClaw/internal/infra/openrouter"
 	"simpleClaw/internal/infra/sql"
+	"simpleClaw/internal/service/billing"
 	"simpleClaw/internal/service/claw"
 	"simpleClaw/internal/service/server"
 	"simpleClaw/internal/service/user"
@@ -29,10 +30,18 @@ type serviceErrorMapping struct {
 
 var serviceErrorMappings = []serviceErrorMapping{
 	{err: sql.ErrNotFound, code: http.StatusNotFound, message: "not found"},
+	{err: billing.ErrSubscriptionNotFound, code: http.StatusNotFound, message: "subscription not found"},
 	{err: claw.ErrChannelNotFound, code: http.StatusNotFound, message: "channel not found"},
 
 	{err: sql.ErrConflict, code: http.StatusConflict, message: "resource already exists"},
+	{err: billing.ErrPlanInactive, code: http.StatusConflict, message: "plan is inactive"},
+	{err: billing.ErrInsufficientBalance, code: http.StatusConflict, message: "insufficient balance"},
+	{err: billing.ErrSubscriptionNotPending, code: http.StatusConflict, message: "subscription is not pending"},
+	{err: billing.ErrPaymentNotPaid, code: http.StatusConflict, message: "payment is not paid"},
 	{err: sql.ErrInvalid, code: http.StatusBadRequest, message: "invalid data"},
+	{err: billing.ErrPaymentEventTypeInvalid, code: http.StatusBadRequest, message: "invalid payment event type"},
+	{err: billing.ErrOpenRouterAPIKeyInvalid, code: http.StatusBadRequest, message: "invalid openrouter api key"},
+	{err: billing.ErrUnsupportedCurrency, code: http.StatusBadRequest, message: "unsupported currency"},
 
 	{err: user.ErrChannelUnsupported, code: http.StatusBadRequest, message: "channel type is not supported"},
 	{err: user.ErrProviderUnsupported, code: http.StatusBadRequest, message: "provider is not supported"},

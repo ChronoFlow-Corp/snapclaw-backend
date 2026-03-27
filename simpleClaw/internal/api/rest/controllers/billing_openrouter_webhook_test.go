@@ -5,6 +5,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"shared/pkg/response"
+	billingservice "simpleClaw/internal/service/billing"
 )
 
 func TestBillingHandleOpenRouterWebhook(t *testing.T) {
@@ -113,6 +116,47 @@ func TestBillingHandleOpenRouterWebhook(t *testing.T) {
 
 		if rr.Code != http.StatusUnsupportedMediaType {
 			t.Fatalf("status = %d, want %d", rr.Code, http.StatusUnsupportedMediaType)
+		}
+	})
+
+	t.Run("maps invalid openrouter api key error", func(t *testing.T) {
+		env := newTestEnv(t)
+		env.billingService.openRouterWebhookErr = billingservice.ErrOpenRouterAPIKeyInvalid
+
+		req := httptest.NewRequest(
+			http.MethodPost,
+			"/api/billing/webhook/openrouter",
+			strings.NewReader(`{
+				"resourceSpans": [{
+					"scopeSpans": [{
+						"spans": [{
+							"traceId": "trace-1",
+							"spanId": "span-1",
+							"endTimeUnixNano": "1774526400000000000",
+							"attributes": [
+								{"key":"trace.metadata.openrouter.api_key_name","value":{"stringValue":"snapclaw+broken"}},
+								{"key":"gen_ai.usage.total_cost","value":{"doubleValue":0.12}}
+							]
+						}]
+					}]
+				}]
+			}`),
+		)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", env.openRouterWebhookSecret)
+
+		rr := httptest.NewRecorder()
+		env.router.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+		}
+
+		var payload response.Error
+		decodeJSON(t, rr, &payload)
+
+		if payload.Message != "invalid openrouter api key" {
+			t.Fatalf("message = %q, want %q", payload.Message, "invalid openrouter api key")
 		}
 	})
 }

@@ -2,8 +2,10 @@ package balanceentries
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"simpleClaw/internal/entities"
+	infraSQL "simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/infra/sql/models"
 )
 
@@ -83,6 +86,63 @@ func TestStorageApplyUsageDebitRejectsInsufficientBalance(t *testing.T) {
 
 	assertUserBalance(t, db, user.ID, 100)
 	assertEntryCount(t, db, user.ID, 0)
+}
+
+func TestStorageApplyCreditReturnsDetailedEntryValidationError(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	store := NewStorage(db)
+
+	_, err := store.ApplyCredit(context.Background(), entities.UserBalanceEntry{
+		ID:          uuid.New(),
+		Type:        entities.BalanceEntryTypeTopUpCredit,
+		AmountMinor: 250,
+		CreatedAt:   time.Now().UTC(),
+	}, entities.Payment{})
+	if err == nil {
+		t.Fatal("ApplyCredit() error = nil, want non-nil")
+	}
+
+	if !errors.Is(err, infraSQL.ErrInvalid) {
+		t.Fatalf("ApplyCredit() error = %v, want ErrInvalid", err)
+	}
+
+	if !strings.Contains(err.Error(), "entry user_id is required") {
+		t.Fatalf("ApplyCredit() error = %q, want to contain %q", err.Error(), "entry user_id is required")
+	}
+}
+
+func TestStorageApplyCreditReturnsDetailedPaymentSnapshotError(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	store := NewStorage(db)
+	user := seedUser(t, db, 1000)
+	entry := newBalanceEntry(user.ID, entities.BalanceEntryTypeTopUpCredit, 250, time.Now().UTC())
+
+	_, err := store.ApplyCredit(context.Background(), entry, entities.Payment{
+		ID:        "pay_invalid",
+		UserID:    user.ID,
+		Purpose:   entities.PaymentPurposeSubscription,
+		Amount:    entities.Amount{Value: "100.00", Currency: entities.RUB},
+		CreatedAt: time.Now().UTC(),
+	})
+	if err == nil {
+		t.Fatal("ApplyCredit() error = nil, want non-nil")
+	}
+
+	if !errors.Is(err, infraSQL.ErrInvalid) {
+		t.Fatalf("ApplyCredit() error = %v, want ErrInvalid", err)
+	}
+
+	if !strings.Contains(err.Error(), "map payment snapshot pay_invalid") {
+		t.Fatalf("ApplyCredit() error = %q, want to contain %q", err.Error(), "map payment snapshot pay_invalid")
+	}
+
+	if !strings.Contains(err.Error(), "payment status is required") {
+		t.Fatalf("ApplyCredit() error = %q, want to contain %q", err.Error(), "payment status is required")
+	}
 }
 
 func TestStorageApplyUsageDebitOnceIsIdempotent(t *testing.T) {

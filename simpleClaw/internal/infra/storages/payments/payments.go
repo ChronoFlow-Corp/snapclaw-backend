@@ -210,15 +210,15 @@ func validatePaymentForCreate(payment entities.Payment) error {
 func validateStoredPayment(payment entities.Payment) error {
 	switch {
 	case normalizePurpose(payment.Purpose) == "":
-		return sql.ErrInvalid
+		return invalidPayment("payment purpose is required")
 	case payment.Status == "":
-		return sql.ErrInvalid
+		return invalidPayment("payment status is required")
 	case payment.Amount.Value == "":
-		return sql.ErrInvalid
+		return invalidPayment("payment amount value is required")
 	case payment.Amount.Currency == "":
-		return sql.ErrInvalid
+		return invalidPayment("payment amount currency is required")
 	case payment.CreatedAt.IsZero():
-		return sql.ErrInvalid
+		return invalidPayment("payment created_at is required")
 	}
 
 	return validateNestedPayment(payment)
@@ -227,9 +227,9 @@ func validateStoredPayment(payment entities.Payment) error {
 func validateIDAndUserID(id string, userID uuid.UUID) error {
 	switch {
 	case id == "":
-		return sql.ErrInvalid
+		return invalidPayment("payment id is required")
 	case userID == uuid.Nil:
-		return sql.ErrInvalid
+		return invalidPayment("payment user_id is required")
 	default:
 		return nil
 	}
@@ -237,16 +237,16 @@ func validateIDAndUserID(id string, userID uuid.UUID) error {
 
 func validateNestedPayment(payment entities.Payment) error {
 	if payment.PaymentMethod != nil && payment.PaymentMethod.Type == "" {
-		return sql.ErrInvalid
+		return invalidPayment("payment method type is required")
 	}
 
 	if payment.Recipient != nil && payment.Recipient.AccountID == "" {
-		return sql.ErrInvalid
+		return invalidPayment("payment recipient account_id is required")
 	}
 
 	if payment.IncomeAmount != nil {
 		if payment.IncomeAmount.Value == "" || payment.IncomeAmount.Currency == "" {
-			return sql.ErrInvalid
+			return invalidPayment("payment income amount requires value and currency")
 		}
 	}
 
@@ -278,7 +278,7 @@ func translatePaymentError(err error) error {
 	}
 
 	if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
-		return sql.ErrInvalid
+		return invalidPayment("payment references missing related record")
 	}
 
 	return translated
@@ -287,7 +287,7 @@ func translatePaymentError(err error) error {
 func translatePostgresCode(code string) error {
 	switch code {
 	case "23503", "23514":
-		return sql.ErrInvalid
+		return invalidPayment("payment violates storage constraints")
 	case "23505":
 		return sql.ErrConflict
 	default:
@@ -296,6 +296,10 @@ func translatePostgresCode(code string) error {
 }
 
 func MapPaymentToModel(payment entities.Payment) (models.Payment, error) {
+	if err := validateStoredPayment(payment); err != nil {
+		return models.Payment{}, fmt.Errorf("validate payment snapshot %s: %w", payment.ID, err)
+	}
+
 	authorizationDetails, err := marshalAuthorizationDetails(payment.AuthorizationDetails)
 	if err != nil {
 		return models.Payment{}, err
@@ -342,6 +346,10 @@ func MapPaymentToModel(payment entities.Payment) (models.Payment, error) {
 	}
 
 	return model, nil
+}
+
+func invalidPayment(reason string) error {
+	return fmt.Errorf("%s: %w", reason, sql.ErrInvalid)
 }
 
 func buildPaymentUpdateFields(payment entities.Payment) (map[string]interface{}, error) {

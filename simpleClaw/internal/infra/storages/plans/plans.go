@@ -41,7 +41,7 @@ func (s *Storage) GetByID(ctx context.Context, id uuid.UUID) (entities.Plan, err
 	const op = "storages.Plans.GetByID"
 
 	if id == uuid.Nil {
-		return entities.Plan{}, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+		return entities.Plan{}, fmt.Errorf("%s: %w", op, invalidPlan("plan id is required"))
 	}
 
 	model, err := gorm.G[models.Plan](s.db).Where("id = ?", id).First(ctx)
@@ -106,7 +106,7 @@ func (s *Storage) Deactivate(ctx context.Context, id uuid.UUID) error {
 	const op = "storages.Plans.Deactivate"
 
 	if id == uuid.Nil {
-		return fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+		return fmt.Errorf("%s: %w", op, invalidPlan("plan id is required"))
 	}
 
 	tx := s.db.WithContext(ctx).Model(&models.Plan{}).
@@ -126,24 +126,28 @@ func (s *Storage) Deactivate(ctx context.Context, id uuid.UUID) error {
 func validatePlan(plan entities.Plan) error {
 	switch {
 	case plan.ID == uuid.Nil:
-		return sql.ErrInvalid
+		return invalidPlan("plan id is required")
 	case strings.TrimSpace(plan.Code) == "":
-		return sql.ErrInvalid
+		return invalidPlan("plan code is required")
 	case strings.TrimSpace(plan.Name) == "":
-		return sql.ErrInvalid
+		return invalidPlan("plan name is required")
 	case plan.BillingAmountMinor <= 0:
-		return sql.ErrInvalid
+		return invalidPlan("plan billing_amount_minor must be greater than 0")
 	case plan.BalanceCreditMinor <= 0:
-		return sql.ErrInvalid
+		return invalidPlan("plan balance_credit_minor must be greater than 0")
 	case strings.TrimSpace(plan.Currency) == "":
-		return sql.ErrInvalid
+		return invalidPlan("plan currency is required")
 	case plan.CreatedAt.IsZero():
-		return sql.ErrInvalid
+		return invalidPlan("plan created_at is required")
 	case plan.UpdatedAt.IsZero():
-		return sql.ErrInvalid
+		return invalidPlan("plan updated_at is required")
 	default:
 		return nil
 	}
+}
+
+func invalidPlan(reason string) error {
+	return fmt.Errorf("%s: %w", reason, sql.ErrInvalid)
 }
 
 func translatePlanError(err error) error {

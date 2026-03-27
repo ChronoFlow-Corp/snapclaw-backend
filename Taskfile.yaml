@@ -25,3 +25,7 @@ tasks:
   ps:
     desc: Show docker compose services
     cmd: docker compose --env-file .env ps
+
+  build:
+    desc: Build docker compose service and start its.
+    cmd: docker compose --env-file .env up --build -d
