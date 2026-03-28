@@ -707,6 +707,51 @@ func (s *Service) ApplySuccessfulSubscriptionPayment(
 	}
 
 	if subscription.Status != entities.SubscriptionStatusPending {
+		if subscription.Status == entities.SubscriptionStatusActive &&
+			payment.Status == entities.Succeeded {
+			_, err := s.balance.GetByPaymentID(ctx, payment.ID)
+			if err != nil && !errors.Is(err, sql.ErrNotFound) {
+				return fmt.Errorf("%s: %w", op, err)
+			}
+
+			if err == nil {
+				return nil
+			}
+
+			plan, err := s.plans.GetByID(ctx, subscription.PlanID)
+			if err != nil {
+				return fmt.Errorf(
+					"%s: load plan %s for subscription %s: %w",
+					op,
+					subscription.PlanID,
+					subscription.ID,
+					err,
+				)
+			}
+
+			_, err = s.balance.ApplyCredit(ctx, entities.UserBalanceEntry{
+				ID:             uuid.New(),
+				UserID:         payment.UserID,
+				Type:           entities.BalanceEntryTypeSubscriptionCredit,
+				AmountMinor:    plan.BalanceCreditMinor,
+				PaymentID:      &payment.ID,
+				SubscriptionID: &subscription.ID,
+				Description:    payment.Description,
+				CreatedAt:      payment.CreatedAt,
+			}, payment)
+			if err != nil {
+				return fmt.Errorf(
+					"%s: apply subscription credit payment=%s subscription=%s user=%s: %w",
+					op,
+					payment.ID,
+					subscription.ID,
+					payment.UserID,
+					err,
+				)
+			}
+
+			return nil
+		}
 		return fmt.Errorf(
 			"%s: validate subscription %s for payment %s: %w",
 			op,
@@ -826,49 +871,6 @@ func (s *Service) TopUp(ctx context.Context, cm commands.TopUp) (confirmURL stri
 	return *p.Confirmation.ConfirmationURL, nil
 }
 
-func (s *Service) ChargeUsage(
-	ctx context.Context,
-	cmd commands.ChargeUsage,
-) (balance int64, err error) {
-	const op = "service.billing.ChargeUsage"
-
-	ctx, _, finish := observability.StartOperation(
-		ctx,
-		slog.Default(),
-		s.metrics,
-		"service.billing",
-		"balance.charge_usage",
-		"billing_balance",
-	)
-
-	defer func() { finish(err) }()
-
-	if s.balance == nil {
-		return 0, fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
-	}
-
-	if cmd.UserID == uuid.Nil || cmd.AmountMinor <= 0 || cmd.Now.IsZero() {
-		return 0, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
-	}
-
-	balance, err = s.balance.ApplyUsageDebit(ctx, entities.UserBalanceEntry{
-		ID:          uuid.New(),
-		UserID:      cmd.UserID,
-		Type:        entities.BalanceEntryTypeUsageDebit,
-		AmountMinor: cmd.AmountMinor,
-		Description: cmd.Description,
-		CreatedAt:   cmd.Now,
-	})
-	if err != nil {
-		if isInsufficientBalanceErr(err) {
-			return 0, fmt.Errorf("%s: %w", op, decorateValidation(ErrInsufficientBalance))
-		}
-		return 0, fmt.Errorf("%s: %w", op, err)
-	}
-
-	return balance, nil
-}
-
 func (s *Service) PaymentEventHandler(ctx context.Context, e commands.PaymentEvent) (err error) {
 	const op = "service.billing.PaymentEventHandler"
 
@@ -897,11 +899,7 @@ func (s *Service) PaymentEventHandler(ctx context.Context, e commands.PaymentEve
 		return fmt.Errorf("%s: load payment %s: %w", op, e.Object.ID, err)
 	}
 
-	payment = applyPaymentEventSnapshot(payment, entities.PaymentEvent{
-		Type:   e.Type,
-		Event:  e.Event,
-		Object: e.Object,
-	})
+	payment = applyPaymentEventSnapshot(payment, e.Object)
 
 	if payment.Status == entities.Canceled {
 		err = s.payments.Update(ctx, payment)
@@ -921,21 +919,29 @@ func (s *Service) PaymentEventHandler(ctx context.Context, e commands.PaymentEve
 		)
 	}
 
-	if payment.SubscriptionID == nil && payment.Status == entities.WaitingForCapture {
+	switch {
+	case payment.SubscriptionID == nil && payment.Status == entities.WaitingForCapture || payment.Status == entities.Succeeded:
 		err = s.ApplySuccessfulTopUp(ctx, payment)
 		if err != nil {
 			return fmt.Errorf("%s: apply successful top-up payment %s: %w", op, payment.ID, err)
 		}
 
 		return nil
-	}
+	case payment.SubscriptionID != nil && payment.Status == entities.WaitingForCapture:
+		err = s.ApplySuccessfulSubscriptionPayment(ctx, payment)
+		if err != nil {
+			return fmt.Errorf(
+				"%s: apply successful subscription payment %s: %w",
+				op,
+				payment.ID,
+				err,
+			)
+		}
 
-	err = s.ApplySuccessfulSubscriptionPayment(ctx, payment)
-	if err != nil {
-		return fmt.Errorf("%s: apply successful subscription payment %s: %w", op, payment.ID, err)
+		return nil
+	default:
+		return fmt.Errorf("unexpected payment status: %s", payment.Status)
 	}
-
-	return nil
 }
 
 func (s *Service) HandleOpenRouterUsageWebhook(
@@ -1121,25 +1127,23 @@ func (s *Service) GetBillingSummary(
 
 func applyPaymentEventSnapshot(
 	current entities.Payment,
-	event entities.PaymentEvent,
+	event entities.Payment,
 ) entities.Payment {
-	in := event.Object
-
-	current.ID = in.ID
-	current.Status = in.Status
-	current.Paid = in.Paid
-	current.Amount = in.Amount
-	current.AuthorizationDetails = in.AuthorizationDetails
-	current.CreatedAt = in.CreatedAt
-	current.Description = in.Description
-	current.Confirmation = in.Confirmation
-	current.ExpiresAt = in.ExpiresAt
-	current.Metadata = in.Metadata
-	current.PaymentMethod = in.PaymentMethod
-	current.Recipient = in.Recipient
-	current.Refundable = in.Refundable
-	current.Test = in.Test
-	current.IncomeAmount = in.IncomeAmount
+	current.ID = event.ID
+	current.Status = event.Status
+	current.Paid = event.Paid
+	current.Amount = event.Amount
+	current.AuthorizationDetails = event.AuthorizationDetails
+	current.CreatedAt = event.CreatedAt
+	current.Description = event.Description
+	current.Confirmation = event.Confirmation
+	current.ExpiresAt = event.ExpiresAt
+	current.Metadata = event.Metadata
+	current.PaymentMethod = event.PaymentMethod
+	current.Recipient = event.Recipient
+	current.Refundable = event.Refundable
+	current.Test = event.Test
+	current.IncomeAmount = event.IncomeAmount
 
 	return current
 }

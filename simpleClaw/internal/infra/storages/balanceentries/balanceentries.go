@@ -96,6 +96,20 @@ func (s *Storage) ApplyUsageDebit(
 	return balance, nil
 }
 
+func (s *Storage) GetByPaymentID(
+	ctx context.Context,
+	paymentID string,
+) (entities.UserBalanceEntry, error) {
+	const op = "storages.BalanceEntries.GetByPaymentID"
+
+	b, err := gorm.G[models.UserBalanceEntry](s.db).Where("payment_id = ?", paymentID).First(ctx)
+	if err != nil {
+		return entities.UserBalanceEntry{}, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
+	}
+
+	return mapToEntity(b), nil
+}
+
 func (s *Storage) ApplyUsageDebitOnce(
 	ctx context.Context,
 	entry entities.UserBalanceEntry,
@@ -221,7 +235,11 @@ func (s *Storage) apply(
 			}
 			_, err = gorm.G[models.Payment](tx).Where("id = ?", payment.ID).Updates(ctx, pDB)
 			if err != nil {
-				return fmt.Errorf("update payment snapshot %s: %w", payment.ID, sql.TranslateError(err))
+				return fmt.Errorf(
+					"update payment snapshot %s: %w",
+					payment.ID,
+					sql.TranslateError(err),
+				)
 			}
 		}
 

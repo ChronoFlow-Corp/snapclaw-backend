@@ -42,6 +42,10 @@ type balanceEntryStorage interface {
 		entry entities.UserBalanceEntry,
 		event entities.OpenRouterUsageEvent,
 	) (balance int64, applied bool, err error)
+	GetByPaymentID(
+		ctx context.Context,
+		paymentID string,
+	) (entities.UserBalanceEntry, error)
 }
 
 type userStorage interface {
