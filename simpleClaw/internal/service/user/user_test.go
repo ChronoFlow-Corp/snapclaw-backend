@@ -26,7 +26,6 @@ func TestSignInCreatesAdminUserForConfiguredEmail(t *testing.T) {
 		storage,
 		fakeChannelStorage{},
 		newFakePaymentMethodStorage(),
-		fakePaymentStorage{},
 		fakeAPIKeyManager{},
 		[]string{"admin@example.com"},
 	)
@@ -66,7 +65,6 @@ func TestSignInUpdatesRoleForExistingConfiguredAdmin(t *testing.T) {
 		storage,
 		fakeChannelStorage{},
 		newFakePaymentMethodStorage(),
-		fakePaymentStorage{},
 		fakeAPIKeyManager{},
 		[]string{"admin@example.com"},
 	)
@@ -112,7 +110,6 @@ func TestAddPaymentMethodFirstMethodBecomesDefault(t *testing.T) {
 		newFakeUserStorage(),
 		fakeChannelStorage{},
 		newFakePaymentMethodStorage(),
-		fakePaymentStorage{},
 		fakeAPIKeyManager{},
 		nil,
 	)
@@ -141,7 +138,6 @@ func TestAddPaymentMethodExplicitDefaultClearsPreviousDefault(t *testing.T) {
 		newFakeUserStorage(),
 		fakeChannelStorage{},
 		pmStore,
-		fakePaymentStorage{},
 		fakeAPIKeyManager{},
 		nil,
 	)
@@ -188,7 +184,6 @@ func TestSetDefaultPaymentMethodSwitchesDefault(t *testing.T) {
 		newFakeUserStorage(),
 		fakeChannelStorage{},
 		pmStore,
-		fakePaymentStorage{},
 		fakeAPIKeyManager{},
 		nil,
 	)
@@ -248,7 +243,6 @@ func TestRemovePaymentMethodDeletesOwnerScopedMethod(t *testing.T) {
 		newFakeUserStorage(),
 		fakeChannelStorage{},
 		pmStore,
-		fakePaymentStorage{},
 		fakeAPIKeyManager{},
 		nil,
 	)

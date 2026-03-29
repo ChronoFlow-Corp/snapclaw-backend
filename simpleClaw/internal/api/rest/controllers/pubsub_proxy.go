@@ -26,6 +26,7 @@ type proxyTargetService interface {
 }
 
 type PubSubProxyOptions struct {
+	Client         *http.Client
 	Token          string
 	ForwardTimeout time.Duration
 	RetryCount     int
@@ -65,6 +66,11 @@ func NewPubSubProxy(servers proxyTargetService, opts PubSubProxyOptions) *PubSub
 		timeout = 5 * time.Second
 	}
 
+	client := opts.Client
+	if client == nil {
+		client = observability.NewHTTPClient(timeout)
+	}
+
 	retryBackoff := opts.RetryBackoff
 	if retryBackoff <= 0 {
 		retryBackoff = 250 * time.Millisecond
@@ -74,7 +80,7 @@ func NewPubSubProxy(servers proxyTargetService, opts PubSubProxyOptions) *PubSub
 
 	return &PubSubProxy{
 		servers:        servers,
-		client:         observability.NewHTTPClient(timeout),
+		client:         client,
 		token:          opts.Token,
 		forwardTimeout: timeout,
 		retryCount:     retryCount,

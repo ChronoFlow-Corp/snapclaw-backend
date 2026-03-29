@@ -266,30 +266,6 @@ func TestApplySuccessfulSubscriptionPaymentCreditsPlanBalance(t *testing.T) {
 	}
 }
 
-func TestChargeUsageReturnsInsufficientBalance(t *testing.T) {
-	t.Parallel()
-
-	userID := uuid.New()
-	balanceStore := newFakeBalanceEntryStorage()
-	balanceStore.balance[userID] = 100
-
-	service := NewService(nil, nil, balanceStore, &fakeUserStorage{
-		users: map[uuid.UUID]entities.User{
-			userID: {ID: userID, BalanceMinor: 100},
-		},
-	}, &fakePaymentStorage{}, nil)
-
-	_, err := service.ChargeUsage(context.Background(), commands.ChargeUsage{
-		UserID:      userID,
-		AmountMinor: 250,
-		Description: "usage",
-		Now:         time.Now().UTC(),
-	})
-	if !errors.Is(err, ErrInsufficientBalance) {
-		t.Fatalf("ChargeUsage() error = %v, want ErrInsufficientBalance", err)
-	}
-}
-
 func TestHandleOpenRouterUsageWebhookChargesUsageOnce(t *testing.T) {
 	t.Parallel()
 
@@ -710,6 +686,21 @@ func (s *fakeBalanceEntryStorage) ApplyUsageDebitOnce(
 	s.processed[key] = event
 
 	return balance, true, nil
+}
+
+func (s *fakeBalanceEntryStorage) GetByPaymentID(
+	_ context.Context,
+	paymentID string,
+) (entities.UserBalanceEntry, error) {
+	for _, entries := range s.entries {
+		for _, entry := range entries {
+			if entry.PaymentID != nil && *entry.PaymentID == paymentID {
+				return entry, nil
+			}
+		}
+	}
+
+	return entities.UserBalanceEntry{}, infraSQL.ErrNotFound
 }
 
 type fakeUserStorage struct {

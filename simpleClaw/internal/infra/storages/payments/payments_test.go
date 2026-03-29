@@ -29,7 +29,7 @@ func TestStorageCreateAndGetByID(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	got, err := store.GetByID(context.Background(), payment.ID, user.ID)
+	got, err := store.GetByID(context.Background(), payment.ID)
 	if err != nil {
 		t.Fatalf("GetByID() error = %v", err)
 	}
@@ -50,7 +50,7 @@ func TestStorageCreateAndGetByIDPersistsPurpose(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	got, err := store.GetByID(context.Background(), payment.ID, user.ID)
+	got, err := store.GetByID(context.Background(), payment.ID)
 	if err != nil {
 		t.Fatalf("GetByID() error = %v", err)
 	}
@@ -74,7 +74,7 @@ func TestStoragePersistsSubscriptionID(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	got, err := store.GetByID(context.Background(), payment.ID, user.ID)
+	got, err := store.GetByID(context.Background(), payment.ID)
 	if err != nil {
 		t.Fatalf("GetByID() error = %v", err)
 	}
@@ -90,7 +90,7 @@ func TestStoragePersistsSubscriptionID(t *testing.T) {
 		t.Fatalf("Update() error = %v", err)
 	}
 
-	got, err = store.GetByID(context.Background(), payment.ID, user.ID)
+	got, err = store.GetByID(context.Background(), payment.ID)
 	if err != nil {
 		t.Fatalf("GetByID() after update error = %v", err)
 	}
@@ -190,7 +190,7 @@ func TestStorageUpdateMutableFieldsPreservesImmutableAmounts(t *testing.T) {
 		t.Fatalf("Update() error = %v", err)
 	}
 
-	got, err := store.GetByID(context.Background(), payment.ID, user.ID)
+	got, err := store.GetByID(context.Background(), payment.ID)
 	if err != nil {
 		t.Fatalf("GetByID() after update error = %v", err)
 	}
@@ -270,7 +270,7 @@ func TestStorageUpdateRejectsPartialSnapshot(t *testing.T) {
 		t.Fatalf("Update() partial snapshot error = %v, want ErrInvalid", err)
 	}
 
-	got, err := store.GetByID(context.Background(), original.ID, user.ID)
+	got, err := store.GetByID(context.Background(), original.ID)
 	if err != nil {
 		t.Fatalf("GetByID() error = %v", err)
 	}
@@ -294,7 +294,7 @@ func TestStorageDelete(t *testing.T) {
 		t.Fatalf("Delete() error = %v", err)
 	}
 
-	_, err := store.GetByID(context.Background(), payment.ID, user.ID)
+	_, err := store.GetByID(context.Background(), payment.ID)
 	if !errors.Is(err, infraSQL.ErrNotFound) {
 		t.Fatalf("GetByID() after delete error = %v, want ErrNotFound", err)
 	}
@@ -367,7 +367,7 @@ func TestStorageGetLatestSucceededByPurposeReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestStorageWrongOwnerReturnsNotFound(t *testing.T) {
+func TestStorageGetByIDIsGlobalAndMutationsRemainOwnerScoped(t *testing.T) {
 	t.Parallel()
 
 	db := newTestDB(t)
@@ -380,10 +380,12 @@ func TestStorageWrongOwnerReturnsNotFound(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	_, err := store.GetByID(context.Background(), payment.ID, otherUser.ID)
-	if !errors.Is(err, infraSQL.ErrNotFound) {
-		t.Fatalf("GetByID() wrong owner error = %v, want ErrNotFound", err)
+	got, err := store.GetByID(context.Background(), payment.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
 	}
+
+	assertPaymentEqual(t, payment, got)
 
 	payment.Description = "wrong-owner-update"
 	err = store.Update(context.Background(), payment)

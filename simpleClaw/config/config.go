@@ -38,9 +38,9 @@ type database struct {
 }
 
 type auth struct {
-	Google google   `yaml:"google"`
-	Jwt    Jwt      `yaml:"jwt"`
-	Admins []string `yaml:"admins" env:"AUTH_ADMINS" env-separator:","`
+	Google google   `env-required:"true" yaml:"google"`
+	Jwt    Jwt      `                    yaml:"jwt"`
+	Admins []string `                    yaml:"admins" env:"AUTH_ADMINS" env-separator:","`
 }
 
 type google struct {

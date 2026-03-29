@@ -8,7 +8,7 @@ func TestMaxClawsResolve(t *testing.T) {
 	t.Run("manual returns configured value", func(t *testing.T) {
 		t.Parallel()
 
-		cl := new(MaxClaws)
+		cl := &MaxClaws{Auto: false, Value: 5}
 
 		got, err := cl.Resolve(16*1024*1024*1024, 2*1024*1024*1024)
 		if err != nil {
@@ -23,7 +23,7 @@ func TestMaxClawsResolve(t *testing.T) {
 	t.Run("auto uses memtotal minus reserve", func(t *testing.T) {
 		t.Parallel()
 
-		cl := new(MaxClaws)
+		cl := &MaxClaws{Auto: true}
 
 		got, err := cl.Resolve(10*1024*1024*1024, 2*1024*1024*1024)
 		if err != nil {
