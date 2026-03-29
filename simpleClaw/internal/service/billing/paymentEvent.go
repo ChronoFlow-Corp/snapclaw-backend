@@ -18,6 +18,8 @@ import (
 	"github.com/google/uuid"
 )
 
+var errPaymentNotSubscription = errors.New("payment is not subscription")
+
 func (s *Service) EventPayment(ctx context.Context, cm commands.PaymentEvent) (err error) {
 	const op = "service.Billing.EventPayment"
 
@@ -75,7 +77,7 @@ func (s *Service) succeededHandle(ctx context.Context, p entities.Payment) error
 	}
 
 	err = s.succeededSubscription(ctx, p)
-	if err != nil {
+	if err != nil && !errors.Is(err, errPaymentNotSubscription) {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -203,7 +205,7 @@ func (s *Service) succeededSubscription(ctx context.Context, p entities.Payment)
 	}
 
 	if p.Purpose != entities.PaymentPurposeSubscription {
-		return errors.New("purpose is not subscription")
+		return fmt.Errorf("%s: %w", op, errPaymentNotSubscription)
 	}
 
 	if p.SubscriptionID == nil {
