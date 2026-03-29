@@ -3,7 +3,6 @@ package billing
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -105,41 +104,6 @@ func normalizePurpose(purpose entities.PaymentPurpose) entities.PaymentPurpose {
 	}
 
 	return purpose
-}
-
-func parseMinorAmount(value string) (int64, error) {
-	if value == "" {
-		return 0, sql.ErrInvalid
-	}
-
-	whole, frac, ok := strings.Cut(value, ".")
-	if !ok {
-		wholeValue, err := strconv.ParseInt(whole, 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("parse amount: %w", sql.ErrInvalid)
-		}
-
-		return wholeValue * 100, nil
-	}
-
-	if len(frac) == 1 {
-		frac += "0"
-	}
-	if len(frac) != 2 {
-		return 0, sql.ErrInvalid
-	}
-
-	wholeValue, err := strconv.ParseInt(whole, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse amount: %w", sql.ErrInvalid)
-	}
-
-	fracValue, err := strconv.ParseInt(frac, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse amount: %w", sql.ErrInvalid)
-	}
-
-	return wholeValue*100 + fracValue, nil
 }
 
 func isInsufficientBalanceErr(err error) bool {

@@ -77,6 +77,7 @@ type paymentInfra interface {
 		ctx context.Context,
 		payment *entities.Payment,
 	) (entities.Payment, error)
+	Cancel(ctx context.Context, paymentID string) (entities.Payment, error)
 }
 
 type usageAmountConverter interface {

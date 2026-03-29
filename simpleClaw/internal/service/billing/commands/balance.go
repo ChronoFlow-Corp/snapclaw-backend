@@ -14,6 +14,6 @@ type ChargeUsage struct {
 }
 
 type TopUp struct {
-	Amount int64
+	Amount string
 	UserID uuid.UUID
 }

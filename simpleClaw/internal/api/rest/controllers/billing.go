@@ -34,7 +34,7 @@ type billingService interface {
 		userID uuid.UUID,
 	) (*billingsvc.SubscriptionSummary, error)
 	GetBillingSummary(ctx context.Context, userID uuid.UUID) (billingsvc.BillingSummary, error)
-	PaymentEventHandler(ctx context.Context, event commands.PaymentEvent) error
+	EventPayment(ctx context.Context, cm commands.PaymentEvent) (err error)
 	HandleOpenRouterUsageWebhook(ctx context.Context, event commands.OpenRouterUsageEvent) error
 	TopUp(ctx context.Context, cm commands.TopUp) (confirmURL string, err error)
 }
@@ -109,7 +109,7 @@ func (b *Billing) HandleYooKassaWebhook(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := b.service.PaymentEventHandler(r.Context(), commands.PaymentEvent{
+	if err := b.service.EventPayment(r.Context(), commands.PaymentEvent{
 		PaymentEvent: entities.PaymentEvent{
 			Type:   req.Type,
 			Event:  req.Event,
@@ -441,7 +441,17 @@ func (b *Billing) TopUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Amount <= 0 {
+	valAmount, err := strconv.ParseFloat(req.Amount, 64)
+	if err != nil {
+		response.RespondError(
+			w,
+			response.Error{Code: http.StatusBadRequest, Message: "amount must be number"},
+		)
+
+		return
+	}
+
+	if valAmount <= 0 {
 		response.RespondError(
 			w,
 			response.Error{Code: http.StatusBadRequest, Message: "amount must be greater than 0"},

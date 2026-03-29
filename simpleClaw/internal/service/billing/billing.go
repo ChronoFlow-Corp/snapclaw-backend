@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"shared/pkg/observability"
-	"strconv"
 	"strings"
 	"time"
+
+	"simpleClaw/internal/service/pkg/minor"
 
 	"github.com/google/uuid"
 
@@ -36,7 +37,7 @@ type SubscriptionSummary struct {
 }
 
 type BillingSummary struct {
-	BalanceMinor        int64
+	BalanceMinor        string
 	CurrentSubscription *SubscriptionSummary
 	NextChargeAt        *time.Time
 }
@@ -308,10 +309,15 @@ func (s *Service) Subscribe(
 		)
 	}
 
+	val, err := minor.MinorToString(plan.BillingAmountMinor, plan.Currency)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", op, err)
+	}
+
 	payment, err := s.payInfra.CreatePayment(
 		ctx,
 		entities.Amount{
-			Value:    strconv.FormatInt(plan.BillingAmountMinor, 10),
+			Value:    val,
 			Currency: plan.Currency,
 		},
 	)
@@ -589,7 +595,7 @@ func (s *Service) ApplySuccessfulTopUp(ctx context.Context, payment entities.Pay
 		return nil
 	}
 
-	amountMinor, err := parseMinorAmount(payment.Amount.Value)
+	amountMinor, err := minor.StringToMinor(payment.Amount.Value, payment.Amount.Currency)
 	if err != nil {
 		return fmt.Errorf(
 			"%s: parse top-up amount payment=%s value=%q: %w",
@@ -836,7 +842,7 @@ func (s *Service) TopUp(ctx context.Context, cm commands.TopUp) (confirmURL stri
 	defer func() { finish(err) }()
 
 	p, err := s.payInfra.CreatePayment(ctx, entities.Amount{
-		Value:    strconv.FormatInt(cm.Amount, 10),
+		Value:    cm.Amount,
 		Currency: entities.RUB,
 	})
 	if err != nil {
@@ -868,79 +874,6 @@ func (s *Service) TopUp(ctx context.Context, cm commands.TopUp) (confirmURL stri
 	}
 
 	return *p.Confirmation.ConfirmationURL, nil
-}
-
-func (s *Service) PaymentEventHandler(ctx context.Context, e commands.PaymentEvent) (err error) {
-	const op = "service.billing.PaymentEventHandler"
-
-	ctx, _, finish := observability.StartOperation(
-		ctx,
-		slog.Default(),
-		s.metrics,
-		"service.billing",
-		"payment.event_handler",
-		"billing_payment",
-	)
-
-	defer func() { finish(err) }()
-
-	if e.Type != "notification" {
-		return fmt.Errorf(
-			"%s: validate payment event type %q: %w",
-			op,
-			e.Type,
-			decorateValidation(ErrPaymentEventTypeInvalid),
-		)
-	}
-
-	payment, err := s.payments.GetByID(ctx, e.Object.ID)
-	if err != nil {
-		return fmt.Errorf("%s: load payment %s: %w", op, e.Object.ID, err)
-	}
-
-	payment = applyPaymentEventSnapshot(payment, e.Object)
-
-	if payment.Status == entities.Canceled {
-		err = s.payments.Update(ctx, payment)
-		if err != nil {
-			return fmt.Errorf("%s: update canceled payment %s: %w", op, payment.ID, err)
-		}
-
-		return nil
-	}
-
-	if !e.Object.Paid {
-		return fmt.Errorf(
-			"%s: validate paid payment %s: %w",
-			op,
-			payment.ID,
-			decorateValidation(ErrPaymentNotPaid),
-		)
-	}
-
-	switch {
-	case payment.SubscriptionID == nil && payment.Status == entities.WaitingForCapture || payment.Status == entities.Succeeded:
-		err = s.ApplySuccessfulTopUp(ctx, payment)
-		if err != nil {
-			return fmt.Errorf("%s: apply successful top-up payment %s: %w", op, payment.ID, err)
-		}
-
-		return nil
-	case payment.SubscriptionID != nil && payment.Status == entities.WaitingForCapture:
-		err = s.ApplySuccessfulSubscriptionPayment(ctx, payment)
-		if err != nil {
-			return fmt.Errorf(
-				"%s: apply successful subscription payment %s: %w",
-				op,
-				payment.ID,
-				err,
-			)
-		}
-
-		return nil
-	default:
-		return fmt.Errorf("unexpected payment status: %s", payment.Status)
-	}
 }
 
 func (s *Service) HandleOpenRouterUsageWebhook(
@@ -1082,7 +1015,12 @@ func (s *Service) GetBillingSummary(
 		return BillingSummary{}, fmt.Errorf("%s: load user %s: %w", op, userID, err)
 	}
 
-	summary = BillingSummary{BalanceMinor: user.BalanceMinor}
+	b, err := minor.MinorToString(user.BalanceMinor, entities.RUB)
+	if err != nil {
+		return BillingSummary{}, fmt.Errorf("%s: parse minor %s: %w", op, userID, err)
+	}
+
+	summary = BillingSummary{BalanceMinor: b}
 
 	if s.subscriptions != nil && s.plans != nil {
 		subscription, err := s.subscriptions.GetActiveByUserID(ctx, userID)
