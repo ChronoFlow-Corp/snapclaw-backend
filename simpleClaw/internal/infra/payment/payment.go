@@ -82,6 +82,7 @@ func (y *YooKassa) Capture(
 	}
 	pNew.UserID = payment.UserID
 	pNew.SubscriptionID = payment.SubscriptionID
+	pNew.Purpose = payment.Purpose
 
 	return pNew, nil
 }
