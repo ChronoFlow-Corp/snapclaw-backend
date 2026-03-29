@@ -1,31 +1,36 @@
 version: '3'
 
-dotenv:
-  - .env
-
 tasks:
   up:
-    desc: Start docker compose stack
-    cmd: docker compose --env-file .env up -d
+    desc: Start local dev stack
+    cmd: docker compose up -d
+
+  up-obs:
+    desc: Start local dev stack with observability
+    cmd: docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
 
   down:
     desc: Stop docker compose stack
-    cmd: docker compose --env-file .env down
+    cmd: docker compose -f docker-compose.yml -f docker-compose.observability.yml down
 
   restart:
-    desc: Restart docker compose stack
+    desc: Restart local dev stack
     cmds:
       - task: down
       - task: up
 
   logs:
     desc: Follow docker compose logs
-    cmd: docker compose --env-file .env logs -f
+    cmd: docker compose logs -f
+
+  logs-obs:
+    desc: Follow docker compose logs including observability
+    cmd: docker compose -f docker-compose.yml -f docker-compose.observability.yml logs -f
 
   ps:
     desc: Show docker compose services
-    cmd: docker compose --env-file .env ps
+    cmd: docker compose -f docker-compose.yml -f docker-compose.observability.yml ps
 
   build:
-    desc: Build docker compose service and start its.
-    cmd: docker compose --env-file .env up --build -d
+    desc: Build local dev stack and start it
+    cmd: docker compose up --build -d

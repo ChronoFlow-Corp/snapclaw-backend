@@ -21,6 +21,7 @@ import (
 	"simpleClaw/internal/api/rest"
 	"simpleClaw/internal/api/rest/controllers"
 	appmw "simpleClaw/internal/api/rest/middleware"
+	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/hosting"
 	"simpleClaw/internal/infra/openrouter"
 	"simpleClaw/internal/infra/sql"
@@ -36,11 +37,31 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/google/uuid"
 	"github.com/markbates/goth"
 	"github.com/markbates/goth/providers/google"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+type userAPIKeyManager interface {
+	Create(
+		ctx context.Context,
+		userID uuid.UUID,
+		label string,
+		monthlyBudgetUSD float64,
+	) (entities.OpenRouterKey, error)
+}
+
+type clawAPIKeyManager interface {
+	Create(
+		ctx context.Context,
+		userID uuid.UUID,
+		label string,
+		monthlyBudgetUSD float64,
+	) (entities.OpenRouterKey, error)
+	ResolveModel(ctx context.Context, model string) (string, error)
+}
 
 func main() {
 	cfg := config.New()
@@ -144,15 +165,27 @@ func main() {
 		cfg.Auth.Jwt.RefreshExpire,
 	)
 
-	orManager, err := openrouter.NewApiKeyManager(openrouter.Options{
-		BaseURL:          cfg.OpenRouter.BaseURL,
-		APIToken:         cfg.OpenRouter.APIToken,
-		Timeout:          cfg.OpenRouter.Timeout,
-		HTTPClient:       observability.NewHTTPClient(cfg.OpenRouter.Timeout),
-		OperationMetrics: operationMetrics,
-	})
-	if err != nil {
-		panic(err)
+	var (
+		userKeys userAPIKeyManager
+		clawKeys clawAPIKeyManager
+	)
+
+	if strings.TrimSpace(cfg.OpenRouter.APIToken) != "" {
+		orManager, err := openrouter.NewApiKeyManager(openrouter.Options{
+			BaseURL:          cfg.OpenRouter.BaseURL,
+			APIToken:         cfg.OpenRouter.APIToken,
+			Timeout:          cfg.OpenRouter.Timeout,
+			HTTPClient:       observability.NewHTTPClient(cfg.OpenRouter.Timeout),
+			OperationMetrics: operationMetrics,
+		})
+		if err != nil {
+			panic(err)
+		}
+
+		userKeys = orManager
+		clawKeys = orManager
+	} else {
+		logger.Warn("openrouter is disabled; google oauth works, claw creation requires OPENROUTER_API_TOKEN")
 	}
 
 	hostingManager := hosting.NewManager(operationMetrics)
@@ -168,7 +201,7 @@ func main() {
 		userStorage,
 		channelsStorage,
 		paymentMethodStorage,
-		orManager,
+		userKeys,
 		cfg.Auth.Admins,
 		operationMetrics,
 	)
@@ -193,7 +226,7 @@ func main() {
 		userStorage,
 		serversStorage,
 		hostingManager,
-		orManager,
+		clawKeys,
 		cfg.Hosting.ContainerManager.BackupPath,
 		claw.GmailWatchConfig{
 			Topic:  cfg.Connect.Gmail.Watch.Topic,

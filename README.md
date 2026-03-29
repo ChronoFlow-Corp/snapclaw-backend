@@ -1,65 +1,39 @@
 # snapclaw-backend
 
-## Deploy (Docker Compose)
+## Local Dev With Docker Compose
 
-### Prerequisites
+### Minimal setup
 
-- Docker and Docker Compose installed.
-- A host directory for OpenClaw configs and SimpleClaw backups.
+1. Copy `.env.example` to `.env`.
+2. Fill in `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+3. Register these Google OAuth redirect URLs:
+   - `http://localhost:1337/auth/connect/google/callback`
+   - `http://localhost:1337/api/me/connect/gmail/callback`
+4. Run `task up`.
 
-### Prepare host directories (example paths)
+### What starts by default
 
-Create directories that will be bind-mounted so containerManager can mount configs into OpenClaw containers and simpleClaw can write archives. Example:
+- `simpleclaw` API on `http://localhost:1337`
+- `containermanager` API on `http://localhost:8080`
+- `simpleclaw-db` on `localhost:5433`
+- `containermanager-db` on `localhost:5434`
 
-```bash
-mkdir -p /opt/snapclaw/claw-configs
-mkdir -p /opt/snapclaw/simpleclaw-backups
-chmod -R 775 /opt/snapclaw/claw-configs
-chmod -R 775 /opt/snapclaw/simpleclaw-backups
-```
+### Dev defaults
 
-### Update configs
+- `simpleClaw` derives local callback URLs from `DEV_HOST` and defaults it to `localhost`.
+- JWT RSA keys are generated automatically on first start into [`deploy/simpleClaw/keys`](/Users/kodokuus/work/go/snapclaw-backend/deploy/simpleClaw/keys).
+- OpenRouter is optional for local boot. Google OAuth works without it, but creating a `claw` still requires `OPENROUTER_API_TOKEN`.
 
-Update these files:
+### Observability
 
-- `deploy/containerManager/config.yaml`
-  - `image.base_path` must be an absolute host path, for example:
-    - `/opt/snapclaw/claw-configs`
-- `deploy/simpleClaw/config.yaml`
-  - `hosting.container_manager.backup_path` should point to the container path:
-    - `/data/simpleclaw/backups`
-  - Replace all `REPLACE_ME` placeholders (Google OAuth, JWT secrets, OpenRouter key).
+- Basic local dev does not start Grafana, Prometheus, Loki, Tempo, or Alloy.
+- Start the full stack with `task up-obs`.
 
-### Update docker-compose mounts
+### Useful commands
 
-Ensure the compose file mounts host paths (example):
-
-```
-containermanager:
-  volumes:
-    - /opt/snapclaw/claw-configs:/opt/snapclaw/claw-configs
-
-simpleclaw:
-  volumes:
-    - /opt/snapclaw/simpleclaw-backups:/data/simpleclaw/backups
-```
-
-### Run
-
-```bash
-docker compose up --build
-```
-
-### Access
-
-- Grafana: http://localhost:3000 (admin/admin)
-- Loki: http://localhost:3100
-- Prometheus: http://localhost:9090
-- Tempo: http://localhost:3200
-- Alloy UI: http://localhost:12345
-- simpleClaw API: http://localhost:1337
-- containerManager API: http://localhost:8080
-
-### Troubleshooting
-
-If stop/delete fails with `broken pipe` and `Permission denied` inside simpleClaw, ensure the backups directory is writable by the container user or run simpleClaw as root.
+- `task up`
+- `task up-obs`
+- `task down`
+- `task logs`
+- `task logs-obs`
+- `task ps`

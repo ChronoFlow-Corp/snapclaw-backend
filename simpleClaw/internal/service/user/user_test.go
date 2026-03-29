@@ -87,6 +87,41 @@ func TestSignInUpdatesRoleForExistingConfiguredAdmin(t *testing.T) {
 	}
 }
 
+func TestSignInWithoutAPIKeyManagerCreatesUserWithoutOpenRouterKey(t *testing.T) {
+	t.Parallel()
+
+	storage := newFakeUserStorage()
+	service := NewUser(
+		newTestJWT(t),
+		storage,
+		fakeChannelStorage{},
+		newFakePaymentMethodStorage(),
+		nil,
+		nil,
+	)
+
+	_, _, err := service.SignIn(context.Background(), commands.SignIn{
+		Name:  "User",
+		Email: "user@example.com",
+	})
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+
+	user, err := storage.GetByEmail(context.Background(), "user@example.com")
+	if err != nil {
+		t.Fatalf("get stored user: %v", err)
+	}
+
+	if user.OpenRouterApiKey != "" {
+		t.Fatalf("openrouter api key = %q, want empty", user.OpenRouterApiKey)
+	}
+
+	if user.OpenRouterKeyID != "" {
+		t.Fatalf("openrouter key id = %q, want empty", user.OpenRouterKeyID)
+	}
+}
+
 func TestPaymentMethodEntityExists(t *testing.T) {
 	t.Parallel()
 

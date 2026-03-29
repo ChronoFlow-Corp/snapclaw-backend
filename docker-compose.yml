@@ -1,73 +1,6 @@
 name: snapclaw
 
 services:
-  prometheus:
-    image: prom/prometheus:v2.54.1
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --web.enable-remote-write-receiver
-    volumes:
-      - ${PROMETHEUS_CONFIG_VOLUME}
-      - prometheus_data:/prometheus
-    ports:
-      - "127.0.0.1:9090:9090"
-
-  tempo:
-    image: grafana/tempo:2.6.1
-    command: ["-config.file=/etc/tempo/config.yaml"]
-    volumes:
-      - ${TEMPO_CONFIG_VOLUME}
-      - tempo_data:/var/tempo
-    ports:
-      - "127.0.0.1:3200:3200"
-      - "127.0.0.1:4318:4318"
-
-  loki:
-    image: grafana/loki:2.9.4
-    command: -config.file=/etc/loki/config.yaml
-    volumes:
-      - ${LOKI_CONFIG_VOLUME}
-      - loki_data:/loki
-    ports:
-      - "127.0.0.1:3100:3100"
-
-  grafana:
-    image: grafana/grafana:10.4.3
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
-      GF_USERS_ALLOW_SIGN_UP: ${GRAFANA_ALLOW_SIGN_UP}
-      GF_SERVER_ROOT_URL: ${GRAFANA_SERVER_ROOT_URL}
-      GF_SERVER_SERVE_FROM_SUB_PATH: ${GRAFANA_SERVER_SERVE_FROM_SUB_PATH}
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ${GRAFANA_PROVISIONING_VOLUME}
-    ports:
-      - "3001:3000"
-    depends_on:
-      - loki
-      - prometheus
-      - tempo
-
-  alloy:
-    image: grafana/alloy:latest
-    command:
-      - run
-      - --server.http.listen-addr=0.0.0.0:12345
-      - --storage.path=/var/lib/alloy/data
-      - /etc/alloy/config.alloy
-    volumes:
-      - ${ALLOY_CONFIG_VOLUME}
-      - ${DOCKER_SOCKET_VOLUME}
-      - alloy_data:/var/lib/alloy/data
-    ports:
-      - "127.0.0.1:12345:12345"
-    depends_on:
-      - loki
-      - prometheus
-      - tempo
-
   simpleclaw-db:
     image: postgres:16-alpine
     environment:
@@ -90,6 +23,24 @@ services:
     ports:
       - "127.0.0.1:5434:5432"
 
+  containermanager:
+    build:
+      context: .
+      dockerfile: containerManager/Dockerfile
+    environment:
+      CONFIG_PATH: /config/dev-config.yaml
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    user: "0"
+    volumes:
+      - ./deploy/containerManager/dev-config.yaml:/config/dev-config.yaml:ro
+      - ./:/workspace:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - claw_configs:/claw-configs
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - containermanager-db
+
   simpleclaw:
     user: "0"
     build:
@@ -97,10 +48,14 @@ services:
       dockerfile: simpleClaw/Dockerfile
     environment:
       CONFIG_PATH: /config/dev-config.yaml
-      LOG_LEVEL: info
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DEV_HOST: ${DEV_HOST:-localhost}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      OPENROUTER_API_TOKEN: ${OPENROUTER_API_TOKEN:-}
     volumes:
-      - ${SIMPLECLAW_CONFIG_VOLUME}
-      - ${SIMPLECLAW_KEYS_VOLUME}
+      - ./deploy/simpleClaw/dev-config.yaml:/config/dev-config.yaml:ro
+      - ./deploy/simpleClaw/keys:/config/keys
       - simpleclaw_backups:/data/simpleclaw/backups
     ports:
       - "127.0.0.1:1337:1337"
@@ -108,30 +63,7 @@ services:
       - simpleclaw-db
       - containermanager
 
-  containermanager:
-    build:
-      context: .
-      dockerfile: containerManager/Dockerfile
-    environment:
-      CONFIG_PATH: /config/dev-config.yaml
-      LOG_LEVEL: info
-    user: "0"
-    volumes:
-      - ${CONTAINERMANAGER_CONFIG_VOLUME}
-      - ${WORKSPACE_VOLUME}
-      - ${DOCKER_SOCKET_VOLUME}
-      - ${CLAW_CONFIGS_VOLUME}
-    ports:
-      - "8080:8080"
-    depends_on:
-      - containermanager-db
-
 volumes:
-  grafana_data:
-  alloy_data:
-  loki_data:
-  prometheus_data:
-  tempo_data:
   simpleclaw_db:
   containermanager_db:
   claw_configs:

@@ -1,37 +1,16 @@
+environment: development
+
 postgres:
   url: "postgresql://containermanager:containermanager@containermanager-db:5432/containermanager?sslmode=disable"
 
 http:
   addr: ":8080"
-  read_timeout: 5
-  write_timeout: 10
   api_key: testKey
-
-migrations:
-  auto: true
-  path: "/app/migrations"
 
 image:
   base_path: "/claw-configs"
   build_context:
     - "/workspace/containerManager/images/openclaw"
-  credentials_path: "/workspace/secrets/google/credentials.json"
 
 gog:
-  keyring_backend: "file"
   keyring_password: "dev-only-change-me"
-
-pubsub:
-  forward_timeout: "5s"
-  workers: 32
-  dedup_ttl: "10m"
-
-observability:
-  metrics:
-    enabled: true
-    path: "/metrics"
-  tracing:
-    enabled: true
-    endpoint: "http://alloy:4318"
-    insecure: true
-    sample_ratio: 1

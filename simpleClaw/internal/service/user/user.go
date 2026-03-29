@@ -82,13 +82,15 @@ func (s *Service) SignIn(
 	if errors.Is(err, sql.ErrNotFound) {
 		u = entities.NewUser(cm.Name, cm.NickName, cm.AvatarURL, email, role)
 
-		key, keyErr := s.keys.Create(ctx, u.ID, u.Name, 0)
-		if keyErr != nil {
-			return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, keyErr)
-		}
+		if s.keys != nil {
+			key, keyErr := s.keys.Create(ctx, u.ID, u.Name, 0)
+			if keyErr != nil {
+				return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, keyErr)
+			}
 
-		u.OpenRouterApiKey = key.Secret
-		u.OpenRouterKeyID = key.ID
+			u.OpenRouterApiKey = key.Secret
+			u.OpenRouterKeyID = key.ID
+		}
 
 		err = s.uSt.Create(ctx, u)
 		if err != nil {
