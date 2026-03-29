@@ -9,7 +9,7 @@ database:
 
 auth:
   google:
-    callback_url: "http://localhost:1337/api/auth/connect/google/callback"
+    callback_url: "http://localhost:1337/auth/connect/google/callback"
     client_id: "REPLACE_ME"
     frontend_url: "localhost:3000"
     client_secret: "REPLACE_ME"
