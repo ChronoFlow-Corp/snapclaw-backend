@@ -114,6 +114,106 @@ auth:
 	}
 }
 
+func TestLoadProductionConfigKeepsFileOpenRouterTokenWhenEnvIsEmpty(t *testing.T) {
+	t.Setenv("OPENROUTER_API_TOKEN", "")
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "prod-config.yaml")
+
+	writeTestConfig(t, configPath, `
+environment: production
+database:
+  dsn: "postgresql://simpleclaw:simpleclaw@simpleclaw-db:5432/simpleclaw?sslmode=disable"
+auth:
+  google:
+    client_id: "google-client-id"
+    client_secret: "google-client-secret"
+    callback_url: "https://simpleclaw.example/auth/connect/google/callback"
+    frontend_url: "https://simpleclaw.example"
+  jwt:
+    refresh_secret: "refresh-secret"
+    access_secret_private: "`+filepath.ToSlash(filepath.Join(dir, "keys", "jwtRS256.key"))+`"
+    access_secret_public: "`+filepath.ToSlash(filepath.Join(dir, "keys", "jwtRS256.key.pub"))+`"
+openrouter:
+  api_token: "file-openrouter-token"
+payment:
+  yookassa:
+    store_id: "store-id"
+    secret_key: "secret-key"
+`)
+
+	if err := os.MkdirAll(filepath.Join(dir, "keys"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll() error = %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "keys", "jwtRS256.key"), []byte("test-private"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() private key error = %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "keys", "jwtRS256.key.pub"), []byte("test-public"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() public key error = %v", err)
+	}
+
+	cfg, err := load(configPath)
+	if err != nil {
+		t.Fatalf("load() error = %v", err)
+	}
+
+	if cfg.OpenRouter.APIToken != "file-openrouter-token" {
+		t.Fatalf("openrouter api token = %q", cfg.OpenRouter.APIToken)
+	}
+}
+
+func TestLoadProductionConfigUsesOpenRouterTokenFromEnv(t *testing.T) {
+	t.Setenv("OPENROUTER_API_TOKEN", "env-openrouter-token")
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "prod-config.yaml")
+
+	writeTestConfig(t, configPath, `
+environment: production
+database:
+  dsn: "postgresql://simpleclaw:simpleclaw@simpleclaw-db:5432/simpleclaw?sslmode=disable"
+auth:
+  google:
+    client_id: "google-client-id"
+    client_secret: "google-client-secret"
+    callback_url: "https://simpleclaw.example/auth/connect/google/callback"
+    frontend_url: "https://simpleclaw.example"
+  jwt:
+    refresh_secret: "refresh-secret"
+    access_secret_private: "`+filepath.ToSlash(filepath.Join(dir, "keys", "jwtRS256.key"))+`"
+    access_secret_public: "`+filepath.ToSlash(filepath.Join(dir, "keys", "jwtRS256.key.pub"))+`"
+openrouter:
+  api_token: "file-openrouter-token"
+payment:
+  yookassa:
+    store_id: "store-id"
+    secret_key: "secret-key"
+`)
+
+	if err := os.MkdirAll(filepath.Join(dir, "keys"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll() error = %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "keys", "jwtRS256.key"), []byte("test-private"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() private key error = %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "keys", "jwtRS256.key.pub"), []byte("test-public"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() public key error = %v", err)
+	}
+
+	cfg, err := load(configPath)
+	if err != nil {
+		t.Fatalf("load() error = %v", err)
+	}
+
+	if cfg.OpenRouter.APIToken != "env-openrouter-token" {
+		t.Fatalf("openrouter api token = %q", cfg.OpenRouter.APIToken)
+	}
+}
+
 func TestLoadProductionConfigStillRequiresExplicitSecrets(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "prod-config.yaml")

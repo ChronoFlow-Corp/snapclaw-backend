@@ -9,10 +9,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/ilyakaznacheev/cleanenv"
+	"github.com/spf13/viper"
 )
 
 const (
@@ -33,118 +34,126 @@ const (
 	defaultJWTPublicName  = "jwtRS256.key.pub"
 	defaultGooglePath     = "/auth/connect/google/callback"
 	defaultGmailPath      = "/api/me/connect/gmail/callback"
+	defaultJWTAccessTTL   = 24 * time.Hour
+	defaultJWTRefreshTTL  = 168 * time.Hour
+	defaultORTTimeout     = 15 * time.Second
+	defaultCMTimeout      = 15 * time.Second
+	defaultProxyTimeout   = 5 * time.Second
+	defaultProxyRetries   = 2
+	defaultProxyBackoff   = 250 * time.Millisecond
+	defaultTracingRatio   = 1.0
 )
 
 type Config struct {
-	Environment   string        `yaml:"environment" env:"ENVIRONMENT" env-default:"development"`
-	Http          http          `yaml:"http"`
-	Database      database      `yaml:"database"`
-	Auth          auth          `yaml:"auth"`
-	OpenRouter    openrouter    `yaml:"openrouter"`
-	Hosting       hosting       `yaml:"hosting"`
-	Connect       connect       `yaml:"connect"`
-	Proxy         proxy         `yaml:"proxy"`
-	Observability observability `yaml:"observability"`
-	Payment       payment       `yaml:"payment"`
+	Environment   string        `mapstructure:"environment"`
+	Http          http          `mapstructure:"http"`
+	Database      database      `mapstructure:"database"`
+	Auth          auth          `mapstructure:"auth"`
+	OpenRouter    openrouter    `mapstructure:"openrouter"`
+	Hosting       hosting       `mapstructure:"hosting"`
+	Connect       connect       `mapstructure:"connect"`
+	Proxy         proxy         `mapstructure:"proxy"`
+	Observability observability `mapstructure:"observability"`
+	Payment       payment       `mapstructure:"payment"`
 }
 
 type http struct {
-	Addr    string   `env:"HTTP_ADDR"    yaml:"addr"`
-	Origins []string `env:"HTTP_ORIGINS" yaml:"origins" env-separator:","`
+	Addr    string   `mapstructure:"addr"`
+	Origins []string `mapstructure:"origins"`
 }
 
 type database struct {
-	Dsn string `env:"DATABASE_DSN" yaml:"dsn"`
+	Dsn string `mapstructure:"dsn"`
 }
 
 type auth struct {
-	Google google   `yaml:"google"`
-	Jwt    Jwt      `yaml:"jwt"`
-	Admins []string `yaml:"admins" env:"AUTH_ADMINS" env-separator:","`
+	Google google   `mapstructure:"google"`
+	Jwt    Jwt      `mapstructure:"jwt"`
+	Admins []string `mapstructure:"admins"`
 }
 
 type google struct {
-	ClientID     string `env:"GOOGLE_CLIENT_ID"     yaml:"client_id"`
-	ClientSecret string `env:"GOOGLE_CLIENT_SECRET" yaml:"client_secret"`
-	CallbackURL  string `env:"GOOGLE_CALLBACK_URL"  yaml:"callback_url"`
-	FrontendURL  string `env:"FRONTEND_URL"         yaml:"frontend_url"`
+	ClientID     string `mapstructure:"client_id"`
+	ClientSecret string `mapstructure:"client_secret"`
+	CallbackURL  string `mapstructure:"callback_url"`
+	FrontendURL  string `mapstructure:"frontend_url"`
 }
 
 type Jwt struct {
-	RefreshSecret       string        `env:"AUTH_JWT_REFRESH_SECRET"        yaml:"refresh_secret"`
-	AccessSecretPublic  string        `env:"AUTH_JWT_ACCESS_SECRET_PUBLIC"  yaml:"access_secret_public"`
-	AccessSecretPrivate string        `env:"AUTH_JWT_ACCESS_SECRET_PRIVATE" yaml:"access_secret_private"`
-	AccessExpire        time.Duration `env:"AUTH_JWT_ACCESS_EXPIRE"         yaml:"access_expire"  env-default:"24h"`
-	RefreshExpire       time.Duration `env:"AUTH_JWT_REFRESH_EXPIRE"        yaml:"refresh_expire" env-default:"168h"`
+	RefreshSecret       string        `mapstructure:"refresh_secret"`
+	AccessSecretPublic  string        `mapstructure:"access_secret_public"`
+	AccessSecretPrivate string        `mapstructure:"access_secret_private"`
+	AccessExpire        time.Duration `mapstructure:"access_expire"`
+	RefreshExpire       time.Duration `mapstructure:"refresh_expire"`
 }
 
 type openrouter struct {
-	BaseURL  string        `env:"OPENROUTER_BASE_URL"  yaml:"base_url"`
-	APIToken string        `env:"OPENROUTER_API_TOKEN" yaml:"api_token"`
-	Timeout  time.Duration `env:"OPENROUTER_TIMEOUT"   yaml:"timeout" env-default:"15s"`
+	BaseURL  string        `mapstructure:"base_url"`
+	APIToken string        `mapstructure:"api_token"`
+	Timeout  time.Duration `mapstructure:"timeout"`
 }
 
 type hosting struct {
-	ContainerManager containerManager `yaml:"container_manager"`
+	ContainerManager containerManager `mapstructure:"container_manager"`
 }
 
 type containerManager struct {
-	Timeout    time.Duration `env:"CONTAINER_MANAGER_TIMEOUT"     yaml:"timeout" env-default:"15s"`
-	BackupPath string        `env:"CONTAINER_MANAGER_BACKUP_PATH" yaml:"backup_path" env-default:"/data/simpleclaw/backups"`
+	Timeout    time.Duration `mapstructure:"timeout"`
+	BackupPath string        `mapstructure:"backup_path"`
 }
 
 type connect struct {
-	Gmail gmail `yaml:"gmail"`
+	Gmail gmail `mapstructure:"gmail"`
 }
 
 type proxy struct {
-	Token          string        `env:"PROXY_TOKEN"           yaml:"token"`
-	ForwardTimeout time.Duration `env:"PROXY_FORWARD_TIMEOUT" yaml:"forward_timeout" env-default:"5s"`
-	RetryCount     int           `env:"PROXY_RETRY_COUNT"     yaml:"retry_count" env-default:"2"`
-	RetryBackoff   time.Duration `env:"PROXY_RETRY_BACKOFF"   yaml:"retry_backoff" env-default:"250ms"`
+	Token          string        `mapstructure:"token"`
+	ForwardTimeout time.Duration `mapstructure:"forward_timeout"`
+	RetryCount     int           `mapstructure:"retry_count"`
+	RetryBackoff   time.Duration `mapstructure:"retry_backoff"`
 }
 
 type gmail struct {
-	ClientID     string `env:"GMAIL_CLIENT_ID"     yaml:"client_id"`
-	ClientSecret string `env:"GMAIL_CLIENT_SECRET" yaml:"client_secret"`
-	CallbackURL  string `env:"GMAIL_CALLBACK_URL"  yaml:"callback_url"`
-	Watch        watch  `yaml:"watch"`
+	ClientID     string `mapstructure:"client_id"`
+	ClientSecret string `mapstructure:"client_secret"`
+	CallbackURL  string `mapstructure:"callback_url"`
+	Watch        watch  `mapstructure:"watch"`
 }
 
 type watch struct {
-	Topic  string   `env:"CONNECT_GMAIL_WATCH_TOPIC"  yaml:"topic"`
-	Labels []string `env:"CONNECT_GMAIL_WATCH_LABELS" yaml:"labels" env-default:"INBOX" env-separator:","`
+	Topic  string   `mapstructure:"topic"`
+	Labels []string `mapstructure:"labels"`
 }
 
 type observability struct {
-	Metrics metrics `yaml:"metrics"`
-	Tracing tracing `yaml:"tracing"`
+	Metrics metrics `mapstructure:"metrics"`
+	Tracing tracing `mapstructure:"tracing"`
 }
 
 type metrics struct {
-	Enabled bool   `env:"OBS_METRICS_ENABLED" env-default:"true" yaml:"enabled"`
-	Path    string `env:"OBS_METRICS_PATH"    env-default:"/metrics" yaml:"path"`
+	Enabled bool   `mapstructure:"enabled"`
+	Path    string `mapstructure:"path"`
 }
 
 type tracing struct {
-	Enabled     bool    `env:"OBS_TRACING_ENABLED"      env-default:"false" yaml:"enabled"`
-	Endpoint    string  `env:"OBS_TRACING_ENDPOINT"     yaml:"endpoint"`
-	Insecure    bool    `env:"OBS_TRACING_INSECURE"     env-default:"true" yaml:"insecure"`
-	SampleRatio float64 `env:"OBS_TRACING_SAMPLE_RATIO" env-default:"1" yaml:"sample_ratio"`
+	Enabled     bool    `mapstructure:"enabled"`
+	Endpoint    string  `mapstructure:"endpoint"`
+	Insecure    bool    `mapstructure:"insecure"`
+	SampleRatio float64 `mapstructure:"sample_ratio"`
 }
 
 type payment struct {
-	Yookassa   yookassa          `yaml:"yookassa"`
-	OpenRouter openrouterPayment `yaml:"openrouter"`
+	Yookassa   yookassa          `mapstructure:"yookassa"`
+	OpenRouter openrouterPayment `mapstructure:"openrouter"`
 }
 
 type yookassa struct {
-	StoreID   string `env:"YOOKASSA_STORE_ID"   yaml:"store_id"`
-	SecretKey string `env:"YOOKASSA_SECRET_KEY" yaml:"secret_key"`
+	StoreID   string `mapstructure:"store_id"`
+	SecretKey string `mapstructure:"secret_key"`
 }
 
 type openrouterPayment struct {
-	WebhookSecret string `env:"OPENROUTER_WEBHOOK_SECRET" yaml:"webhook_secret"`
+	WebhookSecret string `mapstructure:"webhook_secret"`
 }
 
 func New() Config {
@@ -164,7 +173,17 @@ func New() Config {
 func load(path string) (Config, error) {
 	cfg := Config{}
 
-	if err := cleanenv.ReadConfig(path, &cfg); err != nil {
+	v := newViper(path)
+
+	if err := v.ReadInConfig(); err != nil {
+		return Config{}, fmt.Errorf("read config: %w", err)
+	}
+
+	if err := v.Unmarshal(&cfg); err != nil {
+		return Config{}, fmt.Errorf("unmarshal config: %w", err)
+	}
+
+	if err := cfg.applyEnvOverrides(); err != nil {
 		return Config{}, err
 	}
 
@@ -190,7 +209,114 @@ func load(path string) (Config, error) {
 	return cfg, nil
 }
 
+func newViper(path string) *viper.Viper {
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.SetConfigType("yaml")
+	v.SetDefault("environment", EnvDevelopment)
+	v.SetDefault("auth.jwt.access_expire", defaultJWTAccessTTL)
+	v.SetDefault("auth.jwt.refresh_expire", defaultJWTRefreshTTL)
+	v.SetDefault("openrouter.timeout", defaultORTTimeout)
+	v.SetDefault("hosting.container_manager.timeout", defaultCMTimeout)
+	v.SetDefault("proxy.forward_timeout", defaultProxyTimeout)
+	v.SetDefault("proxy.retry_count", defaultProxyRetries)
+	v.SetDefault("proxy.retry_backoff", defaultProxyBackoff)
+	v.SetDefault("connect.gmail.watch.labels", []string{"INBOX"})
+	v.SetDefault("observability.metrics.enabled", true)
+	v.SetDefault("observability.metrics.path", "/metrics")
+	v.SetDefault("observability.tracing.enabled", false)
+	v.SetDefault("observability.tracing.insecure", true)
+	v.SetDefault("observability.tracing.sample_ratio", defaultTracingRatio)
+
+	return v
+}
+
+func (c *Config) applyEnvOverrides() error {
+	applyStringEnv(&c.Environment, "ENVIRONMENT")
+	applyStringEnv(&c.Http.Addr, "HTTP_ADDR")
+	applyCSVEnv(&c.Http.Origins, "HTTP_ORIGINS")
+	applyStringEnv(&c.Database.Dsn, "DATABASE_DSN")
+	applyCSVEnv(&c.Auth.Admins, "AUTH_ADMINS")
+	applyStringEnv(&c.Auth.Google.ClientID, "GOOGLE_CLIENT_ID")
+	applyStringEnv(&c.Auth.Google.ClientSecret, "GOOGLE_CLIENT_SECRET")
+	applyStringEnv(&c.Auth.Google.CallbackURL, "GOOGLE_CALLBACK_URL")
+	applyStringEnv(&c.Auth.Google.FrontendURL, "FRONTEND_URL")
+	applyStringEnv(&c.Auth.Jwt.RefreshSecret, "AUTH_JWT_REFRESH_SECRET")
+	applyStringEnv(&c.Auth.Jwt.AccessSecretPublic, "AUTH_JWT_ACCESS_SECRET_PUBLIC")
+	applyStringEnv(&c.Auth.Jwt.AccessSecretPrivate, "AUTH_JWT_ACCESS_SECRET_PRIVATE")
+
+	if err := applyDurationEnv(&c.Auth.Jwt.AccessExpire, "AUTH_JWT_ACCESS_EXPIRE"); err != nil {
+		return err
+	}
+
+	if err := applyDurationEnv(&c.Auth.Jwt.RefreshExpire, "AUTH_JWT_REFRESH_EXPIRE"); err != nil {
+		return err
+	}
+
+	applyStringEnv(&c.OpenRouter.BaseURL, "OPENROUTER_BASE_URL")
+	applyStringEnv(&c.OpenRouter.APIToken, "OPENROUTER_API_TOKEN")
+
+	if err := applyDurationEnv(&c.OpenRouter.Timeout, "OPENROUTER_TIMEOUT"); err != nil {
+		return err
+	}
+
+	if err := applyDurationEnv(&c.Hosting.ContainerManager.Timeout, "CONTAINER_MANAGER_TIMEOUT"); err != nil {
+		return err
+	}
+
+	applyStringEnv(&c.Hosting.ContainerManager.BackupPath, "CONTAINER_MANAGER_BACKUP_PATH")
+	applyStringEnv(&c.Proxy.Token, "PROXY_TOKEN")
+
+	if err := applyDurationEnv(&c.Proxy.ForwardTimeout, "PROXY_FORWARD_TIMEOUT"); err != nil {
+		return err
+	}
+
+	if err := applyIntEnv(&c.Proxy.RetryCount, "PROXY_RETRY_COUNT"); err != nil {
+		return err
+	}
+
+	if err := applyDurationEnv(&c.Proxy.RetryBackoff, "PROXY_RETRY_BACKOFF"); err != nil {
+		return err
+	}
+
+	applyStringEnv(&c.Connect.Gmail.ClientID, "GMAIL_CLIENT_ID")
+	applyStringEnv(&c.Connect.Gmail.ClientSecret, "GMAIL_CLIENT_SECRET")
+	applyStringEnv(&c.Connect.Gmail.CallbackURL, "GMAIL_CALLBACK_URL")
+	applyStringEnv(&c.Connect.Gmail.Watch.Topic, "CONNECT_GMAIL_WATCH_TOPIC")
+	applyCSVEnv(&c.Connect.Gmail.Watch.Labels, "CONNECT_GMAIL_WATCH_LABELS")
+
+	if err := applyBoolEnv(&c.Observability.Metrics.Enabled, "OBS_METRICS_ENABLED"); err != nil {
+		return err
+	}
+
+	applyStringEnv(&c.Observability.Metrics.Path, "OBS_METRICS_PATH")
+
+	if err := applyBoolEnv(&c.Observability.Tracing.Enabled, "OBS_TRACING_ENABLED"); err != nil {
+		return err
+	}
+
+	applyStringEnv(&c.Observability.Tracing.Endpoint, "OBS_TRACING_ENDPOINT")
+
+	if err := applyBoolEnv(&c.Observability.Tracing.Insecure, "OBS_TRACING_INSECURE"); err != nil {
+		return err
+	}
+
+	if err := applyFloatEnv(&c.Observability.Tracing.SampleRatio, "OBS_TRACING_SAMPLE_RATIO"); err != nil {
+		return err
+	}
+
+	applyStringEnv(&c.Payment.Yookassa.StoreID, "YOOKASSA_STORE_ID")
+	applyStringEnv(&c.Payment.Yookassa.SecretKey, "YOOKASSA_SECRET_KEY")
+	applyStringEnv(&c.Payment.OpenRouter.WebhookSecret, "OPENROUTER_WEBHOOK_SECRET")
+
+	return nil
+}
+
 func (c *Config) applyDefaults(configPath string) {
+	if strings.TrimSpace(c.Environment) == "" {
+		c.Environment = EnvDevelopment
+	}
+
 	if strings.TrimSpace(c.Http.Addr) == "" {
 		c.Http.Addr = defaultHTTPAddr
 		if c.Environment == EnvDevelopment {
@@ -241,6 +367,93 @@ func (c *Config) applyDefaults(configPath string) {
 	if strings.TrimSpace(c.Connect.Gmail.CallbackURL) == "" {
 		c.Connect.Gmail.CallbackURL = fmt.Sprintf("http://%s:%s%s", host, defaultBackendPort, defaultGmailPath)
 	}
+}
+
+func applyStringEnv(target *string, envName string) {
+	value, ok := lookupNonEmptyEnv(envName)
+	if !ok {
+		return
+	}
+
+	*target = value
+}
+
+func applyCSVEnv(target *[]string, envName string) {
+	value, ok := lookupNonEmptyEnv(envName)
+	if !ok {
+		return
+	}
+
+	*target = strings.Split(value, ",")
+}
+
+func applyDurationEnv(target *time.Duration, envName string) error {
+	value, ok := lookupNonEmptyEnv(envName)
+	if !ok {
+		return nil
+	}
+
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", envName, err)
+	}
+
+	*target = parsed
+	return nil
+}
+
+func applyIntEnv(target *int, envName string) error {
+	value, ok := lookupNonEmptyEnv(envName)
+	if !ok {
+		return nil
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", envName, err)
+	}
+
+	*target = parsed
+	return nil
+}
+
+func applyBoolEnv(target *bool, envName string) error {
+	value, ok := lookupNonEmptyEnv(envName)
+	if !ok {
+		return nil
+	}
+
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", envName, err)
+	}
+
+	*target = parsed
+	return nil
+}
+
+func applyFloatEnv(target *float64, envName string) error {
+	value, ok := lookupNonEmptyEnv(envName)
+	if !ok {
+		return nil
+	}
+
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", envName, err)
+	}
+
+	*target = parsed
+	return nil
+}
+
+func lookupNonEmptyEnv(envName string) (string, bool) {
+	value, ok := os.LookupEnv(envName)
+	if !ok || strings.TrimSpace(value) == "" {
+		return "", false
+	}
+
+	return value, true
 }
 
 func (c *Config) applyJWTDefaults(configPath string) {
