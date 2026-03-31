@@ -50,7 +50,7 @@ var (
 )
 
 const (
-	coldStartMinAvailableBytes = 2 * 1024 * 1024 * 1024
+	coldStartMinAvailableBytes = 800 * 1024 * 1024
 	warmStartMinAvailableBytes = 800 * 1024 * 1024
 )
 

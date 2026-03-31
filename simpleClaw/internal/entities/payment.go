@@ -26,7 +26,10 @@ const (
 
 type Currency = string
 
-const RUB Currency = "RUB"
+const (
+	RUB Currency = "RUB"
+	USD Currency = "USD"
+)
 
 type PaymentPurpose string
 

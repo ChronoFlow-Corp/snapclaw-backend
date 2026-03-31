@@ -9,10 +9,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/google/uuid"
 	"shared/pkg/hostingapi"
 	"shared/pkg/observability"
 	"simpleClaw/internal/entities"
+
+	"github.com/google/uuid"
 )
 
 const (

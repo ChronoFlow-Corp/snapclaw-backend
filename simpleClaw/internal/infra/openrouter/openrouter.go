@@ -2,16 +2,22 @@ package openrouter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"shared/pkg/observability"
 	"strings"
 	"time"
 
+	"simpleClaw/internal/entities"
+
 	"github.com/google/uuid"
 	gopenrouter "github.com/revrost/go-openrouter"
-	"shared/pkg/observability"
-	"simpleClaw/internal/entities"
+)
+
+const (
+	PrefixKeyName = "claw"
 )
 
 // ApiKeyManager manages OpenRouter API keys through the go-openrouter client.
@@ -74,16 +80,22 @@ func NewApiKeyManager(opts Options) (*ApiKeyManager, error) {
 func (m *ApiKeyManager) Create(
 	ctx context.Context,
 	userID uuid.UUID,
-	label string,
 	monthlyBudgetUSD float64,
 ) (entities.OpenRouterKey, error) {
-	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.openrouter", "openrouter.key.create", "claw_lifecycle")
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		m.metrics,
+		"infra.openrouter",
+		"openrouter.key.create",
+		"claw_lifecycle",
+	)
 
 	var err error
 
 	defer func() { finish(err) }()
 
-	name := makeKeyName(userID, label)
+	name := makeKeyName(userID)
 	limit := normalizeBudget(monthlyBudgetUSD)
 
 	req := gopenrouter.APIKeyCreateRequest{
@@ -97,8 +109,12 @@ func (m *ApiKeyManager) Create(
 		return entities.OpenRouterKey{}, wrapError(err)
 	}
 
+	if resp.Data.Hash == "" {
+		return entities.OpenRouterKey{}, errors.New("no key created")
+	}
+
 	return entities.OpenRouterKey{
-		ID:     fallbackKeyID(resp.Data.Hash, resp.Data.Name),
+		ID:     resp.Data.Hash,
 		Secret: resp.Key,
 	}, nil
 }
@@ -109,7 +125,14 @@ func (m *ApiKeyManager) UpdateLimits(
 	keyID string,
 	monthlyBudgetUSD float64,
 ) (err error) {
-	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.openrouter", "openrouter.key.update_limits", "claw_lifecycle")
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		m.metrics,
+		"infra.openrouter",
+		"openrouter.key.update_limits",
+		"claw_lifecycle",
+	)
 
 	defer func() { finish(err) }()
 
@@ -126,7 +149,14 @@ func (m *ApiKeyManager) UpdateLimits(
 
 // Delete removes the key from OpenRouter.
 func (m *ApiKeyManager) Delete(ctx context.Context, keyID string) (err error) {
-	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.openrouter", "openrouter.key.delete", "claw_lifecycle")
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		m.metrics,
+		"infra.openrouter",
+		"openrouter.key.delete",
+		"claw_lifecycle",
+	)
 
 	defer func() { finish(err) }()
 
@@ -139,7 +169,14 @@ func (m *ApiKeyManager) Delete(ctx context.Context, keyID string) (err error) {
 func (m *ApiKeyManager) ResolveModel(ctx context.Context, model string) (string, error) {
 	const prefix = "openrouter/"
 
-	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.openrouter", "openrouter.model.resolve", "claw_lifecycle")
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		m.metrics,
+		"infra.openrouter",
+		"openrouter.model.resolve",
+		"claw_lifecycle",
+	)
 
 	var err error
 
@@ -164,6 +201,36 @@ func (m *ApiKeyManager) ResolveModel(ctx context.Context, model string) (string,
 	return "", fmt.Errorf("%w: %s", ErrModelNotFound, model)
 }
 
+func (m *ApiKeyManager) DisableKey(ctx context.Context, keyID string) error {
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		m.metrics,
+		"infra.openrouter",
+		"openrouter.key.disable",
+		"claw_lifecycle",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
+	disabled := true
+
+	rs, err := m.client.UpdateAPIKey(ctx, keyID, gopenrouter.APIKeyUpdateRequest{
+		Disabled: &disabled,
+	})
+	if err != nil {
+		return wrapError(err)
+	}
+
+	if rs.Data.Disabled != disabled {
+		return errors.New("key is not disabled")
+	}
+
+	return nil
+}
+
 func normalizeBaseURL(base string) string {
 	base = strings.TrimRight(base, "/")
 	if !strings.HasSuffix(base, "/api/v1") {
@@ -173,12 +240,8 @@ func normalizeBaseURL(base string) string {
 	return base
 }
 
-func makeKeyName(userID uuid.UUID, label string) string {
-	if strings.TrimSpace(label) == "" {
-		label = "claw"
-	}
-
-	return fmt.Sprintf("%s-%s", label, userID.String())
+func makeKeyName(userID uuid.UUID) string {
+	return fmt.Sprintf("%s-%s", PrefixKeyName, userID.String())
 }
 
 func normalizeBudget(budget float64) float64 {
@@ -187,14 +250,6 @@ func normalizeBudget(budget float64) float64 {
 	}
 
 	return budget
-}
-
-func fallbackKeyID(hash, name string) string {
-	if hash != "" {
-		return hash
-	}
-
-	return name
 }
 
 func floatPtr(v float64) *float64 {

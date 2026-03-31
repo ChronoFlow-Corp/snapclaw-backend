@@ -29,13 +29,14 @@ services:
       dockerfile: containerManager/Dockerfile
     environment:
       CONFIG_PATH: /config/dev-config.yaml
+      CLAW_CONFIGS: ${CLAW_CONFIGS}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     user: "0"
     volumes:
       - ./deploy/containerManager/dev-config.yaml:/config/dev-config.yaml:ro
       - ./:/workspace:ro
       - /var/run/docker.sock:/var/run/docker.sock
-      - claw_configs:/claw-configs
+      - ${CLAW_CONFIGS}:${CLAW_CONFIGS}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

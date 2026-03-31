@@ -9,6 +9,8 @@ import (
 	"shared/pkg/observability"
 	"strings"
 
+	"simpleClaw/internal/infra/convert"
+
 	"simpleClaw/internal/infra/payment"
 
 	"simpleClaw/internal/infra/storages/balanceentries"
@@ -48,7 +50,6 @@ type userAPIKeyManager interface {
 	Create(
 		ctx context.Context,
 		userID uuid.UUID,
-		label string,
 		monthlyBudgetUSD float64,
 	) (entities.OpenRouterKey, error)
 }
@@ -57,7 +58,6 @@ type clawAPIKeyManager interface {
 	Create(
 		ctx context.Context,
 		userID uuid.UUID,
-		label string,
 		monthlyBudgetUSD float64,
 	) (entities.OpenRouterKey, error)
 	ResolveModel(ctx context.Context, model string) (string, error)
@@ -195,6 +195,9 @@ func main() {
 		cfg.Payment.Yookassa.SecretKey,
 		cfg.Auth.Google.FrontendURL,
 	)
+	ctx := context.Background()
+
+	conv := convert.NewAmount(ctx)
 
 	uService := user.NewUser(
 		j,
@@ -206,12 +209,14 @@ func main() {
 		operationMetrics,
 	)
 	billingSvc := billingservice.NewService(
+		cfg.Environment,
 		plansStorage,
 		subscriptionsStorage,
 		balanceEntriesStorage,
 		userStorage,
 		paymentStorage,
 		paymentManager,
+		conv,
 		operationMetrics,
 	)
 

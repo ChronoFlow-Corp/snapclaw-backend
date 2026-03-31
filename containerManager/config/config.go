@@ -34,7 +34,7 @@ type Postgres struct {
 
 type Image struct {
 	BuildCtx        []string `yaml:"build_context"`
-	BasePath        string   `yaml:"base_path"`
+	BasePath        string   `yaml:"base_path"        env:"CLAW_CONFIGS"`
 	Dockerfile      string   `yaml:"dockerfile"`
 	CredentialsPath string   `yaml:"credentials_path" env:"GOG_CREDENTIALS_PATH"`
 }

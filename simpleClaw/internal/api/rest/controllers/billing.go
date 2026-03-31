@@ -171,9 +171,11 @@ func (b *Billing) HandleOpenRouterWebhook(w http.ResponseWriter, r *http.Request
 
 func openRouterUsageEventFromSpan(span dto.OpenRouterSpan) (commands.OpenRouterUsageEvent, bool) {
 	var (
-		apiKeyName string
-		model      string
-		totalCost  string
+		apiKeyName  string
+		model       string
+		totalCost   string
+		inputTokens int
+		outputToken int
 	)
 
 	for _, attr := range span.Attributes {
@@ -184,6 +186,10 @@ func openRouterUsageEventFromSpan(span dto.OpenRouterSpan) (commands.OpenRouterU
 			model = strings.TrimSpace(attr.Value.StringValue)
 		case "gen_ai.usage.total_cost":
 			totalCost = strconv.FormatFloat(attr.Value.DoubleValue, 'f', -1, 64)
+		case "gen_ai.usage.input_tokens":
+			inputTokens = attr.Value.IntValue
+		case "gen_ai.usage.output_tokens":
+			outputToken = attr.Value.IntValue
 		}
 	}
 
@@ -199,12 +205,14 @@ func openRouterUsageEventFromSpan(span dto.OpenRouterSpan) (commands.OpenRouterU
 	}
 
 	return commands.OpenRouterUsageEvent{
-		TraceID:    strings.TrimSpace(span.TraceID),
-		SpanID:     strings.TrimSpace(span.SpanID),
-		APIKeyName: apiKeyName,
-		Model:      model,
-		TotalCost:  totalCost,
-		OccurredAt: occurredAt,
+		TraceID:     strings.TrimSpace(span.TraceID),
+		SpanID:      strings.TrimSpace(span.SpanID),
+		APIKeyName:  apiKeyName,
+		Model:       model,
+		TotalCost:   totalCost,
+		InputTokens: inputTokens,
+		OutputToken: outputToken,
+		OccurredAt:  occurredAt,
 	}, true
 }
 

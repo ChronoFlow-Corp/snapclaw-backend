@@ -409,13 +409,7 @@ func NewDefaultMainAgentConfig(model string) AgentListConfig {
 		},
 		Tools: &Tools{
 			Allow: []string{
-				"group:fs",
-				"group:sessions",
-				"group:web",
-				"group:messaging",
-				"group:automation",
-				"exec",
-				"process",
+				"group:openclaw",
 			},
 			Deny: []string{"canvas", "browser"},
 		},

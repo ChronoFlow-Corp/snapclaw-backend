@@ -83,7 +83,7 @@ func (s *Service) SignIn(
 		u = entities.NewUser(cm.Name, cm.NickName, cm.AvatarURL, email, role)
 
 		if s.keys != nil {
-			key, keyErr := s.keys.Create(ctx, u.ID, u.Name, 0)
+			key, keyErr := s.keys.Create(ctx, u.ID, 0)
 			if keyErr != nil {
 				return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, keyErr)
 			}

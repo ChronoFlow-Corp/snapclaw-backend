@@ -10,7 +10,8 @@ http:
 image:
   base_path: "/claw-configs"
   build_context:
-    - "/workspace/containerManager/images/openclaw"
+    - "/workspace/containerManager/images"
+  dockerfile: ./openclaw/Dockerfile
 
 gog:
   keyring_password: "dev-only-change-me"

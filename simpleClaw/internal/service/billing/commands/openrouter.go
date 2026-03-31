@@ -8,6 +8,8 @@ type OpenRouterUsageEvent struct {
 	APIKeyName  string
 	Model       string
 	TotalCost   string
+	InputTokens int
+	OutputToken int
 	OccurredAt  time.Time
 	Description string
 }

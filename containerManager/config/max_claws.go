@@ -13,7 +13,7 @@ import (
 
 const (
 	steadyStateBytesPerClaw = 800 * 1024 * 1024
-	defaultReserveBytes     = 2 * 1024 * 1024 * 1024
+	defaultReserveBytes     = 800 * 1024 * 1024
 )
 
 type MaxClaws struct {

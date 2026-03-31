@@ -10,11 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"shared/consts"
+	"shared/pkg/observability"
 	"strings"
 	"time"
 
-	"shared/consts"
-	"shared/pkg/observability"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/hosting"
 	"simpleClaw/internal/infra/sql"
@@ -201,7 +201,7 @@ func (s *Service) Create(
 
 		monthly := normalizeLimits(cm.ApiKeyLimit)
 
-		apiKey, err := s.keys.Create(ctx, user.ID, cm.Name, monthly)
+		apiKey, err := s.keys.Create(ctx, user.ID, monthly)
 		if err != nil {
 			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 		}
@@ -426,7 +426,7 @@ func (s *Service) Update(
 
 			monthly := normalizeLimits(cm.ApiKeyLimit)
 
-			apiKey, err := s.keys.Create(ctx, user.ID, name, monthly)
+			apiKey, err := s.keys.Create(ctx, user.ID, monthly)
 			if err != nil {
 				return entities.Claw{}, wrapUpdateStage(op, updateStageValidate, err)
 			}

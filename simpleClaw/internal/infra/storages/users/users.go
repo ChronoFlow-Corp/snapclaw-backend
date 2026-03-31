@@ -7,13 +7,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 	"shared/pkg/observability"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/infra/sql/models"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Storage struct {

@@ -51,7 +51,6 @@ type apiKeyManager interface {
 	Create(
 		ctx context.Context,
 		userID uuid.UUID,
-		label string,
 		monthlyBudgetUSD float64,
 	) (entities.OpenRouterKey, error)
 	ResolveModel(ctx context.Context, model string) (string, error)
@@ -64,7 +63,13 @@ type hostingManager interface {
 	Delete(ctx context.Context, cl entities.Claw, server entities.Server, deleteConfig bool) error
 	Update(ctx context.Context, cl entities.Claw, server entities.Server) error
 	ApprovePairing(ctx context.Context, cl entities.Claw, server entities.Server, code string) error
-	Connect(ctx context.Context, cl entities.Claw, server entities.Server, provider string, token []byte) error
+	Connect(
+		ctx context.Context,
+		cl entities.Claw,
+		server entities.Server,
+		provider string,
+		token []byte,
+	) error
 	ConfigArchive(
 		ctx context.Context,
 		cl entities.Claw,

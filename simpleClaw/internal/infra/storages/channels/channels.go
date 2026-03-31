@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/google/uuid"
-	"gorm.io/gorm"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/infra/sql/models"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type Storage struct {

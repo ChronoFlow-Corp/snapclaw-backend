@@ -26,6 +26,6 @@ type OpenRouterSpanAttribute struct {
 
 type OpenRouterAttributeValue struct {
 	StringValue string  `json:"stringValue"`
-	IntValue    string  `json:"intValue"`
+	IntValue    int     `json:"intValue"`
 	DoubleValue float64 `json:"doubleValue"`
 }

@@ -62,7 +62,6 @@ type apiKeyManager interface {
 	Create(
 		ctx context.Context,
 		userID uuid.UUID,
-		label string,
 		monthlyBudgetUSD float64,
 	) (entities.OpenRouterKey, error)
 }

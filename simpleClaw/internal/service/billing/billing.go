@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"simpleClaw/config"
+
 	"simpleClaw/internal/service/pkg/minor"
 
 	"github.com/google/uuid"
@@ -21,6 +23,7 @@ import (
 const defaultOpenRouterCostCurrency = "USD"
 
 type Service struct {
+	env           string
 	plans         planStorage
 	subscriptions subscriptionStorage
 	balance       balanceEntryStorage
@@ -43,12 +46,14 @@ type BillingSummary struct {
 }
 
 func NewService(
+	env string,
 	plans planStorage,
 	subscriptions subscriptionStorage,
 	balance balanceEntryStorage,
 	users userStorage,
 	payments paymentStorage,
 	payInfra paymentInfra,
+	usageAmounts usageAmountConverter,
 	metrics ...*observability.OperationMetrics,
 ) *Service {
 	var opMetrics *observability.OperationMetrics
@@ -58,13 +63,14 @@ func NewService(
 	}
 
 	return &Service{
+		env:           env,
 		plans:         plans,
 		subscriptions: subscriptions,
 		balance:       balance,
 		users:         users,
 		payments:      payments,
 		payInfra:      payInfra,
-		usageAmounts:  defaultUsageAmountConverter{},
+		usageAmounts:  usageAmounts,
 		metrics:       opMetrics,
 	}
 }
@@ -917,10 +923,14 @@ func (s *Service) HandleOpenRouterUsageWebhook(
 		)
 	}
 
+	if s.env == config.EnvDevelopment {
+		devModelsCosts(event.InputTokens, event.OutputToken)
+	}
+
 	amountMinor, err := s.usageAmounts.ToMinor(
 		event.TotalCost,
 		defaultOpenRouterCostCurrency,
-		defaultOpenRouterCostCurrency,
+		entities.RUB,
 	)
 	if err != nil {
 		return fmt.Errorf(

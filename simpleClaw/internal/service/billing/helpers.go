@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"simpleClaw/internal/infra/sql"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 func applyPaymentEventSnapshot(
@@ -117,12 +119,12 @@ func parseUserIDFromOpenRouterAPIKeyName(raw string) (uuid.UUID, error) {
 		return uuid.Nil, decorateValidation(ErrOpenRouterAPIKeyInvalid)
 	}
 
-	idx := strings.LastIndex(raw, "+")
-	if idx < 0 || idx == len(raw)-1 {
+	idx := strings.Split(raw, "claw-")
+	if len(idx) != 2 {
 		return uuid.Nil, decorateValidation(ErrOpenRouterAPIKeyInvalid)
 	}
 
-	userID, err := uuid.Parse(raw[idx+1:])
+	userID, err := uuid.Parse(idx[1])
 	if err != nil {
 		return uuid.Nil, decorateValidation(ErrOpenRouterAPIKeyInvalid)
 	}
@@ -164,4 +166,65 @@ func (defaultUsageAmountConverter) ToMinor(
 	}
 
 	return int64(math.Round(parsed * 100)), nil
+}
+
+func devModelsCosts(inputTokens, outputTokens int) {
+	type models struct {
+		Name       string
+		InputCost  float64
+		OutputCost float64
+	}
+
+	m := []models{
+		{
+			Name:       "Claude opus 4.6",
+			InputCost:  5,
+			OutputCost: 25,
+		},
+		{
+			Name:       "GPT 5.4",
+			InputCost:  2.50,
+			OutputCost: 15,
+		},
+		{
+			Name:       "Google: Gemini 3 Flash Preview",
+			InputCost:  0.50,
+			OutputCost: 3,
+		},
+		{
+			Name:       "Qwen3.5 Flash",
+			InputCost:  0.065,
+			OutputCost: 0.26,
+		},
+		{
+			Name:       "Kimi K2.5",
+			InputCost:  0.42,
+			OutputCost: 2.20,
+		},
+		{
+			Name:       "GLM 5",
+			InputCost:  1.20,
+			OutputCost: 4,
+		},
+	}
+
+	for _, model := range m {
+		modelCost(model.Name, model.InputCost, model.OutputCost, inputTokens, outputTokens)
+	}
+}
+
+func modelCost(model string, inputCost, outputCost float64, inputTokens, outputTokens int) {
+	inputCostD := decimal.NewFromFloat(inputCost)
+	outputCostD := decimal.NewFromFloat(outputCost)
+	inputD := decimal.NewFromInt(int64(inputTokens))
+	outputD := decimal.NewFromInt(int64(outputTokens))
+
+	claudeCostPerTokenInput := inputCostD.Div(decimal.NewFromInt(1_000_000))
+	claudeCostPerTokenOutput := outputCostD.Div(decimal.NewFromInt(1_000_000))
+
+	fmt.Println(fmt.Sprintf(
+		"%s TOTAL COST: %s$",
+		model,
+		claudeCostPerTokenInput.Mul(inputD).Add(claudeCostPerTokenOutput.Mul(outputD)).String(),
+	))
 }

@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/google/uuid"
-	"gorm.io/gorm"
 	"shared/pkg/observability"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/infra/sql/models"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type Storage struct {
