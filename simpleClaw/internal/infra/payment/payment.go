@@ -8,6 +8,7 @@ import (
 
 	"simpleClaw/internal/entities"
 
+	"github.com/google/uuid"
 	"github.com/rvinnie/yookassa-sdk-go/yookassa"
 	yoocommon "github.com/rvinnie/yookassa-sdk-go/yookassa/common"
 	yoopayment "github.com/rvinnie/yookassa-sdk-go/yookassa/payment"
@@ -30,6 +31,9 @@ func NewYooKassa(env string, accountID, secretKey, returnURL string) *YooKassa {
 func (y *YooKassa) CreatePayment(
 	ctx context.Context,
 	amount entities.Amount,
+	userID uuid.UUID,
+	saveMethod bool,
+	paymentMethodID *uuid.UUID,
 ) (entities.Payment, error) {
 	const op = "payment.CreatePayment"
 
@@ -40,10 +44,16 @@ func (y *YooKassa) CreatePayment(
 			Value:    amount.Value,
 			Currency: amount.Currency,
 		},
+		SavePaymentMethod: saveMethod,
 		Confirmation: entities.Confirmation{
 			Type:      entities.ConfirmationTypeRedirect,
 			ReturnURL: &y.returnURL,
 		},
+		MerchantCustomerID: userID.String(),
+	}
+
+	if paymentMethodID != nil {
+		pObj.PaymentMethodID = paymentMethodID.String()
 	}
 
 	if y.env == config.EnvDevelopment {

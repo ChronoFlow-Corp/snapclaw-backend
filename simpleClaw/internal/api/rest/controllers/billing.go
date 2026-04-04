@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"simpleClaw/internal/service/billing/result"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
@@ -37,6 +39,10 @@ type billingService interface {
 	EventPayment(ctx context.Context, cm commands.PaymentEvent) (err error)
 	HandleOpenRouterUsageWebhook(ctx context.Context, event commands.OpenRouterUsageEvent) error
 	TopUp(ctx context.Context, cm commands.TopUp) (confirmURL string, err error)
+	ExpanseAnalyze(
+		ctx context.Context,
+		cm commands.Expanse,
+	) (result.Expanses, error)
 }
 
 type Billing struct {
@@ -74,12 +80,16 @@ func (b *Billing) Register(r chi.Router) {
 		r.Delete("/plans/{id}", b.DeactivatePlan)
 	})
 
-	r.With(middleware.AuthJwt(b.j)).Get("/me/billing", b.GetBilling)
-	r.With(middleware.AuthJwt(b.j)).Get("/me/subscription", b.GetSubscription)
-	r.With(middleware.AuthJwt(b.j)).Post("/me/subscription", b.Subscribe)
-	r.With(middleware.AuthJwt(b.j)).Patch("/me/subscription", b.ChangePlan)
-	r.With(middleware.AuthJwt(b.j)).Delete("/me/subscription", b.CancelSubscription)
-	r.With(middleware.AuthJwt(b.j)).Post("/me/topUp", b.TopUp)
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.AuthJwt(b.j))
+		r.Get("/me/billing", b.GetBilling)
+		r.Get("/me/subscription", b.GetSubscription)
+		r.Post("/me/subscription", b.Subscribe)
+		r.Patch("/me/subscription", b.ChangePlan)
+		r.Delete("/me/subscription", b.CancelSubscription)
+		r.Post("/me/topUp", b.TopUp)
+		r.Get("/me/expanse", b.ExpanseAnalyze)
+	})
 }
 
 func (b *Billing) HandleYooKassaWebhook(w http.ResponseWriter, r *http.Request) {
@@ -468,8 +478,9 @@ func (b *Billing) TopUp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	u, err := b.service.TopUp(r.Context(), commands.TopUp{
-		UserID: userID,
-		Amount: req.Amount,
+		UserID:          userID,
+		PaymentMethodID: req.PaymentMethodID,
+		Amount:          req.Amount,
 	})
 	if err != nil {
 		respondServiceError(w, err)
@@ -518,6 +529,30 @@ func (b *Billing) ChangePlan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.RespondOK(w, subscriptionToResponse(subscription))
+}
+
+func (b *Billing) ExpanseAnalyze(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(
+			w,
+			response.Error{Code: http.StatusUnauthorized, Message: "invalid user id"},
+		)
+		return
+	}
+
+	res, err := b.service.ExpanseAnalyze(r.Context(), commands.Expanse{UserID: userID})
+	if err != nil {
+		respondServiceError(w, err)
+		return
+	}
+
+	response.RespondOK(w, dto.ExpanseAnalyzeResponse{
+		Today:   res.Today,
+		Weekly:  res.Week,
+		Monthly: res.Month,
+		Daily:   res.Day,
+	})
 }
 
 func (b *Billing) CancelSubscription(w http.ResponseWriter, r *http.Request) {

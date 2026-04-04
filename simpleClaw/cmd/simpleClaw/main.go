@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -52,6 +53,7 @@ type userAPIKeyManager interface {
 		userID uuid.UUID,
 		monthlyBudgetUSD float64,
 	) (entities.OpenRouterKey, error)
+	DisableKey(ctx context.Context, keyID string) error
 }
 
 type clawAPIKeyManager interface {
@@ -66,6 +68,7 @@ type clawAPIKeyManager interface {
 func main() {
 	cfg := config.New()
 	logger := setupLogger(cfg.Environment)
+	fmt.Println(cfg.OpenRouter.APIToken)
 
 	shutdownTracing, err := observability.SetupTracing(
 		context.Background(),
@@ -217,6 +220,8 @@ func main() {
 		paymentStorage,
 		paymentManager,
 		conv,
+		paymentMethodStorage,
+		userKeys,
 		operationMetrics,
 	)
 

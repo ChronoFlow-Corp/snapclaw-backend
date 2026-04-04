@@ -225,6 +225,30 @@ func (s *Service) succeededSubscription(ctx context.Context, p entities.Payment)
 		}
 	}
 
+	pDb, err := s.payments.GetByID(ctx, p.ID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if p.PaymentMethod != nil {
+		_, err := s.payments.GetByID(ctx, p.PaymentMethod.ID)
+		switch {
+		case err != nil && !errors.Is(err, sql.ErrNotFound):
+		case err != nil && errors.Is(err, sql.ErrNotFound):
+			if p.PaymentMethod.Saved {
+				now := time.Now()
+				err = s.payMethod.Create(ctx, entities.PaymentMethod{
+					ID:         uuid.New(),
+					UserID:     pDb.UserID,
+					Title:      p.PaymentMethod.Title,
+					IsDefault:  true,
+					CreatedAt:  now,
+					LastUsedAt: &now,
+				})
+			}
+		}
+	}
+
 	return nil
 }
 

@@ -46,6 +46,11 @@ type balanceEntryStorage interface {
 		ctx context.Context,
 		paymentID string,
 	) (entities.UserBalanceEntry, error)
+	SumUsageDebitByUserIDInRange(
+		ctx context.Context,
+		userID uuid.UUID,
+		start, end time.Time,
+	) (int64, error)
 }
 
 type userStorage interface {
@@ -72,6 +77,9 @@ type paymentInfra interface {
 	CreatePayment(
 		ctx context.Context,
 		amount entities.Amount,
+		userID uuid.UUID,
+		saveMethod bool,
+		paymentMethodID *uuid.UUID,
 	) (entities.Payment, error)
 	Capture(
 		ctx context.Context,
@@ -82,4 +90,18 @@ type paymentInfra interface {
 
 type usageAmountConverter interface {
 	ToMinor(totalCost string, sourceCurrency, targetCurrency string) (int64, error)
+}
+
+type paymentMethodStorage interface {
+	Create(ctx context.Context, method entities.PaymentMethod) error
+	GetByID(ctx context.Context, id, userID uuid.UUID) (entities.PaymentMethod, error)
+	GetByUserID(ctx context.Context, userID uuid.UUID) ([]entities.PaymentMethod, error)
+	UpdateDefault(ctx context.Context, id, userID uuid.UUID, isDefault bool) error
+	Delete(ctx context.Context, id, userID uuid.UUID) error
+	ClearDefaultByUserID(ctx context.Context, userID uuid.UUID) error
+	CountByUserID(ctx context.Context, userID uuid.UUID) (int64, error)
+}
+
+type keyManager interface {
+	DisableKey(ctx context.Context, keyID string) error
 }

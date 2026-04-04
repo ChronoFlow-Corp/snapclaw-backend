@@ -5,10 +5,11 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/google/uuid"
 	"shared/pkg/response"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/sql"
+
+	"github.com/google/uuid"
 )
 
 type adminUserProvider interface {

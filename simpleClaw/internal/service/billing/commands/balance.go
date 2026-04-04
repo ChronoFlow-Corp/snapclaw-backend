@@ -14,6 +14,7 @@ type ChargeUsage struct {
 }
 
 type TopUp struct {
-	Amount string
-	UserID uuid.UUID
+	Amount          string
+	PaymentMethodID *uuid.UUID
+	UserID          uuid.UUID
 }

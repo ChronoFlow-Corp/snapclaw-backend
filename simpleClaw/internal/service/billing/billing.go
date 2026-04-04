@@ -9,15 +9,17 @@ import (
 	"strings"
 	"time"
 
+	"simpleClaw/internal/service/billing/result"
+
 	"simpleClaw/config"
 
 	"simpleClaw/internal/service/pkg/minor"
 
-	"github.com/google/uuid"
-
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/service/billing/commands"
+
+	"github.com/google/uuid"
 )
 
 const defaultOpenRouterCostCurrency = "USD"
@@ -27,6 +29,8 @@ type Service struct {
 	plans         planStorage
 	subscriptions subscriptionStorage
 	balance       balanceEntryStorage
+	payMethod     paymentMethodStorage
+	keyManager    keyManager
 	users         userStorage
 	payments      paymentStorage
 	payInfra      paymentInfra
@@ -54,6 +58,8 @@ func NewService(
 	payments paymentStorage,
 	payInfra paymentInfra,
 	usageAmounts usageAmountConverter,
+	payMethod paymentMethodStorage,
+	keyManager keyManager,
 	metrics ...*observability.OperationMetrics,
 ) *Service {
 	var opMetrics *observability.OperationMetrics
@@ -70,6 +76,8 @@ func NewService(
 		users:         users,
 		payments:      payments,
 		payInfra:      payInfra,
+		payMethod:     payMethod,
+		keyManager:    keyManager,
 		usageAmounts:  usageAmounts,
 		metrics:       opMetrics,
 	}
@@ -326,6 +334,7 @@ func (s *Service) Subscribe(
 			Value:    val,
 			Currency: plan.Currency,
 		},
+		cmd.UserID, true, nil,
 	)
 	if err != nil {
 		return "", fmt.Errorf(
@@ -471,6 +480,11 @@ func (s *Service) CancelSubscription(
 			cmd.UserID,
 			err,
 		)
+	}
+
+	err = s.payMethod.ClearDefaultByUserID(ctx, cmd.UserID)
+	if err != nil {
+		return fmt.Errorf("%s: get methods by user=%s: %w", op, cmd.UserID, err)
 	}
 
 	return nil
@@ -850,10 +864,10 @@ func (s *Service) TopUp(ctx context.Context, cm commands.TopUp) (confirmURL stri
 	p, err := s.payInfra.CreatePayment(ctx, entities.Amount{
 		Value:    cm.Amount,
 		Currency: entities.RUB,
-	})
+	}, cm.UserID, false, nil)
 	if err != nil {
 		return "", fmt.Errorf(
-			"%s: create top-up payment user=%s amount=%d: %w",
+			"%s: create top-up payment user=%s amount=%q: %w",
 			op,
 			cm.UserID,
 			cm.Amount,
@@ -863,7 +877,7 @@ func (s *Service) TopUp(ctx context.Context, cm commands.TopUp) (confirmURL stri
 
 	if p.Confirmation.ConfirmationURL == nil {
 		return "", fmt.Errorf(
-			"%s: create top-up payment user=%s amount=%d: %w",
+			"%s: create top-up payment user=%s amount=%q: %w",
 			op,
 			cm.UserID,
 			cm.Amount,
@@ -929,7 +943,7 @@ func (s *Service) HandleOpenRouterUsageWebhook(
 
 	amountMinor, err := s.usageAmounts.ToMinor(
 		event.TotalCost,
-		defaultOpenRouterCostCurrency,
+		entities.USD,
 		entities.RUB,
 	)
 	if err != nil {
@@ -976,6 +990,17 @@ func (s *Service) HandleOpenRouterUsageWebhook(
 	})
 	if err != nil {
 		if isInsufficientBalanceErr(err) {
+			u, err := s.users.GetByID(ctx, userID)
+			if err != nil {
+				return fmt.Errorf("%s: get user by id: %w", op, err)
+			}
+
+			err = s.keyManager.DisableKey(ctx, u.OpenRouterKeyID)
+			if err != nil {
+				// TODO: stop container
+				return fmt.Errorf("%s: disable key: %w", op, err)
+			}
+
 			return fmt.Errorf("%s: %w", op, decorateValidation(ErrInsufficientBalance))
 		}
 		return fmt.Errorf(
@@ -1070,4 +1095,115 @@ func (s *Service) GetBillingSummary(
 	}
 
 	return summary, nil
+}
+
+func (s *Service) ExpanseAnalyze(
+	ctx context.Context,
+	cm commands.Expanse,
+) (result.Expanses, error) {
+	return s.expanseAnalyzeAt(ctx, cm, time.Now().UTC())
+}
+
+func (s *Service) expanseAnalyzeAt(
+	ctx context.Context,
+	cm commands.Expanse,
+	now time.Time,
+) (result.Expanses, error) {
+	const op = "service.billing.ExpanseAnalyze"
+
+	if s.balance == nil {
+		return result.Expanses{}, fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	now = now.UTC()
+	todayStart := startOfDayUTC(now)
+	weekStart := startOfISOWeekUTC(now)
+	monthStart := startOfMonthUTC(now)
+
+	todaySpent, err := s.balance.SumUsageDebitByUserIDInRange(ctx, cm.UserID, todayStart, now)
+	if err != nil {
+		return result.Expanses{}, fmt.Errorf("%s: sum usage debit for today: %w", op, err)
+	}
+
+	dayTotal, err := s.balance.SumUsageDebitByUserIDInRange(
+		ctx,
+		cm.UserID,
+		todayStart.AddDate(0, 0, -30),
+		todayStart,
+	)
+	if err != nil {
+		return result.Expanses{}, fmt.Errorf("%s: sum usage debit for daily average: %w", op, err)
+	}
+
+	weekTotal, err := s.balance.SumUsageDebitByUserIDInRange(
+		ctx,
+		cm.UserID,
+		weekStart.AddDate(0, 0, -56),
+		weekStart,
+	)
+	if err != nil {
+		return result.Expanses{}, fmt.Errorf("%s: sum usage debit for weekly average: %w", op, err)
+	}
+
+	monthTotal, err := s.balance.SumUsageDebitByUserIDInRange(
+		ctx,
+		cm.UserID,
+		monthStart.AddDate(0, -12, 0),
+		monthStart,
+	)
+	if err != nil {
+		return result.Expanses{}, fmt.Errorf("%s: sum usage debit for monthly average: %w", op, err)
+	}
+
+	today, err := formatMinorRUB(todaySpent)
+	if err != nil {
+		return result.Expanses{}, fmt.Errorf("%s: format today spent: %w", op, err)
+	}
+
+	day, err := formatMinorRUB(dayTotal / 30)
+	if err != nil {
+		return result.Expanses{}, fmt.Errorf("%s: format daily average: %w", op, err)
+	}
+
+	week, err := formatMinorRUB(weekTotal / 8)
+	if err != nil {
+		return result.Expanses{}, fmt.Errorf("%s: format weekly average: %w", op, err)
+	}
+
+	month, err := formatMinorRUB(monthTotal / 12)
+	if err != nil {
+		return result.Expanses{}, fmt.Errorf("%s: format monthly average: %w", op, err)
+	}
+
+	return result.Expanses{
+		Today: today,
+		Month: month,
+		Week:  week,
+		Day:   day,
+	}, nil
+}
+
+func startOfDayUTC(t time.Time) time.Time {
+	t = t.UTC()
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+func startOfISOWeekUTC(t time.Time) time.Time {
+	t = startOfDayUTC(t)
+
+	weekday := int(t.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+
+	return t.AddDate(0, 0, -(weekday - 1))
+}
+
+func startOfMonthUTC(t time.Time) time.Time {
+	t = t.UTC()
+	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+}
+
+func formatMinorRUB(amountMinor int64) (string, error) {
+	return minor.MinorToString(amountMinor, entities.RUB)
 }

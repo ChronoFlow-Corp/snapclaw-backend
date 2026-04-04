@@ -6,11 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"shared/pkg/observability"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/pkg/slctx"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 )
 
 // Logger is a middleware that injects a logger into the request context.

@@ -446,59 +446,6 @@ func (s *Service) Connect(ctx context.Context, cm commands.ConnectCommand) (err 
 	return nil
 }
 
-func (s *Service) AddPaymentMethod(
-	ctx context.Context,
-	cm commands.AddPaymentMethod,
-) (entities.PaymentMethod, error) {
-	const op = "service.Service.AddPaymentMethod"
-
-	ctx, _, finish := observability.StartOperation(
-		ctx,
-		slog.Default(),
-		s.metrics,
-		"service.user",
-		"payment_method.add",
-		"payment_method",
-	)
-
-	var err error
-
-	defer func() { finish(err) }()
-
-	title := strings.TrimSpace(cm.Title)
-	if cm.UserID == uuid.Nil || title == "" {
-		return entities.PaymentMethod{}, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
-	}
-
-	count, err := s.pmSt.CountByUserID(ctx, cm.UserID)
-	if err != nil {
-		return entities.PaymentMethod{}, fmt.Errorf("%s: %w", op, err)
-	}
-
-	isDefault := cm.IsDefault
-	if count == 0 {
-		isDefault = true
-	} else if cm.IsDefault {
-		if err = s.pmSt.ClearDefaultByUserID(ctx, cm.UserID); err != nil {
-			return entities.PaymentMethod{}, fmt.Errorf("%s: %w", op, err)
-		}
-	}
-
-	method := entities.PaymentMethod{
-		ID:        uuid.New(),
-		UserID:    cm.UserID,
-		Title:     title,
-		IsDefault: isDefault,
-		CreatedAt: time.Now().UTC(),
-	}
-
-	if err = s.pmSt.Create(ctx, method); err != nil {
-		return entities.PaymentMethod{}, fmt.Errorf("%s: %w", op, err)
-	}
-
-	return method, nil
-}
-
 func (s *Service) GetPaymentMethod(
 	ctx context.Context,
 	methodID, userID uuid.UUID,

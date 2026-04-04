@@ -182,6 +182,11 @@ func (m *ApiKeyManager) ResolveModel(ctx context.Context, model string) (string,
 
 	defer func() { finish(err) }()
 
+	model, err = normalizeModelName(model)
+	if err != nil {
+		return "", err
+	}
+
 	slug := normalizeModelSlug(model)
 	if slug == "" {
 		return "", ErrModelRequired
@@ -258,6 +263,16 @@ func floatPtr(v float64) *float64 {
 
 func keyResetPtr(v gopenrouter.KeyLimitReset) *gopenrouter.KeyLimitReset {
 	return &v
+}
+
+func normalizeModelName(model string) (string, error) {
+	for _, v := range models {
+		if strings.Contains(model, v.contain) {
+			return v.openrouterName, nil
+		}
+	}
+
+	return "", ErrModelNotFound
 }
 
 func normalizeModelSlug(slug string) string {

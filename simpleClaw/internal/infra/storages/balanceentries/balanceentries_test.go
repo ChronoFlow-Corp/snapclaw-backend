@@ -257,6 +257,51 @@ func TestStorageListByUserIDOrdersNewestFirst(t *testing.T) {
 	}
 }
 
+func TestStorageSumUsageDebitByUserIDInRangeUsesHalfOpenRange(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	store := NewStorage(db)
+	user := seedUser(t, db, 1000)
+
+	start := time.Date(2026, time.April, 3, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+
+	excludedBefore := newBalanceEntry(user.ID, entities.BalanceEntryTypeUsageDebit, 100, start.Add(-time.Minute))
+	includedAtStart := newBalanceEntry(user.ID, entities.BalanceEntryTypeUsageDebit, 200, start)
+	includedInside := newBalanceEntry(user.ID, entities.BalanceEntryTypeUsageDebit, 300, start.Add(12*time.Hour))
+	excludedAtEnd := newBalanceEntry(user.ID, entities.BalanceEntryTypeUsageDebit, 400, end)
+	excludedType := newBalanceEntry(user.ID, entities.BalanceEntryTypeTopUpCredit, 500, start.Add(time.Hour))
+
+	for _, entry := range []entities.UserBalanceEntry{
+		excludedBefore,
+		includedAtStart,
+		includedInside,
+		excludedAtEnd,
+		excludedType,
+	} {
+		if entry.Type == entities.BalanceEntryTypeUsageDebit {
+			if _, err := store.ApplyUsageDebit(context.Background(), entry); err != nil {
+				t.Fatalf("ApplyUsageDebit() error = %v", err)
+			}
+			continue
+		}
+
+		if _, err := store.ApplyCredit(context.Background(), entry, entities.Payment{}); err != nil {
+			t.Fatalf("ApplyCredit() error = %v", err)
+		}
+	}
+
+	got, err := store.SumUsageDebitByUserIDInRange(context.Background(), user.ID, start, end)
+	if err != nil {
+		t.Fatalf("SumUsageDebitByUserIDInRange() error = %v", err)
+	}
+
+	if got != 500 {
+		t.Fatalf("SumUsageDebitByUserIDInRange() = %d, want 500", got)
+	}
+}
+
 func newTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 

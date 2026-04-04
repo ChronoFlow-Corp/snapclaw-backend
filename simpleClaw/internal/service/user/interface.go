@@ -36,18 +36,6 @@ type ChannelStorage interface {
 	Update(ctx context.Context, ch entities.Channel) error
 }
 
-type paymentStorage interface {
-	Create(ctx context.Context, payment entities.Payment) error
-	GetByID(
-		ctx context.Context,
-		id string,
-		userID uuid.UUID,
-	) (entities.Payment, error)
-	GetByUserID(ctx context.Context, userID uuid.UUID) ([]entities.Payment, error)
-	Update(ctx context.Context, payment entities.Payment) error
-	Delete(ctx context.Context, id string, userID uuid.UUID) error
-}
-
 type paymentMethodStorage interface {
 	Create(ctx context.Context, method entities.PaymentMethod) error
 	GetByID(ctx context.Context, id, userID uuid.UUID) (entities.PaymentMethod, error)

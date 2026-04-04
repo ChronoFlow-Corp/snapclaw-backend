@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"containermanager/internal/pkg/logctx"
+	"shared/pkg/observability"
+
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/build"
 	dcontainer "github.com/docker/docker/api/types/container"
@@ -22,7 +24,6 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
-	"shared/pkg/observability"
 )
 
 const MB = 1024 * 1024

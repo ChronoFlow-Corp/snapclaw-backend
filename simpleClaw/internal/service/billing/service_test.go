@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"simpleClaw/internal/entities"
 	infraSQL "simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/service/billing/commands"
+	"simpleClaw/internal/service/pkg/minor"
 )
 
 func TestCreatePlanWithMetrics(t *testing.T) {
@@ -25,7 +27,7 @@ func TestCreatePlanWithMetrics(t *testing.T) {
 	}
 
 	store := newFakePlanStorage()
-	service := NewService(store, nil, nil, nil, nil, nil, metrics)
+	service := newTestService(store, nil, nil, nil, nil, nil, metrics)
 
 	plan, err := service.CreatePlan(context.Background(), commands.CreatePlan{
 		Code:               "starter",
@@ -47,7 +49,7 @@ func TestCreatePlan(t *testing.T) {
 	t.Parallel()
 
 	store := newFakePlanStorage()
-	service := NewService(store, nil, nil, nil, nil, nil)
+	service := newTestService(store, nil, nil, nil, nil, nil)
 
 	plan, err := service.CreatePlan(context.Background(), commands.CreatePlan{
 		Code:               "starter",
@@ -86,7 +88,7 @@ func TestSubscribeCreatesPendingSubscription(t *testing.T) {
 			},
 		},
 	}
-	service := NewService(planStorage, subscriptionStorage, nil, nil, paymentStore, paymentInfra)
+	service := newTestService(planStorage, subscriptionStorage, nil, nil, paymentStore, paymentInfra)
 
 	confirmationURL, err := service.Subscribe(context.Background(), commands.Subscribe{
 		UserID: uuid.New(),
@@ -124,7 +126,7 @@ func TestSubscribeReturnsPlanInactive(t *testing.T) {
 	plan.IsActive = false
 	planStorage.plans[plan.ID] = plan
 
-	service := NewService(
+	service := newTestService(
 		planStorage,
 		subscriptionStorage,
 		nil,
@@ -146,7 +148,7 @@ func TestSubscribeReturnsPlanInactive(t *testing.T) {
 func TestSubscribeIncludesPlanLoadStageInError(t *testing.T) {
 	t.Parallel()
 
-	service := NewService(
+	service := newTestService(
 		newFakePlanStorage(),
 		newFakeSubscriptionStorage(),
 		nil,
@@ -175,7 +177,7 @@ func TestApplySuccessfulTopUpIsIdempotentAndCreditsAmount(t *testing.T) {
 	userID := uuid.New()
 	balanceStore := newFakeBalanceEntryStorage()
 	balanceStore.balance[userID] = 1000
-	service := NewService(nil, nil, balanceStore, &fakeUserStorage{
+	service := newTestService(nil, nil, balanceStore, &fakeUserStorage{
 		users: map[uuid.UUID]entities.User{
 			userID: {ID: userID, BalanceMinor: 1000},
 		},
@@ -247,7 +249,7 @@ func TestApplySuccessfulSubscriptionPaymentCreditsPlanBalance(t *testing.T) {
 		CreatedAt:      time.Now().UTC(),
 	}
 
-	service := NewService(planStorage, subscriptionStore, balanceStore, &fakeUserStorage{
+	service := newTestService(planStorage, subscriptionStore, balanceStore, &fakeUserStorage{
 		users: map[uuid.UUID]entities.User{
 			userID: {ID: userID, BalanceMinor: 0},
 		},
@@ -272,7 +274,7 @@ func TestHandleOpenRouterUsageWebhookChargesUsageOnce(t *testing.T) {
 	userID := uuid.New()
 	balanceStore := newFakeBalanceEntryStorage()
 	balanceStore.balance[userID] = 100
-	service := NewService(nil, nil, balanceStore, &fakeUserStorage{
+	service := newTestService(nil, nil, balanceStore, &fakeUserStorage{
 		users: map[uuid.UUID]entities.User{
 			userID: {ID: userID, BalanceMinor: 100},
 		},
@@ -303,7 +305,7 @@ func TestHandleOpenRouterUsageWebhookChargesUsageOnce(t *testing.T) {
 func TestHandleOpenRouterUsageWebhookRejectsMalformedAPIKeyName(t *testing.T) {
 	t.Parallel()
 
-	service := NewService(nil, nil, newFakeBalanceEntryStorage(), &fakeUserStorage{
+	service := newTestService(nil, nil, newFakeBalanceEntryStorage(), &fakeUserStorage{
 		users: map[uuid.UUID]entities.User{},
 	}, &fakePaymentStorage{}, nil)
 
@@ -333,7 +335,7 @@ func TestHandleOpenRouterUsageWebhookReturnsInsufficientBalance(t *testing.T) {
 	userID := uuid.New()
 	balanceStore := newFakeBalanceEntryStorage()
 	balanceStore.balance[userID] = 5
-	service := NewService(nil, nil, balanceStore, &fakeUserStorage{
+	service := newTestService(nil, nil, balanceStore, &fakeUserStorage{
 		users: map[uuid.UUID]entities.User{
 			userID: {ID: userID, BalanceMinor: 5},
 		},
@@ -385,7 +387,7 @@ func TestGetBillingSummaryUsesLatestSubscriptionPaymentForNextCharge(t *testing.
 		},
 	}
 
-	service := NewService(planStorage, &fakeSubscriptionStorage{
+	service := newTestService(planStorage, &fakeSubscriptionStorage{
 		byUser: map[uuid.UUID]entities.UserSubscription{userID: subscription},
 	}, &fakeBalanceEntryStorage{
 		balance: map[uuid.UUID]int64{userID: 5000},
@@ -408,12 +410,12 @@ func TestGetBillingSummaryUsesLatestSubscriptionPaymentForNextCharge(t *testing.
 	}
 }
 
-func TestPaymentEventHandlerReturnsInvalidEventType(t *testing.T) {
+func TestEventPaymentReturnsInvalidEventType(t *testing.T) {
 	t.Parallel()
 
-	service := NewService(nil, nil, nil, nil, &fakePaymentStorage{}, &fakePaymentInfra{})
+	service := newTestService(nil, nil, nil, nil, &fakePaymentStorage{}, &fakePaymentInfra{})
 
-	err := service.PaymentEventHandler(context.Background(), commands.PaymentEvent{
+	err := service.EventPayment(context.Background(), commands.PaymentEvent{
 		PaymentEvent: entities.PaymentEvent{
 			Type:  "unexpected",
 			Event: "payment.succeeded",
@@ -423,7 +425,7 @@ func TestPaymentEventHandlerReturnsInvalidEventType(t *testing.T) {
 		},
 	})
 	if !errors.Is(err, ErrPaymentEventTypeInvalid) {
-		t.Fatalf("PaymentEventHandler() error = %v, want ErrPaymentEventTypeInvalid", err)
+		t.Fatalf("EventPayment() error = %v, want ErrPaymentEventTypeInvalid", err)
 	}
 }
 
@@ -435,7 +437,7 @@ func TestBillingErrorClassificationPlanInactive(t *testing.T) {
 	plan.IsActive = false
 	planStorage.plans[plan.ID] = plan
 
-	service := NewService(
+	service := newTestService(
 		planStorage,
 		newFakeSubscriptionStorage(),
 		nil,
@@ -470,7 +472,7 @@ func TestBillingErrorClassificationExternalPaymentFailure(t *testing.T) {
 	plan := newActivePlan()
 	planStorage.plans[plan.ID] = plan
 
-	service := NewService(
+	service := newTestService(
 		planStorage,
 		newFakeSubscriptionStorage(),
 		nil,
@@ -495,6 +497,97 @@ func TestBillingErrorClassificationExternalPaymentFailure(t *testing.T) {
 
 	if attrs.Result != observability.ResultError {
 		t.Fatalf("result = %q, want %q", attrs.Result, observability.ResultError)
+	}
+}
+
+func TestExpanseAnalyzeAtReturnsZeroesForEmptyHistory(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(nil, nil, newFakeBalanceEntryStorage(), nil, nil, nil)
+
+	got, err := service.expanseAnalyzeAt(
+		context.Background(),
+		commands.Expanse{UserID: uuid.New()},
+		time.Date(2026, time.April, 3, 15, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("expanseAnalyzeAt() error = %v", err)
+	}
+
+	if got.Today != "0.00" {
+		t.Fatalf("Today = %q, want %q", got.Today, "0.00")
+	}
+	if got.Day != "0.00" {
+		t.Fatalf("Day = %q, want %q", got.Day, "0.00")
+	}
+	if got.Week != "0.00" {
+		t.Fatalf("Week = %q, want %q", got.Week, "0.00")
+	}
+	if got.Month != "0.00" {
+		t.Fatalf("Month = %q, want %q", got.Month, "0.00")
+	}
+}
+
+func TestExpanseAnalyzeAtUsesUTCPeriodSums(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.April, 3, 15, 0, 0, 0, time.UTC)
+	userID := uuid.New()
+	todayStart := testStartOfDayUTC(now)
+	weekStart := testStartOfISOWeekUTC(now)
+	monthStart := testStartOfMonthUTC(now)
+
+	entries := []entities.UserBalanceEntry{
+		newUsageEntry(userID, 5000, monthStart.AddDate(0, -12, 0).Add(-time.Minute)),
+		newUsageEntry(userID, 12000, monthStart.AddDate(0, -12, 0)),
+		newUsageEntry(userID, 800, weekStart.AddDate(0, 0, -56)),
+		newUsageEntry(userID, 900, todayStart.AddDate(0, 0, -30)),
+		newUsageEntry(userID, 700, weekStart),
+		newUsageEntry(userID, 500, monthStart.AddDate(0, 0, 1).Add(12*time.Hour)),
+		newUsageEntry(userID, 25, todayStart),
+		newUsageEntry(userID, 275, todayStart.Add(10*time.Hour)),
+		newUsageEntry(userID, 999, now),
+	}
+
+	service := newTestService(
+		nil,
+		nil,
+		&fakeBalanceEntryStorage{
+			entries: map[uuid.UUID][]entities.UserBalanceEntry{
+				userID: entries,
+			},
+			balance: map[uuid.UUID]int64{userID: 100000},
+		},
+		nil,
+		nil,
+		nil,
+	)
+
+	got, err := service.expanseAnalyzeAt(context.Background(), commands.Expanse{UserID: userID}, now)
+	if err != nil {
+		t.Fatalf("expanseAnalyzeAt() error = %v", err)
+	}
+
+	dailyStart := todayStart.AddDate(0, 0, -30)
+	weeklyStart := weekStart.AddDate(0, 0, -56)
+	monthlyStart := monthStart.AddDate(0, -12, 0)
+
+	wantToday := mustMinorString(t, sumEntriesInRange(entries, todayStart, now))
+	wantDay := mustMinorString(t, sumEntriesInRange(entries, dailyStart, todayStart)/30)
+	wantWeek := mustMinorString(t, sumEntriesInRange(entries, weeklyStart, weekStart)/8)
+	wantMonth := mustMinorString(t, sumEntriesInRange(entries, monthlyStart, monthStart)/12)
+
+	if got.Today != wantToday {
+		t.Fatalf("Today = %q, want %q", got.Today, wantToday)
+	}
+	if got.Day != wantDay {
+		t.Fatalf("Day = %q, want %q", got.Day, wantDay)
+	}
+	if got.Week != wantWeek {
+		t.Fatalf("Week = %q, want %q", got.Week, wantWeek)
+	}
+	if got.Month != wantMonth {
+		t.Fatalf("Month = %q, want %q", got.Month, wantMonth)
 	}
 }
 
@@ -703,6 +796,14 @@ func (s *fakeBalanceEntryStorage) GetByPaymentID(
 	return entities.UserBalanceEntry{}, infraSQL.ErrNotFound
 }
 
+func (s *fakeBalanceEntryStorage) SumUsageDebitByUserIDInRange(
+	_ context.Context,
+	userID uuid.UUID,
+	start, end time.Time,
+) (int64, error) {
+	return sumEntriesInRange(s.entries[userID], start, end), nil
+}
+
 type fakeUserStorage struct {
 	users map[uuid.UUID]entities.User
 }
@@ -791,7 +892,13 @@ type fakePaymentInfra struct {
 	captureErr          error
 }
 
-func (f *fakePaymentInfra) CreatePayment(_ context.Context, amount entities.Amount) (entities.Payment, error) {
+func (f *fakePaymentInfra) CreatePayment(
+	_ context.Context,
+	amount entities.Amount,
+	_ uuid.UUID,
+	_ bool,
+	_ *uuid.UUID,
+) (entities.Payment, error) {
 	if f.createPaymentErr != nil {
 		return entities.Payment{}, f.createPaymentErr
 	}
@@ -814,6 +921,108 @@ func (f *fakePaymentInfra) Capture(_ context.Context, payment *entities.Payment)
 	return *payment, nil
 }
 
+func (f *fakePaymentInfra) Cancel(_ context.Context, paymentID string) (entities.Payment, error) {
+	if f.captureErr != nil {
+		return entities.Payment{}, f.captureErr
+	}
+
+	if f.captureResult.ID != "" {
+		return f.captureResult, nil
+	}
+
+	return entities.Payment{ID: paymentID}, nil
+}
+
 func strPtr(v string) *string {
 	return &v
+}
+
+type fakeUsageAmountConverter struct{}
+
+func (fakeUsageAmountConverter) ToMinor(totalCost string, _, targetCurrency string) (int64, error) {
+	return minor.StringToMinor(totalCost, targetCurrency)
+}
+
+type noopKeyManager struct{}
+
+func (noopKeyManager) DisableKey(context.Context, string) error {
+	return nil
+}
+
+func newTestService(
+	plans planStorage,
+	subscriptions subscriptionStorage,
+	balance balanceEntryStorage,
+	users userStorage,
+	payments paymentStorage,
+	payInfra paymentInfra,
+	metrics ...*observability.OperationMetrics,
+) *Service {
+	return NewService(
+		"",
+		plans,
+		subscriptions,
+		balance,
+		users,
+		payments,
+		payInfra,
+		fakeUsageAmountConverter{},
+		nil,
+		noopKeyManager{},
+		metrics...,
+	)
+}
+
+func newUsageEntry(userID uuid.UUID, amountMinor int64, createdAt time.Time) entities.UserBalanceEntry {
+	return entities.UserBalanceEntry{
+		ID:          uuid.New(),
+		UserID:      userID,
+		Type:        entities.BalanceEntryTypeUsageDebit,
+		AmountMinor: amountMinor,
+		CreatedAt:   createdAt,
+	}
+}
+
+func testStartOfDayUTC(t time.Time) time.Time {
+	t = t.UTC()
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+func testStartOfISOWeekUTC(t time.Time) time.Time {
+	t = testStartOfDayUTC(t)
+	weekday := int(t.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	return t.AddDate(0, 0, -(weekday - 1))
+}
+
+func testStartOfMonthUTC(t time.Time) time.Time {
+	t = t.UTC()
+	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+}
+
+func sumEntriesInRange(entries []entities.UserBalanceEntry, start, end time.Time) int64 {
+	var total int64
+	for _, entry := range entries {
+		if entry.Type != entities.BalanceEntryTypeUsageDebit {
+			continue
+		}
+		if entry.CreatedAt.Before(start) || !entry.CreatedAt.Before(end) {
+			continue
+		}
+		total += entry.AmountMinor
+	}
+	return total
+}
+
+func mustMinorString(t *testing.T, amount int64) string {
+	t.Helper()
+
+	formatted, err := minor.MinorToString(amount, entities.RUB)
+	if err != nil {
+		t.Fatalf("MinorToString(%s) error = %v", strconv.FormatInt(amount, 10), err)
+	}
+
+	return formatted
 }

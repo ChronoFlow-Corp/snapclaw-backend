@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"simpleClaw/internal/infra/storages/payments"
 
@@ -126,8 +127,9 @@ func (s *Storage) ApplyUsageDebitOnce(
 	}
 
 	var (
-		newBalance int64
-		applied    bool
+		newBalance   int64
+		applied      bool
+		insufficient bool
 	)
 
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -156,8 +158,8 @@ func (s *Storage) ApplyUsageDebitOnce(
 			return sql.TranslateError(err)
 		}
 
-		if user.BalanceMinor < entry.AmountMinor {
-			return ErrInsufficientBalance
+		if user.BalanceMinor < 0 {
+			insufficient = true
 		}
 
 		newBalance = user.BalanceMinor - entry.AmountMinor
@@ -185,7 +187,44 @@ func (s *Storage) ApplyUsageDebitOnce(
 		return 0, false, fmt.Errorf("%s: %w", op, err)
 	}
 
+	if insufficient {
+		return newBalance, applied, fmt.Errorf("%s: %w", op, ErrInsufficientBalance)
+	}
+
 	return newBalance, applied, nil
+}
+
+func (s *Storage) SumUsageDebitByUserIDInRange(
+	ctx context.Context,
+	userID uuid.UUID,
+	start, end time.Time,
+) (int64, error) {
+	const op = "storages.BalanceEntries.SumUsageDebitByUserIDInRange"
+
+	if userID == uuid.Nil || !start.Before(end) {
+		return 0, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	var aggregate struct {
+		Total int64
+	}
+
+	err := s.db.WithContext(ctx).
+		Model(&models.UserBalanceEntry{}).
+		Select("COALESCE(SUM(amount_minor), 0) AS total").
+		Where(
+			"user_id = ? AND created_at >= ? AND created_at < ? AND type = ?",
+			userID,
+			start,
+			end,
+			entities.BalanceEntryTypeUsageDebit,
+		).
+		Scan(&aggregate).Error
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
+	}
+
+	return aggregate.Total, nil
 }
 
 func (s *Storage) apply(

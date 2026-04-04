@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"time"
-
 	"shared/pkg/jwt"
 	"shared/pkg/response"
+	"time"
+
 	"simpleClaw/config"
 	"simpleClaw/internal/api/rest/dto"
 	"simpleClaw/internal/api/rest/middleware"
@@ -36,10 +36,6 @@ type service interface {
 		ctx context.Context,
 		cm commands.AddChannel,
 	) (entities.Channel, error)
-	AddPaymentMethod(
-		ctx context.Context,
-		cm commands.AddPaymentMethod,
-	) (entities.PaymentMethod, error)
 	GetPaymentMethod(
 		ctx context.Context,
 		methodID, userID uuid.UUID,
@@ -79,7 +75,6 @@ func (u *User) Register(r chi.Router) {
 		r.Use(middleware.AuthJwt(u.j))
 		r.Get("/user-info", u.UserInfo)
 		r.Post("/channel", u.AddChannel)
-		r.Post("/payment-method", u.AddPaymentMethod)
 		r.Get("/payment-method", u.ListPaymentMethods)
 		r.Get("/payment-method/{id}", u.GetPaymentMethod)
 		r.Patch("/payment-method/{id}", u.SetDefaultPaymentMethod)
@@ -179,42 +174,6 @@ func (u *User) AddChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.RespondOK(w, ch)
-}
-
-func (u *User) AddPaymentMethod(w http.ResponseWriter, r *http.Request) {
-	var req dto.AddPaymentMethodRequest
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.RespondError(w, response.Error{
-			Code:    http.StatusBadRequest,
-			Message: "invalid request body",
-		})
-
-		return
-	}
-
-	userID, err := userIDFromContext(r.Context())
-	if err != nil {
-		response.RespondError(w, response.Error{
-			Code:    http.StatusUnauthorized,
-			Message: "invalid user id",
-		})
-
-		return
-	}
-
-	method, err := u.service.AddPaymentMethod(r.Context(), commands.AddPaymentMethod{
-		UserID:    userID,
-		Title:     req.Title,
-		IsDefault: req.IsDefault,
-	})
-	if err != nil {
-		respondServiceError(w, err)
-
-		return
-	}
-
-	response.RespondOK(w, paymentMethodResponse(method))
 }
 
 func (u *User) ListPaymentMethods(w http.ResponseWriter, r *http.Request) {

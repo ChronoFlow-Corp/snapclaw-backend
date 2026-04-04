@@ -1,6 +1,10 @@
 package dto
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 type SubscribeRequest struct {
 	PlanID string `json:"plan_id"`
@@ -27,5 +31,13 @@ type BillingSummaryResponse struct {
 }
 
 type TopUpRequest struct {
-	Amount string `json:"amount"`
+	Amount          string     `json:"amount"`
+	PaymentMethodID *uuid.UUID `json:"payment_method_id,omitempty"`
+}
+
+type ExpanseAnalyzeResponse struct {
+	Today   string `json:"today"`
+	Weekly  string `json:"weekly"`
+	Monthly string `json:"monthly"`
+	Daily   string `json:"daily"`
 }
