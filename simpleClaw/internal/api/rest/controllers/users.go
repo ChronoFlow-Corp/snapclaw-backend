@@ -173,7 +173,15 @@ func (u *User) AddChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.RespondOK(w, ch)
+	res := dto.AddChannelResponse{
+		ID:        ch.ID.String(),
+		Name:      ch.Name,
+		BotToken:  ch.Config.Telegram.BotToken,
+		DmPolicy:  string(ch.Config.Telegram.DmPolicy),
+		AllowFrom: ch.Config.Telegram.AllowFrom,
+	}
+
+	response.RespondOK(w, res)
 }
 
 func (u *User) ListPaymentMethods(w http.ResponseWriter, r *http.Request) {
