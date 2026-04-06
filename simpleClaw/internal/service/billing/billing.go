@@ -109,6 +109,7 @@ func (s *Service) CreatePlan(
 		ID:                 uuid.New(),
 		Code:               strings.TrimSpace(cmd.Code),
 		Name:               strings.TrimSpace(cmd.Name),
+		Interval:           strings.TrimSpace(cmd.Interval),
 		BillingAmountMinor: cmd.BillingAmountMinor,
 		BalanceCreditMinor: cmd.BalanceCreditMinor,
 		Currency:           strings.TrimSpace(cmd.Currency),
@@ -215,6 +216,7 @@ func (s *Service) UpdatePlan(
 
 	plan.Code = strings.TrimSpace(cmd.Code)
 	plan.Name = strings.TrimSpace(cmd.Name)
+	plan.Interval = strings.TrimSpace(cmd.Interval)
 	plan.BillingAmountMinor = cmd.BillingAmountMinor
 	plan.BalanceCreditMinor = cmd.BalanceCreditMinor
 	plan.Currency = strings.TrimSpace(cmd.Currency)
@@ -264,7 +266,7 @@ func (s *Service) DeactivatePlan(ctx context.Context, id uuid.UUID) (err error) 
 func (s *Service) Subscribe(
 	ctx context.Context,
 	cmd commands.Subscribe,
-) (confirmationURL string, err error) {
+) (checkout result.SubscriptionCheckout, err error) {
 	const op = "service.billing.Subscribe"
 
 	ctx, _, finish := observability.StartOperation(
@@ -279,24 +281,34 @@ func (s *Service) Subscribe(
 	defer func() { finish(err) }()
 
 	if s.plans == nil || s.subscriptions == nil {
-		return "", fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+		return result.SubscriptionCheckout{}, fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
 	}
 
 	if cmd.UserID == uuid.Nil || cmd.PlanID == uuid.Nil || cmd.Now.IsZero() {
-		return "", fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+		return result.SubscriptionCheckout{}, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
 	}
 
 	plan, err := s.plans.GetByID(ctx, cmd.PlanID)
 	if err != nil {
-		return "", fmt.Errorf("%s: load plan %s: %w", op, cmd.PlanID, err)
+		return result.SubscriptionCheckout{}, fmt.Errorf("%s: load plan %s: %w", op, cmd.PlanID, err)
 	}
 
 	if !plan.IsActive {
-		return "", fmt.Errorf(
+		return result.SubscriptionCheckout{}, fmt.Errorf(
 			"%s: validate plan %s: %w",
 			op,
 			plan.ID,
 			decorateValidation(ErrPlanInactive),
+		)
+	}
+
+	periodEnd, err := nextChargeAt(plan, cmd.Now)
+	if err != nil {
+		return result.SubscriptionCheckout{}, fmt.Errorf(
+			"%s: calculate subscription period plan=%s: %w",
+			op,
+			plan.ID,
+			err,
 		)
 	}
 
@@ -307,13 +319,13 @@ func (s *Service) Subscribe(
 		Status:             entities.SubscriptionStatusPending,
 		StartedAt:          cmd.Now,
 		CurrentPeriodStart: cmd.Now,
-		CurrentPeriodEnd:   cmd.Now.AddDate(0, 1, 0),
+		CurrentPeriodEnd:   periodEnd,
 		CreatedAt:          cmd.Now,
 		UpdatedAt:          cmd.Now,
 	}
 
 	if err := s.subscriptions.Create(ctx, subscription); err != nil {
-		return "", fmt.Errorf(
+		return result.SubscriptionCheckout{}, fmt.Errorf(
 			"%s: create pending subscription user=%s plan=%s subscription=%s: %w",
 			op,
 			cmd.UserID,
@@ -325,7 +337,12 @@ func (s *Service) Subscribe(
 
 	val, err := minor.MinorToString(plan.BillingAmountMinor, plan.Currency)
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", op, err)
+		return result.SubscriptionCheckout{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	returnURL, err := subscriptionReturnURL(cmd.ReturnURL, subscription.ID)
+	if err != nil {
+		return result.SubscriptionCheckout{}, fmt.Errorf("%s: %w", op, err)
 	}
 
 	payment, err := s.payInfra.CreatePayment(
@@ -334,10 +351,10 @@ func (s *Service) Subscribe(
 			Value:    val,
 			Currency: plan.Currency,
 		},
-		cmd.UserID, true, nil,
+		cmd.UserID, true, nil, returnURL,
 	)
 	if err != nil {
-		return "", fmt.Errorf(
+		return result.SubscriptionCheckout{}, fmt.Errorf(
 			"%s: create subscription payment user=%s plan=%s subscription=%s: %w",
 			op,
 			cmd.UserID,
@@ -348,7 +365,7 @@ func (s *Service) Subscribe(
 	}
 
 	if payment.Confirmation.ConfirmationURL == nil {
-		return "", fmt.Errorf(
+		return result.SubscriptionCheckout{}, fmt.Errorf(
 			"%s: create subscription payment user=%s plan=%s subscription=%s: %w",
 			op,
 			cmd.UserID,
@@ -364,7 +381,7 @@ func (s *Service) Subscribe(
 
 	err = s.payments.Create(ctx, payment)
 	if err != nil {
-		return "", fmt.Errorf(
+		return result.SubscriptionCheckout{}, fmt.Errorf(
 			"%s: persist subscription payment %s user=%s subscription=%s: %w",
 			op,
 			payment.ID,
@@ -374,7 +391,13 @@ func (s *Service) Subscribe(
 		)
 	}
 
-	return *payment.Confirmation.ConfirmationURL, nil
+	return result.SubscriptionCheckout{
+		SubscriptionID:  subscription.ID,
+		PaymentID:       payment.ID,
+		Status:          subscription.Status,
+		ConfirmationURL: *payment.Confirmation.ConfirmationURL,
+		ReturnURL:       returnURL,
+	}, nil
 }
 
 func (s *Service) ChangePlan(
@@ -426,6 +449,15 @@ func (s *Service) ChangePlan(
 		)
 	}
 
+	if subscription.Status == entities.SubscriptionStatusActive {
+		return entities.UserSubscription{}, fmt.Errorf(
+			"%s: validate subscription %s: %w",
+			op,
+			subscription.ID,
+			decorateValidation(ErrSubscriptionChangeWhileActive),
+		)
+	}
+
 	subscription.PlanID = cmd.PlanID
 	subscription.UpdatedAt = cmd.Now
 
@@ -440,6 +472,78 @@ func (s *Service) ChangePlan(
 	}
 
 	return subscription, nil
+}
+
+func (s *Service) GetSubscriptionCheckoutStatus(
+	ctx context.Context,
+	userID, subscriptionID uuid.UUID,
+) (status result.SubscriptionCheckoutStatus, err error) {
+	const op = "service.billing.GetSubscriptionCheckoutStatus"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"subscription.checkout_status.get",
+		"billing_subscription",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.subscriptions == nil || s.payments == nil || s.plans == nil {
+		return result.SubscriptionCheckoutStatus{}, fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	if userID == uuid.Nil || subscriptionID == uuid.Nil {
+		return result.SubscriptionCheckoutStatus{}, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	subscription, err := s.subscriptions.GetByIDAndUserID(ctx, subscriptionID, userID)
+	if err != nil {
+		return result.SubscriptionCheckoutStatus{}, fmt.Errorf(
+			"%s: load subscription %s user=%s: %w",
+			op,
+			subscriptionID,
+			userID,
+			err,
+		)
+	}
+
+	payment, err := s.payments.GetLatestBySubscriptionID(ctx, subscriptionID, userID)
+	if err != nil {
+		return result.SubscriptionCheckoutStatus{}, fmt.Errorf(
+			"%s: load latest payment subscription=%s user=%s: %w",
+			op,
+			subscriptionID,
+			userID,
+			err,
+		)
+	}
+
+	if _, err := s.plans.GetByID(ctx, subscription.PlanID); err != nil {
+		return result.SubscriptionCheckoutStatus{}, fmt.Errorf(
+			"%s: load plan %s for subscription %s: %w",
+			op,
+			subscription.PlanID,
+			subscriptionID,
+			err,
+		)
+	}
+
+	status = result.SubscriptionCheckoutStatus{
+		SubscriptionID:     subscription.ID,
+		SubscriptionStatus: subscription.Status,
+		PaymentStatus:      string(payment.Status),
+		PlanID:             subscription.PlanID,
+	}
+
+	if subscription.Status == entities.SubscriptionStatusActive {
+		nextChargeAt := subscription.CurrentPeriodEnd
+		status.NextChargeAt = &nextChargeAt
+	}
+
+	return status, nil
 }
 
 func (s *Service) CancelSubscription(
@@ -864,7 +968,7 @@ func (s *Service) TopUp(ctx context.Context, cm commands.TopUp) (confirmURL stri
 	p, err := s.payInfra.CreatePayment(ctx, entities.Amount{
 		Value:    cm.Amount,
 		Currency: entities.RUB,
-	}, cm.UserID, false, nil)
+	}, cm.UserID, false, nil, "")
 	if err != nil {
 		return "", fmt.Errorf(
 			"%s: create top-up payment user=%s amount=%q: %w",
@@ -1087,7 +1191,15 @@ func (s *Service) GetBillingSummary(
 			entities.PaymentPurposeSubscription,
 		)
 		if err == nil {
-			nextCharge := payment.CreatedAt.AddDate(0, 1, 0)
+			nextCharge, chargeErr := nextChargeAt(summary.CurrentSubscription.Plan, payment.CreatedAt)
+			if chargeErr != nil {
+				return BillingSummary{}, fmt.Errorf(
+					"%s: calculate next charge plan=%s: %w",
+					op,
+					summary.CurrentSubscription.Plan.ID,
+					chargeErr,
+				)
+			}
 			summary.NextChargeAt = &nextCharge
 		} else if !errors.Is(err, sql.ErrNotFound) {
 			return BillingSummary{}, fmt.Errorf("%s: load latest subscription payment user=%s: %w", op, userID, err)

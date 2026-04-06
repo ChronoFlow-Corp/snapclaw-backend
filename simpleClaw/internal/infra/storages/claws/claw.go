@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-
 	"shared/pkg/observability"
+
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/infra/sql/models"
@@ -61,13 +61,18 @@ func (s *Storage) Create(
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
+	var serverID *uuid.UUID
+	if cl.ServerID != uuid.Nil {
+		serverID = &cl.ServerID
+	}
+
 	model := models.Claw{
 		ID:          cl.ID,
 		Name:        cl.Name,
 		Config:      datatypes.JSON(cfg),
 		UserID:      cl.UserID,
 		Status:      cl.Status,
-		ServerID:    cl.ServerID,
+		ServerID:    serverID,
 		ContainerID: cl.ContainerID,
 		CreatedAt:   cl.CreatedAt,
 		UpdatedAt:   cl.UpdatedAt,
@@ -185,7 +190,7 @@ func (s *Storage) GetByID(
 		ID:          clDB.ID,
 		Name:        clDB.Name,
 		UserID:      clDB.UserID,
-		ServerID:    clDB.ServerID,
+		ServerID:    derefServerID(clDB.ServerID),
 		Status:      clDB.Status,
 		ContainerID: clDB.ContainerID,
 		Config:      cfg,
@@ -233,7 +238,7 @@ func (s *Storage) GetByUserID(
 			ID:          clDB.ID,
 			Name:        clDB.Name,
 			UserID:      clDB.UserID,
-			ServerID:    clDB.ServerID,
+			ServerID:    derefServerID(clDB.ServerID),
 			Status:      clDB.Status,
 			ContainerID: clDB.ContainerID,
 			Config:      cfg,
@@ -284,6 +289,14 @@ func (s *Storage) CountOccupiedByServer(ctx context.Context) (map[uuid.UUID]int,
 	}
 
 	return result, nil
+}
+
+func derefServerID(serverID *uuid.UUID) uuid.UUID {
+	if serverID == nil {
+		return uuid.Nil
+	}
+
+	return *serverID
 }
 
 func (s *Storage) Update(

@@ -51,6 +51,37 @@ func (s *Storage) GetByID(ctx context.Context, id uuid.UUID) (entities.UserSubsc
 	return mapToEntity(model), nil
 }
 
+func (s *Storage) GetByIDAndUserID(
+	ctx context.Context,
+	id, userID uuid.UUID,
+) (entities.UserSubscription, error) {
+	const op = "storages.Subscriptions.GetByIDAndUserID"
+
+	switch {
+	case id == uuid.Nil:
+		return entities.UserSubscription{}, fmt.Errorf(
+			"%s: %w",
+			op,
+			invalidSubscription("subscription id is required"),
+		)
+	case userID == uuid.Nil:
+		return entities.UserSubscription{}, fmt.Errorf(
+			"%s: %w",
+			op,
+			invalidSubscription("subscription user_id is required"),
+		)
+	}
+
+	model, err := gorm.G[models.UserSubscription](s.db).
+		Where("id = ? AND user_id = ?", id, userID).
+		First(ctx)
+	if err != nil {
+		return entities.UserSubscription{}, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
+	}
+
+	return mapToEntity(model), nil
+}
+
 func (s *Storage) GetActiveByUserID(ctx context.Context, userID uuid.UUID) (entities.UserSubscription, error) {
 	const op = "storages.Subscriptions.GetActiveByUserID"
 

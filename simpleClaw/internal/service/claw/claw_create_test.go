@@ -2,7 +2,6 @@ package claw
 
 import (
 	"context"
-	"errors"
 	"io"
 	"maps"
 	"testing"
@@ -138,7 +137,7 @@ type createTestKeys struct {
 	resolveModelCalls  int
 }
 
-func (k *createTestKeys) Create(context.Context, uuid.UUID, string, float64) (entities.OpenRouterKey, error) {
+func (k *createTestKeys) Create(context.Context, uuid.UUID, float64) (entities.OpenRouterKey, error) {
 	return entities.OpenRouterKey{}, nil
 }
 
@@ -149,10 +148,13 @@ func (k *createTestKeys) ResolveModel(context.Context, string) (string, error) {
 }
 
 type createTestHosting struct {
-	container hosting.Container
+	container   hosting.Container
+	createCalls int
 }
 
 func (h *createTestHosting) Create(context.Context, entities.Claw, entities.Server) (hosting.Container, error) {
+	h.createCalls++
+
 	return h.container, nil
 }
 
@@ -190,10 +192,10 @@ func (h *createTestHosting) RestoreConfigArchive(context.Context, entities.Claw,
 
 func TestServiceCreate_BuildsMinimalConfigWithMainAgent(t *testing.T) {
 	userID := uuid.New()
-	serverID := uuid.New()
 
 	storage := &createTestClawStorage{}
 	keys := &createTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"}
+	hostingStub := &createTestHosting{}
 	svc := NewClaw(
 		storage,
 		&createTestChannelStorage{},
@@ -203,8 +205,8 @@ func TestServiceCreate_BuildsMinimalConfigWithMainAgent(t *testing.T) {
 			OpenRouterKeyID:  "key-id",
 			CreatedAt:        time.Now(),
 		}},
-		&createTestServerStorage{server: entities.Server{ID: serverID}},
-		&createTestHosting{container: hosting.Container{ID: "container-1", ServerID: serverID}},
+		&createTestServerStorage{},
+		hostingStub,
 		keys,
 		"",
 		GmailWatchConfig{},
@@ -251,15 +253,31 @@ func TestServiceCreate_BuildsMinimalConfigWithMainAgent(t *testing.T) {
 	if keys.resolveModelCalls != 1 {
 		t.Fatalf("expected one resolve model call, got %d", keys.resolveModelCalls)
 	}
+
+	if cl.ContainerID != "" {
+		t.Fatalf("expected empty container id, got %q", cl.ContainerID)
+	}
+
+	if cl.ServerID != uuid.Nil {
+		t.Fatalf("expected zero server id, got %s", cl.ServerID)
+	}
+
+	if hostingStub.createCalls != 0 {
+		t.Fatalf("expected hosting create to not be called, got %d", hostingStub.createCalls)
+	}
+
+	if storage.runtimeUpdated.ID != uuid.Nil {
+		t.Fatalf("expected runtime update to not be called, got %#v", storage.runtimeUpdated)
+	}
 }
 
 func TestServiceCreate_AddsNormalizedTelegramChannel(t *testing.T) {
 	userID := uuid.New()
-	serverID := uuid.New()
 	channelID := uuid.New()
 
 	storage := &createTestClawStorage{}
 	keys := &createTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"}
+	hostingStub := &createTestHosting{}
 	svc := NewClaw(
 		storage,
 		&createTestChannelStorage{channels: []entities.Channel{
@@ -285,8 +303,8 @@ func TestServiceCreate_AddsNormalizedTelegramChannel(t *testing.T) {
 			OpenRouterKeyID:  "key-id",
 			CreatedAt:        time.Now(),
 		}},
-		&createTestServerStorage{server: entities.Server{ID: serverID}},
-		&createTestHosting{container: hosting.Container{ID: "container-1", ServerID: serverID}},
+		&createTestServerStorage{},
+		hostingStub,
 		keys,
 		"",
 		GmailWatchConfig{},
@@ -318,99 +336,8 @@ func TestServiceCreate_AddsNormalizedTelegramChannel(t *testing.T) {
 	if tg.BotToken != "telegram-secret" {
 		t.Fatalf("expected telegram bot token to be preserved, got %q", tg.BotToken)
 	}
-}
 
-func TestServiceCreate_SelectsServerWithMostFreeSlots(t *testing.T) {
-	userID := uuid.New()
-	serverAID := uuid.New()
-	serverBID := uuid.New()
-
-	storage := &createTestClawStorage{
-		occupiedByServer: map[uuid.UUID]int{
-			serverAID: 1,
-			serverBID: 1,
-		},
-	}
-	keys := &createTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"}
-	svc := NewClaw(
-		storage,
-		&createTestChannelStorage{},
-		&createTestUserStorage{user: entities.User{
-			ID:               userID,
-			OpenRouterApiKey: "secret",
-			OpenRouterKeyID:  "key-id",
-			CreatedAt:        time.Now(),
-		}},
-		&createTestServerStorage{
-			server: entities.Server{ID: serverAID, MaxClaws: 2},
-			servers: []entities.Server{
-				{ID: serverAID, Name: "alpha", MaxClaws: 2},
-				{ID: serverBID, Name: "beta", MaxClaws: 4},
-			},
-		},
-		&createTestHosting{container: hosting.Container{ID: "container-1"}},
-		keys,
-		"",
-		GmailWatchConfig{},
-	)
-
-	cl, err := svc.Create(context.Background(), commands.CreateClaw{
-		UserID: userID,
-		Name:   "demo",
-		Model:  "openai/gpt-4.1-mini",
-	})
-	if err != nil {
-		t.Fatalf("create claw: %v", err)
-	}
-
-	if cl.ServerID != serverBID {
-		t.Fatalf("server id = %s, want %s", cl.ServerID, serverBID)
-	}
-}
-
-func TestServiceCreate_ReturnsErrorWhenNoServerHasFreeSlots(t *testing.T) {
-	userID := uuid.New()
-	serverAID := uuid.New()
-	serverBID := uuid.New()
-
-	keys := &createTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"}
-	svc := NewClaw(
-		&createTestClawStorage{
-			occupiedByServer: map[uuid.UUID]int{
-				serverAID: 1,
-				serverBID: 2,
-			},
-		},
-		&createTestChannelStorage{},
-		&createTestUserStorage{user: entities.User{
-			ID:               userID,
-			OpenRouterApiKey: "secret",
-			OpenRouterKeyID:  "key-id",
-			CreatedAt:        time.Now(),
-		}},
-		&createTestServerStorage{
-			server: entities.Server{ID: serverAID, MaxClaws: 1},
-			servers: []entities.Server{
-				{ID: serverAID, Name: "alpha", MaxClaws: 1},
-				{ID: serverBID, Name: "beta", MaxClaws: 2},
-			},
-		},
-		&createTestHosting{container: hosting.Container{ID: "container-1"}},
-		keys,
-		"",
-		GmailWatchConfig{},
-	)
-
-	_, err := svc.Create(context.Background(), commands.CreateClaw{
-		UserID: userID,
-		Name:   "demo",
-		Model:  "openai/gpt-4.1-mini",
-	})
-	if err == nil {
-		t.Fatal("expected no capacity error")
-	}
-
-	if !errors.Is(err, ErrNoServerCapacity) {
-		t.Fatalf("expected ErrNoServerCapacity, got %v", err)
+	if hostingStub.createCalls != 0 {
+		t.Fatalf("expected hosting create to not be called, got %d", hostingStub.createCalls)
 	}
 }

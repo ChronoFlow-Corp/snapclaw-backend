@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/sql"
@@ -69,6 +71,8 @@ func validatePlan(plan entities.Plan) error {
 		return sql.ErrInvalid
 	case plan.Name == "":
 		return sql.ErrInvalid
+	case !entities.IsValidPlanInterval(plan.Interval):
+		return sql.ErrInvalid
 	case plan.BillingAmountMinor <= 0:
 		return sql.ErrInvalid
 	case plan.BalanceCreditMinor <= 0:
@@ -78,6 +82,35 @@ func validatePlan(plan entities.Plan) error {
 	default:
 		return nil
 	}
+}
+
+func nextChargeAt(plan entities.Plan, from time.Time) (time.Time, error) {
+	switch plan.Interval {
+	case entities.PlanIntervalMonthly:
+		return from.AddDate(0, 1, 0), nil
+	case entities.PlanIntervalYearly:
+		return from.AddDate(1, 0, 0), nil
+	default:
+		return time.Time{}, sql.ErrInvalid
+	}
+}
+
+func subscriptionReturnURL(base string, subscriptionID uuid.UUID) (string, error) {
+	base = strings.TrimSpace(base)
+	if base == "" || subscriptionID == uuid.Nil {
+		return "", sql.ErrInvalid
+	}
+
+	parsed, err := url.Parse(base)
+	if err != nil {
+		return "", sql.ErrInvalid
+	}
+
+	query := parsed.Query()
+	query.Set("subscription_id", subscriptionID.String())
+	parsed.RawQuery = query.Encode()
+
+	return parsed.String(), nil
 }
 
 func validateSuccessfulPayment(

@@ -32,6 +32,7 @@ func TestCreatePlanWithMetrics(t *testing.T) {
 	plan, err := service.CreatePlan(context.Background(), commands.CreatePlan{
 		Code:               "starter",
 		Name:               "Starter",
+		Interval:           entities.PlanIntervalMonthly,
 		BillingAmountMinor: 99000,
 		BalanceCreditMinor: 150000,
 		Currency:           entities.RUB,
@@ -54,6 +55,7 @@ func TestCreatePlan(t *testing.T) {
 	plan, err := service.CreatePlan(context.Background(), commands.CreatePlan{
 		Code:               "starter",
 		Name:               "Starter",
+		Interval:           entities.PlanIntervalMonthly,
 		BillingAmountMinor: 99000,
 		BalanceCreditMinor: 150000,
 		Currency:           entities.RUB,
@@ -68,6 +70,10 @@ func TestCreatePlan(t *testing.T) {
 
 	if plan.Code != "starter" {
 		t.Fatalf("CreatePlan() code = %q, want %q", plan.Code, "starter")
+	}
+
+	if plan.Interval != entities.PlanIntervalMonthly {
+		t.Fatalf("CreatePlan() interval = %q, want %q", plan.Interval, entities.PlanIntervalMonthly)
 	}
 }
 
@@ -89,18 +95,44 @@ func TestSubscribeCreatesPendingSubscription(t *testing.T) {
 		},
 	}
 	service := newTestService(planStorage, subscriptionStorage, nil, nil, paymentStore, paymentInfra)
+	returnURLBase := "https://snapclaw.ru/onboard/payment-result"
 
-	confirmationURL, err := service.Subscribe(context.Background(), commands.Subscribe{
-		UserID: uuid.New(),
-		PlanID: plan.ID,
-		Now:    time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+	checkout, err := service.Subscribe(context.Background(), commands.Subscribe{
+		UserID:    uuid.New(),
+		PlanID:    plan.ID,
+		ReturnURL: returnURLBase,
+		Now:       time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatalf("Subscribe() error = %v", err)
 	}
 
-	if confirmationURL != "http://example.com/checkout/subscription" {
-		t.Fatalf("Subscribe() confirmationURL = %q", confirmationURL)
+	if checkout.ConfirmationURL != "http://example.com/checkout/subscription" {
+		t.Fatalf("Subscribe() confirmationURL = %q", checkout.ConfirmationURL)
+	}
+
+	if checkout.PaymentID != "pay_subscription" {
+		t.Fatalf("Subscribe() paymentID = %q, want %q", checkout.PaymentID, "pay_subscription")
+	}
+
+	if checkout.Status != entities.SubscriptionStatusPending {
+		t.Fatalf("Subscribe() status = %q, want %q", checkout.Status, entities.SubscriptionStatusPending)
+	}
+
+	if checkout.SubscriptionID == uuid.Nil {
+		t.Fatal("Subscribe() subscriptionID = nil, want non-nil")
+	}
+
+	if !strings.Contains(checkout.ReturnURL, "subscription_id="+checkout.SubscriptionID.String()) {
+		t.Fatalf("Subscribe() returnURL = %q, want subscription_id query", checkout.ReturnURL)
+	}
+
+	if paymentInfra.lastCreatePaymentReturnURL != checkout.ReturnURL {
+		t.Fatalf(
+			"CreatePayment() returnURL = %q, want %q",
+			paymentInfra.lastCreatePaymentReturnURL,
+			checkout.ReturnURL,
+		)
 	}
 
 	if len(subscriptionStorage.byUser) != 1 {
@@ -113,6 +145,85 @@ func TestSubscribeCreatesPendingSubscription(t *testing.T) {
 		}
 		if subscription.Status != entities.SubscriptionStatusPending {
 			t.Fatalf("Subscribe() status = %q, want %q", subscription.Status, entities.SubscriptionStatusPending)
+		}
+	}
+}
+
+func TestSubscribeSetsMonthlyCurrentPeriodEnd(t *testing.T) {
+	t.Parallel()
+
+	planStorage := newFakePlanStorage()
+	subscriptionStorage := newFakeSubscriptionStorage()
+	plan := newActivePlan()
+	plan.Interval = entities.PlanIntervalMonthly
+	planStorage.plans[plan.ID] = plan
+	paymentStore := &fakePaymentStorage{}
+	paymentInfra := &fakePaymentInfra{
+		createPaymentResult: entities.Payment{
+			ID: "pay_subscription",
+			Confirmation: entities.Confirmation{
+				Type:            entities.ConfirmationTypeRedirect,
+				ConfirmationURL: strPtr("http://example.com/checkout/subscription"),
+			},
+		},
+	}
+	service := newTestService(planStorage, subscriptionStorage, nil, nil, paymentStore, paymentInfra)
+	now := time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC)
+
+	_, err := service.Subscribe(context.Background(), commands.Subscribe{
+		UserID:    uuid.New(),
+		PlanID:    plan.ID,
+		ReturnURL: "https://snapclaw.ru/onboard/payment-result",
+		Now:       now,
+	})
+	if err != nil {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
+
+	for _, subscription := range subscriptionStorage.byUser {
+		want := now.AddDate(0, 1, 0)
+		if !subscription.CurrentPeriodEnd.Equal(want) {
+			t.Fatalf("CurrentPeriodEnd = %s, want %s", subscription.CurrentPeriodEnd, want)
+		}
+	}
+}
+
+func TestSubscribeSetsYearlyCurrentPeriodEnd(t *testing.T) {
+	t.Parallel()
+
+	planStorage := newFakePlanStorage()
+	subscriptionStorage := newFakeSubscriptionStorage()
+	plan := newActivePlan()
+	plan.Code = "starter"
+	plan.Interval = entities.PlanIntervalYearly
+	planStorage.plans[plan.ID] = plan
+	paymentStore := &fakePaymentStorage{}
+	paymentInfra := &fakePaymentInfra{
+		createPaymentResult: entities.Payment{
+			ID: "pay_subscription",
+			Confirmation: entities.Confirmation{
+				Type:            entities.ConfirmationTypeRedirect,
+				ConfirmationURL: strPtr("http://example.com/checkout/subscription"),
+			},
+		},
+	}
+	service := newTestService(planStorage, subscriptionStorage, nil, nil, paymentStore, paymentInfra)
+	now := time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC)
+
+	_, err := service.Subscribe(context.Background(), commands.Subscribe{
+		UserID:    uuid.New(),
+		PlanID:    plan.ID,
+		ReturnURL: "https://snapclaw.ru/onboard/payment-result",
+		Now:       now,
+	})
+	if err != nil {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
+
+	for _, subscription := range subscriptionStorage.byUser {
+		want := now.AddDate(1, 0, 0)
+		if !subscription.CurrentPeriodEnd.Equal(want) {
+			t.Fatalf("CurrentPeriodEnd = %s, want %s", subscription.CurrentPeriodEnd, want)
 		}
 	}
 }
@@ -136,9 +247,10 @@ func TestSubscribeReturnsPlanInactive(t *testing.T) {
 	)
 
 	_, err := service.Subscribe(context.Background(), commands.Subscribe{
-		UserID: uuid.New(),
-		PlanID: plan.ID,
-		Now:    time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+		UserID:    uuid.New(),
+		PlanID:    plan.ID,
+		ReturnURL: "https://snapclaw.ru/onboard/payment-result",
+		Now:       time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
 	})
 	if !errors.Is(err, ErrPlanInactive) {
 		t.Fatalf("Subscribe() error = %v, want ErrPlanInactive", err)
@@ -158,9 +270,10 @@ func TestSubscribeIncludesPlanLoadStageInError(t *testing.T) {
 	)
 
 	_, err := service.Subscribe(context.Background(), commands.Subscribe{
-		UserID: uuid.New(),
-		PlanID: uuid.New(),
-		Now:    time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+		UserID:    uuid.New(),
+		PlanID:    uuid.New(),
+		ReturnURL: "https://snapclaw.ru/onboard/payment-result",
+		Now:       time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
 	})
 	if err == nil {
 		t.Fatal("Subscribe() error = nil, want non-nil")
@@ -168,6 +281,144 @@ func TestSubscribeIncludesPlanLoadStageInError(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "load plan") {
 		t.Fatalf("Subscribe() error = %q, want to contain %q", err.Error(), "load plan")
+	}
+}
+
+func TestGetSubscriptionCheckoutStatusReturnsPendingPayment(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	plan := newActivePlan()
+	planStorage := newFakePlanStorage()
+	planStorage.plans[plan.ID] = plan
+
+	subscription := entities.UserSubscription{
+		ID:                 uuid.New(),
+		UserID:             userID,
+		PlanID:             plan.ID,
+		Status:             entities.SubscriptionStatusPending,
+		StartedAt:          time.Now().UTC(),
+		CurrentPeriodStart: time.Now().UTC(),
+		CurrentPeriodEnd:   time.Now().UTC().AddDate(0, 1, 0),
+		CreatedAt:          time.Now().UTC(),
+		UpdatedAt:          time.Now().UTC(),
+	}
+
+	paymentStore := &fakePaymentStorage{
+		latestBySub: map[uuid.UUID]entities.Payment{
+			subscription.ID: {
+				ID:             "pay_subscription",
+				UserID:         userID,
+				SubscriptionID: &subscription.ID,
+				Purpose:        entities.PaymentPurposeSubscription,
+				Status:         entities.Pending,
+				CreatedAt:      time.Now().UTC(),
+			},
+		},
+	}
+
+	service := newTestService(
+		planStorage,
+		&fakeSubscriptionStorage{
+			byID:   map[uuid.UUID]entities.UserSubscription{subscription.ID: subscription},
+			byUser: map[uuid.UUID]entities.UserSubscription{userID: subscription},
+		},
+		nil,
+		nil,
+		paymentStore,
+		nil,
+	)
+
+	status, err := service.GetSubscriptionCheckoutStatus(
+		context.Background(),
+		userID,
+		subscription.ID,
+	)
+	if err != nil {
+		t.Fatalf("GetSubscriptionCheckoutStatus() error = %v", err)
+	}
+
+	if status.SubscriptionID != subscription.ID {
+		t.Fatalf("SubscriptionID = %s, want %s", status.SubscriptionID, subscription.ID)
+	}
+	if status.SubscriptionStatus != entities.SubscriptionStatusPending {
+		t.Fatalf("SubscriptionStatus = %q, want %q", status.SubscriptionStatus, entities.SubscriptionStatusPending)
+	}
+	if status.PaymentStatus != string(entities.Pending) {
+		t.Fatalf("PaymentStatus = %q, want %q", status.PaymentStatus, entities.Pending)
+	}
+	if status.PlanID != plan.ID {
+		t.Fatalf("PlanID = %s, want %s", status.PlanID, plan.ID)
+	}
+	if status.NextChargeAt != nil {
+		t.Fatalf("NextChargeAt = %v, want nil", status.NextChargeAt)
+	}
+}
+
+func TestGetSubscriptionCheckoutStatusReturnsActiveNextCharge(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	plan := newActivePlan()
+	planStorage := newFakePlanStorage()
+	planStorage.plans[plan.ID] = plan
+	currentPeriodEnd := time.Date(2026, time.April, 25, 12, 0, 0, 0, time.UTC)
+
+	subscription := entities.UserSubscription{
+		ID:                 uuid.New(),
+		UserID:             userID,
+		PlanID:             plan.ID,
+		Status:             entities.SubscriptionStatusActive,
+		StartedAt:          time.Now().UTC(),
+		CurrentPeriodStart: time.Now().UTC(),
+		CurrentPeriodEnd:   currentPeriodEnd,
+		CreatedAt:          time.Now().UTC(),
+		UpdatedAt:          time.Now().UTC(),
+	}
+
+	paymentStore := &fakePaymentStorage{
+		latestBySub: map[uuid.UUID]entities.Payment{
+			subscription.ID: {
+				ID:             "pay_subscription",
+				UserID:         userID,
+				SubscriptionID: &subscription.ID,
+				Purpose:        entities.PaymentPurposeSubscription,
+				Status:         entities.Succeeded,
+				Paid:           true,
+				CreatedAt:      time.Now().UTC(),
+			},
+		},
+	}
+
+	service := newTestService(
+		planStorage,
+		&fakeSubscriptionStorage{
+			byID:   map[uuid.UUID]entities.UserSubscription{subscription.ID: subscription},
+			byUser: map[uuid.UUID]entities.UserSubscription{userID: subscription},
+		},
+		nil,
+		nil,
+		paymentStore,
+		nil,
+	)
+
+	status, err := service.GetSubscriptionCheckoutStatus(
+		context.Background(),
+		userID,
+		subscription.ID,
+	)
+	if err != nil {
+		t.Fatalf("GetSubscriptionCheckoutStatus() error = %v", err)
+	}
+
+	if status.SubscriptionStatus != entities.SubscriptionStatusActive {
+		t.Fatalf("SubscriptionStatus = %q, want %q", status.SubscriptionStatus, entities.SubscriptionStatusActive)
+	}
+	if status.PaymentStatus != string(entities.Succeeded) {
+		t.Fatalf("PaymentStatus = %q, want %q", status.PaymentStatus, entities.Succeeded)
+	}
+	if status.NextChargeAt == nil || !status.NextChargeAt.Equal(currentPeriodEnd) {
+		t.Fatalf("NextChargeAt = %v, want %v", status.NextChargeAt, currentPeriodEnd)
 	}
 }
 
@@ -410,6 +661,107 @@ func TestGetBillingSummaryUsesLatestSubscriptionPaymentForNextCharge(t *testing.
 	}
 }
 
+func TestGetBillingSummaryUsesYearlyPlanForNextCharge(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	plan := newActivePlan()
+	plan.Code = "starter"
+	plan.Interval = entities.PlanIntervalYearly
+	planStorage := newFakePlanStorage()
+	planStorage.plans[plan.ID] = plan
+
+	subscription := entities.UserSubscription{
+		ID:                 uuid.New(),
+		UserID:             userID,
+		PlanID:             plan.ID,
+		Status:             entities.SubscriptionStatusActive,
+		StartedAt:          time.Now().UTC(),
+		CurrentPeriodStart: time.Date(2026, time.March, 1, 0, 0, 0, 0, time.UTC),
+		CurrentPeriodEnd:   time.Date(2027, time.March, 1, 0, 0, 0, 0, time.UTC),
+		CreatedAt:          time.Now().UTC(),
+		UpdatedAt:          time.Now().UTC(),
+	}
+
+	lastPaymentTime := time.Date(2026, time.March, 10, 15, 0, 0, 0, time.UTC)
+	paymentStore := &fakePaymentStorage{
+		latestSucceeded: map[uuid.UUID]entities.Payment{
+			userID: {
+				ID:        "pay_subscription",
+				UserID:    userID,
+				Purpose:   entities.PaymentPurposeSubscription,
+				Status:    entities.Succeeded,
+				Paid:      true,
+				CreatedAt: lastPaymentTime,
+			},
+		},
+	}
+
+	service := newTestService(planStorage, &fakeSubscriptionStorage{
+		byUser: map[uuid.UUID]entities.UserSubscription{userID: subscription},
+	}, &fakeBalanceEntryStorage{
+		balance: map[uuid.UUID]int64{userID: 5000},
+	}, &fakeUserStorage{
+		users: map[uuid.UUID]entities.User{userID: {ID: userID, BalanceMinor: 5000}},
+	}, paymentStore, nil)
+
+	summary, err := service.GetBillingSummary(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("GetBillingSummary() error = %v", err)
+	}
+
+	if summary.NextChargeAt == nil {
+		t.Fatal("NextChargeAt = nil, want non-nil")
+	}
+
+	want := lastPaymentTime.AddDate(1, 0, 0)
+	if !summary.NextChargeAt.Equal(want) {
+		t.Fatalf("NextChargeAt = %s, want %s", summary.NextChargeAt, want)
+	}
+}
+
+func TestChangePlanRejectsActiveSubscription(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	currentPlan := newActivePlan()
+	targetPlan := newActivePlan()
+	targetPlan.ID = uuid.New()
+	targetPlan.Code = "starter"
+	targetPlan.Interval = entities.PlanIntervalYearly
+
+	planStorage := newFakePlanStorage()
+	planStorage.plans[currentPlan.ID] = currentPlan
+	planStorage.plans[targetPlan.ID] = targetPlan
+
+	subscriptionStorage := &fakeSubscriptionStorage{
+		byUser: map[uuid.UUID]entities.UserSubscription{
+			userID: {
+				ID:                 uuid.New(),
+				UserID:             userID,
+				PlanID:             currentPlan.ID,
+				Status:             entities.SubscriptionStatusActive,
+				StartedAt:          time.Now().UTC(),
+				CurrentPeriodStart: time.Now().UTC(),
+				CurrentPeriodEnd:   time.Now().UTC().AddDate(0, 1, 0),
+				CreatedAt:          time.Now().UTC(),
+				UpdatedAt:          time.Now().UTC(),
+			},
+		},
+	}
+
+	service := newTestService(planStorage, subscriptionStorage, nil, nil, nil, nil)
+
+	_, err := service.ChangePlan(context.Background(), commands.ChangePlan{
+		UserID: userID,
+		PlanID: targetPlan.ID,
+		Now:    time.Now().UTC(),
+	})
+	if !errors.Is(err, ErrSubscriptionChangeWhileActive) {
+		t.Fatalf("ChangePlan() error = %v, want ErrSubscriptionChangeWhileActive", err)
+	}
+}
+
 func TestEventPaymentReturnsInvalidEventType(t *testing.T) {
 	t.Parallel()
 
@@ -447,9 +799,10 @@ func TestBillingErrorClassificationPlanInactive(t *testing.T) {
 	)
 
 	_, err := service.Subscribe(context.Background(), commands.Subscribe{
-		UserID: uuid.New(),
-		PlanID: plan.ID,
-		Now:    time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+		UserID:    uuid.New(),
+		PlanID:    plan.ID,
+		ReturnURL: "https://snapclaw.ru/onboard/payment-result",
+		Now:       time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
 	})
 	if err == nil {
 		t.Fatal("Subscribe() error = nil, want non-nil")
@@ -482,9 +835,10 @@ func TestBillingErrorClassificationExternalPaymentFailure(t *testing.T) {
 	)
 
 	_, err := service.Subscribe(context.Background(), commands.Subscribe{
-		UserID: uuid.New(),
-		PlanID: plan.ID,
-		Now:    time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
+		UserID:    uuid.New(),
+		PlanID:    plan.ID,
+		ReturnURL: "https://snapclaw.ru/onboard/payment-result",
+		Now:       time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC),
 	})
 	if err == nil {
 		t.Fatal("Subscribe() error = nil, want non-nil")
@@ -598,6 +952,7 @@ func newActivePlan() entities.Plan {
 		ID:                 uuid.New(),
 		Code:               "starter",
 		Name:               "Starter",
+		Interval:           entities.PlanIntervalMonthly,
 		BillingAmountMinor: 99000,
 		BalanceCreditMinor: 150000,
 		Currency:           entities.RUB,
@@ -675,6 +1030,17 @@ func (s *fakeSubscriptionStorage) Create(_ context.Context, subscription entitie
 func (s *fakeSubscriptionStorage) GetByID(_ context.Context, id uuid.UUID) (entities.UserSubscription, error) {
 	subscription, ok := s.byID[id]
 	if !ok {
+		return entities.UserSubscription{}, infraSQL.ErrNotFound
+	}
+	return subscription, nil
+}
+
+func (s *fakeSubscriptionStorage) GetByIDAndUserID(
+	_ context.Context,
+	id, userID uuid.UUID,
+) (entities.UserSubscription, error) {
+	subscription, ok := s.byID[id]
+	if !ok || subscription.UserID != userID {
 		return entities.UserSubscription{}, infraSQL.ErrNotFound
 	}
 	return subscription, nil
@@ -818,6 +1184,7 @@ func (s *fakeUserStorage) GetByID(_ context.Context, id uuid.UUID) (entities.Use
 
 type fakePaymentStorage struct {
 	latestSucceeded map[uuid.UUID]entities.Payment
+	latestBySub     map[uuid.UUID]entities.Payment
 	byID            map[string]entities.Payment
 	byUser          map[uuid.UUID][]entities.Payment
 }
@@ -829,6 +1196,22 @@ func (s *fakePaymentStorage) GetLatestSucceededByPurpose(_ context.Context, user
 
 	payment, ok := s.latestSucceeded[userID]
 	if !ok {
+		return entities.Payment{}, infraSQL.ErrNotFound
+	}
+
+	return payment, nil
+}
+
+func (s *fakePaymentStorage) GetLatestBySubscriptionID(
+	_ context.Context,
+	subscriptionID, userID uuid.UUID,
+) (entities.Payment, error) {
+	if s == nil || s.latestBySub == nil {
+		return entities.Payment{}, infraSQL.ErrNotFound
+	}
+
+	payment, ok := s.latestBySub[subscriptionID]
+	if !ok || payment.UserID != userID {
 		return entities.Payment{}, infraSQL.ErrNotFound
 	}
 
@@ -886,10 +1269,11 @@ func (s *fakePaymentStorage) Delete(_ context.Context, id string, userID uuid.UU
 }
 
 type fakePaymentInfra struct {
-	createPaymentResult entities.Payment
-	createPaymentErr    error
-	captureResult       entities.Payment
-	captureErr          error
+	createPaymentResult        entities.Payment
+	createPaymentErr           error
+	lastCreatePaymentReturnURL string
+	captureResult              entities.Payment
+	captureErr                 error
 }
 
 func (f *fakePaymentInfra) CreatePayment(
@@ -898,13 +1282,17 @@ func (f *fakePaymentInfra) CreatePayment(
 	_ uuid.UUID,
 	_ bool,
 	_ *uuid.UUID,
+	returnURL string,
 ) (entities.Payment, error) {
 	if f.createPaymentErr != nil {
 		return entities.Payment{}, f.createPaymentErr
 	}
 
+	f.lastCreatePaymentReturnURL = returnURL
+
 	result := f.createPaymentResult
 	result.Amount = amount
+	result.Confirmation.ReturnURL = strPtr(returnURL)
 
 	return result, nil
 }

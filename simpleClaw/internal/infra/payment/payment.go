@@ -34,10 +34,15 @@ func (y *YooKassa) CreatePayment(
 	userID uuid.UUID,
 	saveMethod bool,
 	paymentMethodID *uuid.UUID,
+	returnURL string,
 ) (entities.Payment, error) {
 	const op = "payment.CreatePayment"
 
 	h := yookassa.NewPaymentHandler(y.cl)
+
+	if returnURL == "" {
+		returnURL = y.returnURL
+	}
 
 	pObj := &yoopayment.Payment{
 		Amount: &yoocommon.Amount{
@@ -47,7 +52,7 @@ func (y *YooKassa) CreatePayment(
 		SavePaymentMethod: saveMethod,
 		Confirmation: entities.Confirmation{
 			Type:      entities.ConfirmationTypeRedirect,
-			ReturnURL: &y.returnURL,
+			ReturnURL: &returnURL,
 		},
 		MerchantCustomerID: userID.String(),
 	}

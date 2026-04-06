@@ -5,6 +5,7 @@ import "time"
 type CreatePlanRequest struct {
 	Code               string `json:"code"`
 	Name               string `json:"name"`
+	Interval           string `json:"interval"`
 	BillingAmountMinor int64  `json:"billing_amount_minor"`
 	BalanceCreditMinor int64  `json:"balance_credit_minor"`
 	Currency           string `json:"currency"`
@@ -13,6 +14,7 @@ type CreatePlanRequest struct {
 type UpdatePlanRequest struct {
 	Code               string `json:"code"`
 	Name               string `json:"name"`
+	Interval           string `json:"interval"`
 	BillingAmountMinor int64  `json:"billing_amount_minor"`
 	BalanceCreditMinor int64  `json:"balance_credit_minor"`
 	Currency           string `json:"currency"`
@@ -23,6 +25,7 @@ type PlanResponse struct {
 	ID                 string    `json:"id"`
 	Code               string    `json:"code"`
 	Name               string    `json:"name"`
+	Interval           string    `json:"interval"`
 	BillingAmountMinor int64     `json:"billing_amount_minor"`
 	BalanceCreditMinor int64     `json:"balance_credit_minor"`
 	Currency           string    `json:"currency"`

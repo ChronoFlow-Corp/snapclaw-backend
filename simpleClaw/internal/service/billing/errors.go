@@ -7,16 +7,17 @@ import (
 )
 
 var (
-	ErrInsufficientBalance        = errors.New("billing: insufficient balance")
-	ErrPlanInactive               = errors.New("billing: plan inactive")
-	ErrSubscriptionNotFound       = errors.New("billing: subscription not found")
-	ErrSubscriptionNotPending     = errors.New("billing: subscription not pending")
-	ErrPaymentNotPaid             = errors.New("billing: payment not paid")
-	ErrPaymentConfirmationMissing = errors.New("billing: payment confirmation missing")
-	ErrPaymentSubscriptionMissing = errors.New("billing: payment subscription missing")
-	ErrPaymentEventTypeInvalid    = errors.New("billing: payment event type invalid")
-	ErrOpenRouterAPIKeyInvalid    = errors.New("billing: openrouter api key invalid")
-	ErrUnsupportedCurrency        = errors.New("billing: unsupported currency")
+	ErrInsufficientBalance           = errors.New("billing: insufficient balance")
+	ErrPlanInactive                  = errors.New("billing: plan inactive")
+	ErrSubscriptionChangeWhileActive = errors.New("billing: cannot change active subscription")
+	ErrSubscriptionNotFound          = errors.New("billing: subscription not found")
+	ErrSubscriptionNotPending        = errors.New("billing: subscription not pending")
+	ErrPaymentNotPaid                = errors.New("billing: payment not paid")
+	ErrPaymentConfirmationMissing    = errors.New("billing: payment confirmation missing")
+	ErrPaymentSubscriptionMissing    = errors.New("billing: payment subscription missing")
+	ErrPaymentEventTypeInvalid       = errors.New("billing: payment event type invalid")
+	ErrOpenRouterAPIKeyInvalid       = errors.New("billing: openrouter api key invalid")
+	ErrUnsupportedCurrency           = errors.New("billing: unsupported currency")
 )
 
 func decorateValidation(err error) error {

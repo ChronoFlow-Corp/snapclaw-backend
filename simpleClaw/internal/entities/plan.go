@@ -10,6 +10,7 @@ type Plan struct {
 	ID                 uuid.UUID
 	Code               string
 	Name               string
+	Interval           string
 	BillingAmountMinor int64
 	BalanceCreditMinor int64
 	Currency           string

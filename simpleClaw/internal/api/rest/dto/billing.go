@@ -14,6 +14,22 @@ type ChangeSubscriptionRequest struct {
 	PlanID string `json:"plan_id"`
 }
 
+type SubscriptionCheckoutResponse struct {
+	SubscriptionID  string `json:"subscription_id"`
+	PaymentID       string `json:"payment_id"`
+	Status          string `json:"status"`
+	ConfirmationURL string `json:"confirmation_url"`
+	ReturnURL       string `json:"return_url"`
+}
+
+type SubscriptionCheckoutStatusResponse struct {
+	SubscriptionID     string     `json:"subscription_id"`
+	SubscriptionStatus string     `json:"subscription_status"`
+	PaymentStatus      string     `json:"payment_status"`
+	PlanID             string     `json:"plan_id"`
+	NextChargeAt       *time.Time `json:"next_charge_at,omitempty"`
+}
+
 type SubscriptionResponse struct {
 	ID                 string     `json:"id"`
 	PlanID             string     `json:"plan_id"`

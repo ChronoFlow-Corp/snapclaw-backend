@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"path"
 	"shared/pkg/jwt"
 	"shared/pkg/response"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +31,11 @@ type billingService interface {
 	ListPlans(ctx context.Context, includeInactive bool) ([]entities.Plan, error)
 	UpdatePlan(ctx context.Context, cmd commands.UpdatePlan) (entities.Plan, error)
 	DeactivatePlan(ctx context.Context, id uuid.UUID) error
-	Subscribe(ctx context.Context, cmd commands.Subscribe) (string, error)
+	Subscribe(ctx context.Context, cmd commands.Subscribe) (result.SubscriptionCheckout, error)
+	GetSubscriptionCheckoutStatus(
+		ctx context.Context,
+		userID, subscriptionID uuid.UUID,
+	) (result.SubscriptionCheckoutStatus, error)
 	ChangePlan(ctx context.Context, cmd commands.ChangePlan) (entities.UserSubscription, error)
 	CancelSubscription(ctx context.Context, cmd commands.CancelSubscription) error
 	GetCurrentSubscription(
@@ -49,6 +56,7 @@ type Billing struct {
 	service                 billingService
 	users                   adminService
 	j                       jwt.JWT
+	frontendURL             string
 	openRouterWebhookSecret string
 }
 
@@ -56,12 +64,14 @@ func NewBilling(
 	service billingService,
 	users adminService,
 	j jwt.JWT,
+	frontendURL string,
 	openRouterWebhookSecret string,
 ) *Billing {
 	return &Billing{
 		service:                 service,
 		users:                   users,
 		j:                       j,
+		frontendURL:             strings.TrimSpace(frontendURL),
 		openRouterWebhookSecret: strings.TrimSpace(openRouterWebhookSecret),
 	}
 }
@@ -69,6 +79,7 @@ func NewBilling(
 func (b *Billing) Register(r chi.Router) {
 	r.Post("/billing/webhook/yookassa", b.HandleYooKassaWebhook)
 	r.Post("/billing/webhook/openrouter", b.HandleOpenRouterWebhook)
+	r.Get("/plans/public", b.ListPublicPlans)
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.AuthJwt(b.j))
@@ -84,6 +95,7 @@ func (b *Billing) Register(r chi.Router) {
 		r.Use(middleware.AuthJwt(b.j))
 		r.Get("/me/billing", b.GetBilling)
 		r.Get("/me/subscription", b.GetSubscription)
+		r.Get("/me/subscription/{id}/checkout-status", b.GetSubscriptionCheckoutStatus)
 		r.Post("/me/subscription", b.Subscribe)
 		r.Patch("/me/subscription", b.ChangePlan)
 		r.Delete("/me/subscription", b.CancelSubscription)
@@ -253,6 +265,7 @@ func (b *Billing) CreatePlan(w http.ResponseWriter, r *http.Request) {
 	plan, err := b.service.CreatePlan(r.Context(), commands.CreatePlan{
 		Code:               req.Code,
 		Name:               req.Name,
+		Interval:           req.Interval,
 		BillingAmountMinor: req.BillingAmountMinor,
 		BalanceCreditMinor: req.BalanceCreditMinor,
 		Currency:           req.Currency,
@@ -265,6 +278,50 @@ func (b *Billing) CreatePlan(w http.ResponseWriter, r *http.Request) {
 	response.RespondOK(w, planToResponse(plan))
 }
 
+func (b *Billing) ListPublicPlans(w http.ResponseWriter, r *http.Request) {
+	plans, err := b.service.ListPlans(r.Context(), false)
+	if err != nil {
+		respondServiceError(w, err)
+		return
+	}
+
+	grouped := make(map[string]dto.PublicPlanGroupResponse, len(plans))
+	for _, plan := range plans {
+		group := grouped[plan.Code]
+		if group.Code == "" {
+			group.Code = plan.Code
+			group.Name = plan.Name
+		}
+
+		variant := &dto.PublicPlanVariantResponse{
+			PlanID:             plan.ID.String(),
+			BillingAmountMinor: plan.BillingAmountMinor,
+			BalanceCreditMinor: plan.BalanceCreditMinor,
+			Currency:           plan.Currency,
+		}
+
+		switch plan.Interval {
+		case entities.PlanIntervalMonthly:
+			group.Monthly = variant
+		case entities.PlanIntervalYearly:
+			group.Yearly = variant
+		}
+
+		grouped[plan.Code] = group
+	}
+
+	responses := make([]dto.PublicPlanGroupResponse, 0, len(grouped))
+	for _, group := range grouped {
+		responses = append(responses, group)
+	}
+
+	sort.Slice(responses, func(i, j int) bool {
+		return responses[i].Code < responses[j].Code
+	})
+
+	response.RespondOK(w, responses)
+}
+
 func (b *Billing) ListPlans(w http.ResponseWriter, r *http.Request) {
 	includeInactive, _ := strconv.ParseBool(r.URL.Query().Get("include_inactive"))
 
@@ -274,12 +331,12 @@ func (b *Billing) ListPlans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := make([]dto.PlanResponse, 0, len(plans))
+	responses := make([]dto.PlanResponse, 0, len(plans))
 	for _, plan := range plans {
-		result = append(result, planToResponse(plan))
+		responses = append(responses, planToResponse(plan))
 	}
 
-	response.RespondOK(w, result)
+	response.RespondOK(w, responses)
 }
 
 func (b *Billing) GetPlan(w http.ResponseWriter, r *http.Request) {
@@ -324,6 +381,7 @@ func (b *Billing) UpdatePlan(w http.ResponseWriter, r *http.Request) {
 		ID:                 id,
 		Code:               req.Code,
 		Name:               req.Name,
+		Interval:           req.Interval,
 		BillingAmountMinor: req.BillingAmountMinor,
 		BalanceCreditMinor: req.BalanceCreditMinor,
 		Currency:           req.Currency,
@@ -426,17 +484,24 @@ func (b *Billing) Subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	confirm, err := b.service.Subscribe(r.Context(), commands.Subscribe{
-		UserID: userID,
-		PlanID: planID,
-		Now:    time.Now().UTC(),
+	checkout, err := b.service.Subscribe(r.Context(), commands.Subscribe{
+		UserID:    userID,
+		PlanID:    planID,
+		ReturnURL: subscriptionReturnURLBase(b.frontendURL),
+		Now:       time.Now().UTC(),
 	})
 	if err != nil {
 		respondServiceError(w, err)
 		return
 	}
 
-	http.Redirect(w, r, confirm, http.StatusSeeOther)
+	response.RespondOK(w, dto.SubscriptionCheckoutResponse{
+		SubscriptionID:  checkout.SubscriptionID.String(),
+		PaymentID:       checkout.PaymentID,
+		Status:          checkout.Status,
+		ConfirmationURL: checkout.ConfirmationURL,
+		ReturnURL:       checkout.ReturnURL,
+	})
 }
 
 func (b *Billing) TopUp(w http.ResponseWriter, r *http.Request) {
@@ -488,6 +553,40 @@ func (b *Billing) TopUp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, u, http.StatusSeeOther)
+}
+
+func (b *Billing) GetSubscriptionCheckoutStatus(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(
+			w,
+			response.Error{Code: http.StatusUnauthorized, Message: "invalid user id"},
+		)
+		return
+	}
+
+	subscriptionID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.RespondError(
+			w,
+			response.Error{Code: http.StatusBadRequest, Message: "invalid subscription id"},
+		)
+		return
+	}
+
+	status, err := b.service.GetSubscriptionCheckoutStatus(r.Context(), userID, subscriptionID)
+	if err != nil {
+		respondServiceError(w, err)
+		return
+	}
+
+	response.RespondOK(w, dto.SubscriptionCheckoutStatusResponse{
+		SubscriptionID:     status.SubscriptionID.String(),
+		SubscriptionStatus: status.SubscriptionStatus,
+		PaymentStatus:      status.PaymentStatus,
+		PlanID:             status.PlanID.String(),
+		NextChargeAt:       status.NextChargeAt,
+	})
 }
 
 func (b *Billing) ChangePlan(w http.ResponseWriter, r *http.Request) {
@@ -581,6 +680,7 @@ func planToResponse(plan entities.Plan) dto.PlanResponse {
 		ID:                 plan.ID.String(),
 		Code:               plan.Code,
 		Name:               plan.Name,
+		Interval:           plan.Interval,
 		BillingAmountMinor: plan.BillingAmountMinor,
 		BalanceCreditMinor: plan.BalanceCreditMinor,
 		Currency:           plan.Currency,
@@ -603,15 +703,33 @@ func subscriptionToResponse(subscription entities.UserSubscription) dto.Subscrip
 }
 
 func billingSummaryResponse(summary billingsvc.BillingSummary) dto.BillingSummaryResponse {
-	result := dto.BillingSummaryResponse{
+	summaryResponse := dto.BillingSummaryResponse{
 		BalanceMinor: summary.BalanceMinor,
 		NextChargeAt: summary.NextChargeAt,
 	}
 
 	if summary.CurrentSubscription != nil {
 		subscription := subscriptionToResponse(summary.CurrentSubscription.Subscription)
-		result.CurrentSubscription = &subscription
+		summaryResponse.CurrentSubscription = &subscription
 	}
 
-	return result
+	return summaryResponse
+}
+
+func subscriptionReturnURLBase(frontendURL string) string {
+	frontendURL = strings.TrimSpace(frontendURL)
+	if frontendURL == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(frontendURL)
+	if err != nil {
+		return ""
+	}
+
+	parsed.Path = path.Join(parsed.Path, "onboard", "payment-result")
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+
+	return parsed.String()
 }

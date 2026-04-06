@@ -85,6 +85,7 @@ func (s *Storage) Update(ctx context.Context, plan entities.Plan) error {
 		Updates(map[string]any{
 			"code":                 plan.Code,
 			"name":                 plan.Name,
+			"interval":             plan.Interval,
 			"billing_amount_minor": plan.BillingAmountMinor,
 			"balance_credit_minor": plan.BalanceCreditMinor,
 			"currency":             plan.Currency,
@@ -131,6 +132,8 @@ func validatePlan(plan entities.Plan) error {
 		return invalidPlan("plan code is required")
 	case strings.TrimSpace(plan.Name) == "":
 		return invalidPlan("plan name is required")
+	case !entities.IsValidPlanInterval(strings.TrimSpace(plan.Interval)):
+		return invalidPlan("plan interval must be one of monthly, yearly")
 	case plan.BillingAmountMinor <= 0:
 		return invalidPlan("plan billing_amount_minor must be greater than 0")
 	case plan.BalanceCreditMinor <= 0:
@@ -172,6 +175,7 @@ func mapToModel(plan entities.Plan) models.Plan {
 		ID:                 plan.ID,
 		Code:               plan.Code,
 		Name:               plan.Name,
+		Interval:           plan.Interval,
 		BillingAmountMinor: plan.BillingAmountMinor,
 		BalanceCreditMinor: plan.BalanceCreditMinor,
 		Currency:           plan.Currency,
@@ -186,6 +190,7 @@ func mapToEntity(plan models.Plan) entities.Plan {
 		ID:                 plan.ID,
 		Code:               plan.Code,
 		Name:               plan.Name,
+		Interval:           plan.Interval,
 		BillingAmountMinor: plan.BillingAmountMinor,
 		BalanceCreditMinor: plan.BalanceCreditMinor,
 		Currency:           plan.Currency,

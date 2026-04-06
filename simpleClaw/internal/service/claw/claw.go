@@ -157,16 +157,7 @@ func (s *Service) Create(
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrModelRequired)
 	}
 
-	if s.hosting == nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrHostingMissing)
-	}
-
 	user, err := s.users.GetByID(ctx, cm.UserID)
-	if err != nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-	}
-
-	server, err := s.selectAvailableServer(ctx)
 	if err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
@@ -235,7 +226,6 @@ func (s *Service) Create(
 		ID:        uuid.New(),
 		Name:      cm.Name,
 		UserID:    user.ID,
-		ServerID:  server.ID,
 		Status:    entities.StatusStop,
 		Config:    cfg,
 		CreatedAt: now,
@@ -243,26 +233,6 @@ func (s *Service) Create(
 	}
 
 	if err = s.claws.Create(ctx, cl, channelIDs); err != nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-	}
-
-	container, err := s.hosting.Create(ctx, cl, server)
-	if err != nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-	}
-
-	if container.ServerID != uuid.Nil {
-		cl.ServerID = container.ServerID
-	}
-
-	cl.ContainerID = container.ID
-	if container.Status != "" {
-		cl.Status = container.Status
-	} else {
-		cl.Status = entities.StatusStop
-	}
-
-	if err = s.claws.UpdateRuntime(ctx, cl.ID, cl.ServerID, cl.ContainerID, cl.Status); err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -496,10 +466,6 @@ func (s *Service) Update(
 		return entities.Claw{}, wrapUpdateStage(op, updateStageDBUpdate, err)
 	}
 
-	if err := s.writeArchiveFromConfig(desired); err != nil {
-		return entities.Claw{}, wrapUpdateStage(op, updateStageArchiveSync, err)
-	}
-
 	return desired, nil
 }
 
@@ -566,9 +532,23 @@ func (s *Service) Start(
 			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 		}
 
-		if err := s.hosting.Delete(ctx, cl, srv, false); err != nil {
+		if err := s.hosting.Start(ctx, cl, srv); err != nil {
 			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 		}
+
+		cl.Status = entities.StatusRunning
+
+		if err := s.claws.UpdateRuntime(
+			ctx,
+			cl.ID,
+			cl.ServerID,
+			cl.ContainerID,
+			cl.Status,
+		); err != nil {
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+		}
+
+		return cl, nil
 	}
 
 	srv, err := s.selectAvailableServer(ctx)
@@ -576,8 +556,15 @@ func (s *Service) Start(
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	if err := s.restoreConfigArchive(ctx, cl, srv); err != nil {
+	archiveExists, err := s.archiveExists(cl)
+	if err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if archiveExists {
+		if err := s.restoreConfigArchive(ctx, cl, srv); err != nil {
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+		}
 	}
 
 	container, err := s.hosting.Create(ctx, cl, srv)
@@ -919,6 +906,10 @@ func (s *Service) Delete(
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
+	if err := s.removeArchive(cl); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
 	return nil
 }
 
@@ -1107,6 +1098,48 @@ func (s *Service) archiveFilePath(cl entities.Claw) (string, error) {
 	}
 
 	return filepath.Join(s.archivePath, cl.UserID.String(), cl.ID.String()+".tar"), nil
+}
+
+func (s *Service) archiveExists(cl entities.Claw) (bool, error) {
+	const op = "service.Claw.archiveExists"
+
+	if s.archivePath == "" {
+		return false, nil
+	}
+
+	archiveFile, err := s.archiveFilePath(cl)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if _, err := os.Stat(archiveFile); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return true, nil
+}
+
+func (s *Service) removeArchive(cl entities.Claw) error {
+	const op = "service.Claw.removeArchive"
+
+	if s.archivePath == "" {
+		return nil
+	}
+
+	archiveFile, err := s.archiveFilePath(cl)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := os.Remove(archiveFile); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
 }
 
 func (s *Service) selectAvailableServer(ctx context.Context) (entities.Server, error) {

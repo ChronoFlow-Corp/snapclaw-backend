@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	"simpleClaw/internal/infra/sql"
 	billingservice "simpleClaw/internal/service/billing"
 	billingcommands "simpleClaw/internal/service/billing/commands"
+	billingresult "simpleClaw/internal/service/billing/result"
 	clawcommands "simpleClaw/internal/service/claw/commands"
 	servercommands "simpleClaw/internal/service/server/commands"
 	usercommands "simpleClaw/internal/service/user/commands"
@@ -430,7 +433,7 @@ func TestRoutesIntegration(t *testing.T) {
 	t.Run("POST /api/me/subscription", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		plan := env.billingService.seedPlan("starter")
+		plan := env.billingService.seedPlan("starter-monthly")
 
 		rr := env.request(
 			t,
@@ -439,18 +442,42 @@ func TestRoutesIntegration(t *testing.T) {
 			map[string]any{"plan_id": plan.ID.String()},
 			accessCookie(env.accessToken),
 		)
-		if rr.Code != http.StatusSeeOther {
+		if rr.Code != http.StatusOK {
 			t.Fatalf("unexpected status: %d", rr.Code)
 		}
 
-		if location := rr.Header().Get("Location"); location == "" {
-			t.Fatal("expected redirect location")
+		var payload struct {
+			SubscriptionID  string `json:"subscription_id"`
+			PaymentID       string `json:"payment_id"`
+			Status          string `json:"status"`
+			ConfirmationURL string `json:"confirmation_url"`
+			ReturnURL       string `json:"return_url"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if payload.SubscriptionID == "" {
+			t.Fatal("expected non-empty subscription id")
+		}
+		if payload.PaymentID == "" {
+			t.Fatal("expected non-empty payment id")
+		}
+		if payload.Status != entities.SubscriptionStatusPending {
+			t.Fatalf("unexpected status payload: %s", payload.Status)
+		}
+		if payload.ConfirmationURL == "" {
+			t.Fatal("expected confirmation_url")
+		}
+		if !strings.Contains(payload.ReturnURL, "subscription_id="+payload.SubscriptionID) {
+			t.Fatalf("unexpected return_url: %s", payload.ReturnURL)
+		}
+		if location := rr.Header().Get("Location"); location != "" {
+			t.Fatalf("unexpected redirect location: %s", location)
 		}
 	})
 
 	t.Run("POST /api/me/subscription maps inactive plan error", func(t *testing.T) {
 		env := newTestEnv(t)
-		plan := env.billingService.seedPlan("starter")
+		plan := env.billingService.seedPlan("starter-monthly")
 		env.billingService.subscribeErr = billingservice.ErrPlanInactive
 
 		rr := env.request(
@@ -475,9 +502,125 @@ func TestRoutesIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("PATCH /api/me/subscription rejects active plan change", func(t *testing.T) {
+		env := newTestEnv(t)
+		currentPlan := env.billingService.seedPlan("starter-monthly")
+		targetPlan := env.billingService.seedPlan("starter-yearly")
+
+		now := time.Now().UTC()
+		subscription := entities.UserSubscription{
+			ID:                 uuid.New(),
+			UserID:             env.user.ID,
+			PlanID:             currentPlan.ID,
+			Status:             entities.SubscriptionStatusActive,
+			StartedAt:          now,
+			CurrentPeriodStart: now,
+			CurrentPeriodEnd:   now.AddDate(0, 1, 0),
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}
+		env.billingService.subscriptions[env.user.ID] = subscription
+
+		rr := env.request(
+			t,
+			http.MethodPatch,
+			"/api/me/subscription",
+			map[string]any{"plan_id": targetPlan.ID.String()},
+			accessCookie(env.accessToken),
+		)
+		if rr.Code != http.StatusConflict {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+	})
+
+	t.Run("GET /api/me/subscription/{id}/checkout-status", func(t *testing.T) {
+		env := newTestEnv(t)
+		plan := env.billingService.seedPlan("starter-monthly")
+		now := time.Now().UTC()
+		subscription := entities.UserSubscription{
+			ID:                 uuid.New(),
+			UserID:             env.user.ID,
+			PlanID:             plan.ID,
+			Status:             entities.SubscriptionStatusPending,
+			StartedAt:          now,
+			CurrentPeriodStart: now,
+			CurrentPeriodEnd:   now.AddDate(0, 1, 0),
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}
+		env.billingService.subscriptions[env.user.ID] = subscription
+		env.billingService.paymentStatusBySubscription[subscription.ID] = string(entities.Pending)
+
+		rr := env.request(
+			t,
+			http.MethodGet,
+			"/api/me/subscription/"+subscription.ID.String()+"/checkout-status",
+			nil,
+			accessCookie(env.accessToken),
+		)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		var payload struct {
+			SubscriptionID     string  `json:"subscription_id"`
+			SubscriptionStatus string  `json:"subscription_status"`
+			PaymentStatus      string  `json:"payment_status"`
+			PlanID             string  `json:"plan_id"`
+			NextChargeAt       *string `json:"next_charge_at"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if payload.SubscriptionID != subscription.ID.String() {
+			t.Fatalf("unexpected subscription id: %s", payload.SubscriptionID)
+		}
+		if payload.SubscriptionStatus != entities.SubscriptionStatusPending {
+			t.Fatalf("unexpected subscription status: %s", payload.SubscriptionStatus)
+		}
+		if payload.PaymentStatus != string(entities.Pending) {
+			t.Fatalf("unexpected payment status: %s", payload.PaymentStatus)
+		}
+		if payload.PlanID != plan.ID.String() {
+			t.Fatalf("unexpected plan id: %s", payload.PlanID)
+		}
+		if payload.NextChargeAt != nil {
+			t.Fatalf("unexpected next_charge_at: %v", payload.NextChargeAt)
+		}
+	})
+
+	t.Run("GET /api/me/subscription/{id}/checkout-status returns not found for another user", func(t *testing.T) {
+		env := newTestEnv(t)
+		plan := env.billingService.seedPlan("starter-monthly")
+		now := time.Now().UTC()
+		subscription := entities.UserSubscription{
+			ID:                 uuid.New(),
+			UserID:             uuid.New(),
+			PlanID:             plan.ID,
+			Status:             entities.SubscriptionStatusPending,
+			StartedAt:          now,
+			CurrentPeriodStart: now,
+			CurrentPeriodEnd:   now.AddDate(0, 1, 0),
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}
+		env.billingService.subscriptions[subscription.UserID] = subscription
+		env.billingService.paymentStatusBySubscription[subscription.ID] = string(entities.Pending)
+
+		rr := env.request(
+			t,
+			http.MethodGet,
+			"/api/me/subscription/"+subscription.ID.String()+"/checkout-status",
+			nil,
+			accessCookie(env.accessToken),
+		)
+		if rr.Code != http.StatusNotFound {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+	})
+
 	t.Run("DELETE /api/me/subscription", func(t *testing.T) {
 		env := newTestEnv(t)
-		plan := env.billingService.seedPlan("starter")
+		plan := env.billingService.seedPlan("starter-monthly")
 		_, err := env.billingService.Subscribe(context.Background(), billingcommands.Subscribe{
 			UserID: env.user.ID,
 			PlanID: plan.ID,
@@ -509,6 +652,7 @@ func TestRoutesIntegration(t *testing.T) {
 			map[string]any{
 				"code":                 "starter",
 				"name":                 "Starter",
+				"interval":             "monthly",
 				"billing_amount_minor": 99000,
 				"balance_credit_minor": 150000,
 				"currency":             "RUB",
@@ -536,8 +680,8 @@ func TestRoutesIntegration(t *testing.T) {
 
 	t.Run("GET /api/plans", func(t *testing.T) {
 		env := newAdminTestEnv(t)
-		env.billingService.seedPlan("starter")
-		env.billingService.seedPlan("pro")
+		env.billingService.seedPlan("starter-monthly")
+		env.billingService.seedPlan("pro-monthly")
 
 		rr := env.request(t, http.MethodGet, "/api/plans", nil, accessCookie(env.accessToken))
 		if rr.Code != http.StatusOK {
@@ -551,6 +695,58 @@ func TestRoutesIntegration(t *testing.T) {
 
 		if len(payload) != 2 {
 			t.Fatalf("expected 2 plans, got %d", len(payload))
+		}
+	})
+
+	t.Run("GET /api/plans/public", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		starterMonthly := env.billingService.seedPlan("starter-monthly")
+		starterYearly := env.billingService.seedPlan("starter-yearly")
+		proMonthly := env.billingService.seedPlan("pro-monthly")
+		inactive := env.billingService.seedPlan("legacy-yearly")
+		inactive.IsActive = false
+		env.billingService.plans[inactive.ID] = inactive
+
+		rr := env.request(t, http.MethodGet, "/api/plans/public", nil)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		var payload []struct {
+			Code    string `json:"code"`
+			Name    string `json:"name"`
+			Monthly *struct {
+				PlanID string `json:"plan_id"`
+			} `json:"monthly"`
+			Yearly *struct {
+				PlanID string `json:"plan_id"`
+			} `json:"yearly"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if len(payload) != 2 {
+			t.Fatalf("expected 2 public groups, got %d", len(payload))
+		}
+
+		if payload[0].Code != "pro" {
+			t.Fatalf("payload[0].Code = %q, want %q", payload[0].Code, "pro")
+		}
+		if payload[0].Monthly == nil || payload[0].Monthly.PlanID != proMonthly.ID.String() {
+			t.Fatal("pro group should contain monthly variant")
+		}
+		if payload[0].Yearly != nil {
+			t.Fatal("pro group should not contain yearly variant")
+		}
+
+		if payload[1].Code != "starter" {
+			t.Fatalf("payload[1].Code = %q, want %q", payload[1].Code, "starter")
+		}
+		if payload[1].Monthly == nil || payload[1].Monthly.PlanID != starterMonthly.ID.String() {
+			t.Fatal("starter group should contain monthly variant")
+		}
+		if payload[1].Yearly == nil || payload[1].Yearly.PlanID != starterYearly.ID.String() {
+			t.Fatal("starter group should contain yearly variant")
 		}
 	})
 
@@ -1052,7 +1248,13 @@ func newTestEnvWithRole(t *testing.T, role string) *testEnv {
 	controllers.NewUser(config.EnvDevelopment, uService, j, "http://example.com").Register(api)
 	controllers.NewClaw(cService, j).Register(api)
 	controllers.NewServer(sService, uService, j).Register(api)
-	controllers.NewBilling(bService, uService, j, openRouterWebhookSecret).Register(api)
+	controllers.NewBilling(
+		bService,
+		uService,
+		j,
+		"http://example.com",
+		openRouterWebhookSecret,
+	).Register(api)
 
 	root := chi.NewRouter()
 	controllers.NewPubSubProxy(sService, controllers.PubSubProxyOptions{}).Register(root)
@@ -1523,30 +1725,43 @@ func (s *fakeClawService) Delete(
 }
 
 type fakeBillingService struct {
-	plans                 map[uuid.UUID]entities.Plan
-	subscriptions         map[uuid.UUID]entities.UserSubscription
-	balance               map[uuid.UUID]int64
-	lastWebhook           billingcommands.PaymentEvent
-	lastOpenRouterWebhook billingcommands.OpenRouterUsageEvent
-	subscribeErr          error
-	webhookErr            error
-	openRouterWebhookErr  error
+	plans                       map[uuid.UUID]entities.Plan
+	subscriptions               map[uuid.UUID]entities.UserSubscription
+	paymentStatusBySubscription map[uuid.UUID]string
+	balance                     map[uuid.UUID]int64
+	lastWebhook                 billingcommands.PaymentEvent
+	lastOpenRouterWebhook       billingcommands.OpenRouterUsageEvent
+	subscribeErr                error
+	webhookErr                  error
+	openRouterWebhookErr        error
 }
 
 func newFakeBillingService(userID uuid.UUID) *fakeBillingService {
 	return &fakeBillingService{
-		plans:         map[uuid.UUID]entities.Plan{},
-		subscriptions: map[uuid.UUID]entities.UserSubscription{},
-		balance:       map[uuid.UUID]int64{userID: 0},
+		plans:                       map[uuid.UUID]entities.Plan{},
+		subscriptions:               map[uuid.UUID]entities.UserSubscription{},
+		paymentStatusBySubscription: map[uuid.UUID]string{},
+		balance:                     map[uuid.UUID]int64{userID: 0},
 	}
 }
 
 func (s *fakeBillingService) seedPlan(code string) entities.Plan {
 	now := time.Now().UTC()
+	groupCode := code
+	interval := entities.PlanIntervalMonthly
+	switch {
+	case strings.HasSuffix(code, "-monthly"):
+		groupCode = strings.TrimSuffix(code, "-monthly")
+		interval = entities.PlanIntervalMonthly
+	case strings.HasSuffix(code, "-yearly"):
+		groupCode = strings.TrimSuffix(code, "-yearly")
+		interval = entities.PlanIntervalYearly
+	}
 	plan := entities.Plan{
 		ID:                 uuid.New(),
-		Code:               code,
-		Name:               "Plan " + code,
+		Code:               groupCode,
+		Name:               "Plan " + groupCode,
+		Interval:           interval,
 		BillingAmountMinor: 99000,
 		BalanceCreditMinor: 150000,
 		Currency:           entities.RUB,
@@ -1565,6 +1780,7 @@ func (s *fakeBillingService) CreatePlan(_ context.Context, cm billingcommands.Cr
 		ID:                 uuid.New(),
 		Code:               cm.Code,
 		Name:               cm.Name,
+		Interval:           cm.Interval,
 		BillingAmountMinor: cm.BillingAmountMinor,
 		BalanceCreditMinor: cm.BalanceCreditMinor,
 		Currency:           cm.Currency,
@@ -1610,6 +1826,7 @@ func (s *fakeBillingService) UpdatePlan(_ context.Context, cm billingcommands.Up
 
 	plan.Code = cm.Code
 	plan.Name = cm.Name
+	plan.Interval = cm.Interval
 	plan.BillingAmountMinor = cm.BillingAmountMinor
 	plan.BalanceCreditMinor = cm.BalanceCreditMinor
 	plan.Currency = cm.Currency
@@ -1631,20 +1848,23 @@ func (s *fakeBillingService) DeactivatePlan(_ context.Context, id uuid.UUID) err
 	return nil
 }
 
-func (s *fakeBillingService) Subscribe(_ context.Context, cm billingcommands.Subscribe) (string, error) {
+func (s *fakeBillingService) Subscribe(
+	_ context.Context,
+	cm billingcommands.Subscribe,
+) (billingresult.SubscriptionCheckout, error) {
 	if s.subscribeErr != nil {
-		return "", s.subscribeErr
+		return billingresult.SubscriptionCheckout{}, s.subscribeErr
 	}
 
 	if _, ok := s.plans[cm.PlanID]; !ok {
-		return "", sql.ErrNotFound
+		return billingresult.SubscriptionCheckout{}, sql.ErrNotFound
 	}
 
 	subscription := entities.UserSubscription{
 		ID:                 uuid.New(),
 		UserID:             cm.UserID,
 		PlanID:             cm.PlanID,
-		Status:             entities.SubscriptionStatusActive,
+		Status:             entities.SubscriptionStatusPending,
 		StartedAt:          cm.Now,
 		CurrentPeriodStart: cm.Now,
 		CurrentPeriodEnd:   cm.Now.AddDate(0, 1, 0),
@@ -1652,13 +1872,56 @@ func (s *fakeBillingService) Subscribe(_ context.Context, cm billingcommands.Sub
 		UpdatedAt:          cm.Now,
 	}
 	s.subscriptions[cm.UserID] = subscription
-	return "http://example.com/checkout/" + subscription.ID.String(), nil
+	s.paymentStatusBySubscription[subscription.ID] = string(entities.Pending)
+	return billingresult.SubscriptionCheckout{
+		SubscriptionID:  subscription.ID,
+		PaymentID:       "pay_" + subscription.ID.String(),
+		Status:          subscription.Status,
+		ConfirmationURL: "http://example.com/checkout/" + subscription.ID.String(),
+		ReturnURL:       cm.ReturnURL + "?subscription_id=" + subscription.ID.String(),
+	}, nil
+}
+
+func (s *fakeBillingService) GetSubscriptionCheckoutStatus(
+	_ context.Context,
+	userID, subscriptionID uuid.UUID,
+) (billingresult.SubscriptionCheckoutStatus, error) {
+	for _, subscription := range s.subscriptions {
+		if subscription.ID != subscriptionID || subscription.UserID != userID {
+			continue
+		}
+
+		paymentStatus := s.paymentStatusBySubscription[subscriptionID]
+		if paymentStatus == "" {
+			paymentStatus = string(entities.Pending)
+		}
+
+		var nextChargeAt *time.Time
+		if subscription.Status == entities.SubscriptionStatusActive {
+			next := subscription.CurrentPeriodEnd
+			nextChargeAt = &next
+		}
+
+		return billingresult.SubscriptionCheckoutStatus{
+			SubscriptionID:     subscription.ID,
+			SubscriptionStatus: subscription.Status,
+			PaymentStatus:      paymentStatus,
+			PlanID:             subscription.PlanID,
+			NextChargeAt:       nextChargeAt,
+		}, nil
+	}
+
+	return billingresult.SubscriptionCheckoutStatus{}, sql.ErrNotFound
 }
 
 func (s *fakeBillingService) ChangePlan(_ context.Context, cm billingcommands.ChangePlan) (entities.UserSubscription, error) {
 	subscription, ok := s.subscriptions[cm.UserID]
 	if !ok {
 		return entities.UserSubscription{}, sql.ErrNotFound
+	}
+
+	if subscription.Status == entities.SubscriptionStatusActive {
+		return entities.UserSubscription{}, billingservice.ErrSubscriptionChangeWhileActive
 	}
 
 	subscription.PlanID = cm.PlanID
@@ -1705,7 +1968,7 @@ func (s *fakeBillingService) GetBillingSummary(_ context.Context, userID uuid.UU
 	}
 
 	summary := billingservice.BillingSummary{
-		BalanceMinor: s.balance[userID],
+		BalanceMinor: strconv.FormatInt(s.balance[userID], 10),
 		NextChargeAt: nextChargeAt,
 	}
 
@@ -1718,7 +1981,7 @@ func (s *fakeBillingService) GetBillingSummary(_ context.Context, userID uuid.UU
 	return summary, nil
 }
 
-func (s *fakeBillingService) PaymentEventHandler(_ context.Context, event billingcommands.PaymentEvent) error {
+func (s *fakeBillingService) EventPayment(_ context.Context, event billingcommands.PaymentEvent) error {
 	s.lastWebhook = event
 	return s.webhookErr
 }
@@ -1732,11 +1995,18 @@ func (s *fakeBillingService) HandleOpenRouterUsageWebhook(
 }
 
 func (s *fakeBillingService) TopUp(_ context.Context, cm billingcommands.TopUp) (string, error) {
-	if cm.UserID == uuid.Nil || cm.Amount <= 0 {
+	if cm.UserID == uuid.Nil || strings.TrimSpace(cm.Amount) == "" {
 		return "", sql.ErrInvalid
 	}
 
 	return "http://example.com/topup", nil
+}
+
+func (s *fakeBillingService) ExpanseAnalyze(
+	_ context.Context,
+	_ billingcommands.Expanse,
+) (billingresult.Expanses, error) {
+	return billingresult.Expanses{}, nil
 }
 
 type fakeServerService struct {

@@ -14,8 +14,8 @@
 - пользователь логинится через Google;
 - на пользователя заводится OpenRouter API key и server-side session;
 - пользователь подключает канал и при необходимости Gmail;
-- пользователь создаёт `claw`, а `simpleClaw` собирает OpenClaw config и выбирает execution-хост;
-- `containerManager` создаёт/обновляет реальный Docker container OpenClaw;
+- пользователь создаёт `claw`, а `simpleClaw` сохраняет доменный config в БД;
+- при `start` `simpleClaw` выбирает execution-хост, а `containerManager` создаёт и запускает реальный Docker container OpenClaw;
 - пользователь оформляет подписку или пополняет баланс;
 - OpenRouter usage webhook списывает стоимость usage в user balance;
 - Gmail Pub/Sub webhook приходит в `simpleClaw`, а дальше fan-out'ится на execution-сервера.
@@ -127,11 +127,13 @@
 ### 4. Create / Update / Start / Stop / Delete `claw`
 
 - Пользователь вызывает `POST /claws` или lifecycle endpoints в `simpleClaw`.
-- `simpleClaw` валидирует owner/model/channel ids, выбирает `Server`, резолвит модель через OpenRouter, собирает `ClawConfig`.
-- `simpleClaw` сохраняет `Claw` у себя в БД.
-- Затем control plane вызывает `containerManager` по `shared/pkg/hostingapi`.
-- `containerManager` пишет конфиги, создаёт или обновляет Docker container и возвращает runtime metadata.
-- `simpleClaw` синхронизирует container/server/status обратно в свою БД.
+- На `create` `simpleClaw` валидирует owner/model/channel ids, резолвит модель через OpenRouter, собирает `ClawConfig` и сохраняет `Claw` только у себя в БД.
+- На `create` не выбирается execution-server и не создаётся container: `server_id` остаётся пустым, `container_id` пустой, статус `stop`.
+- На первом `start` control plane выбирает `Server`, вызывает `containerManager` по `shared/pkg/hostingapi`, и execution plane создаёт и запускает Docker container.
+- На `start` после `stop` control plane сначала восстанавливает архив runtime-конфига на execution-host, а затем снова создаёт и запускает container.
+- После успешного `start` `simpleClaw` синхронизирует `server_id`, `container_id` и `status` обратно в свою БД.
+- На `update` и `delete` execution plane трогается только если у `claw` уже есть `container_id`; для незапущенного `claw` меняется только control-plane state в БД.
+- На `stop` runtime-конфиг архивируется, container удаляется, а `server_id` и `container_id` очищаются в `simpleClaw`.
 
 ### 5. Pairing / Connect
 
@@ -165,7 +167,7 @@
 - Админ управляет execution host registry через `/servers`.
 - `simpleClaw` хранит host URL, `proxy_url`, `secret_key`, статус и `max_claws`.
 - Capacity подтягивается из `containerManager /capacity`.
-- При выборе сервера для нового `claw` учитываются статус и capacity.
+- При выборе сервера для `start` незапущенного `claw` учитываются статус и capacity.
 
 ## Важные Контракты И Ограничения
 
@@ -259,7 +261,7 @@
   - Command types для user service.
 
 - `simpleClaw/internal/service/claw`
-  - Business logic lifecycle `claw`: create/update/start/stop/delete, approve pairing, connect, archive sync, Gmail watch config injection.
+  - Business logic lifecycle `claw`: create/update/start/stop/delete, approve pairing, connect, archive handling after stop, Gmail watch config injection.
 
 - `simpleClaw/internal/service/claw/commands`
   - Command types для claw service.
@@ -288,7 +290,7 @@
   - Runtime domain entities, прежде всего `Container` и filesystem-level `ClawConfig`.
 
 - `containermanager/internal/infrastucture/pkg/configurer`
-  - Запись config bundle на диск, pairing files, archive/restore.
+  - Запись config bundle на диск, pairing files, archive/restore runtime config directory.
 
 - `containermanager/internal/infrastucture/pkg/docker`
   - Обёртка над Docker SDK: build image, create/start/stop/remove container, exec/connect.
@@ -315,7 +317,7 @@
   - Request-scoped logger helper.
 
 - `containermanager/internal/service`
-  - Runtime orchestration: port allocation, capacity/memory guard, Docker lifecycle, approve/connect, archive/restore, `gog` import payload normalization, Gmail Pub/Sub forwarding.
+  - Runtime orchestration: port allocation, capacity/memory guard, Docker lifecycle, approve/connect, archive/restore runtime files, `gog` import payload normalization, Gmail Pub/Sub forwarding.
 
 - `containermanager/internal/service/commands`
   - Command types execution-layer service.
@@ -441,4 +443,6 @@ Compose stack:
 - `containerManager` при старте реально собирает Docker image; не считайте запуск сервиса cheap operation.
 - `max_claws` в `containerManager` может резолвиться автоматически на Linux, а не только читаться как статичное число.
 - У execution-plane есть memory guard для cold start / warm start. Если меняете start semantics, проверьте `containerManager/internal/service/container.go`.
+- Archive после `stop` нужен не как source of truth для доменного конфига, а как snapshot runtime-файлов из примонтированной config-папки.
+- `openclaw.json` в `simpleClaw` БД — источник истины; при `start` после `restore` execution-plane должен восстановить runtime-файлы из архива, но доменный config должен снова быть записан из БД.
 - Если вносите изменения в OpenClaw config schema, проверьте и доменную сборку config в `simpleClaw`, и файловую запись/restore path в `containerManager`.

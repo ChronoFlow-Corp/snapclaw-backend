@@ -102,6 +102,8 @@ func TestStorageUpdate(t *testing.T) {
 	}
 
 	plan.Name = "Starter Plus"
+	plan.Code = "starter"
+	plan.Interval = entities.PlanIntervalYearly
 	plan.BillingAmountMinor = 129000
 	plan.BalanceCreditMinor = 200000
 	plan.UpdatedAt = plan.UpdatedAt.Add(time.Minute)
@@ -184,6 +186,12 @@ func TestStorageRejectsInvalidData(t *testing.T) {
 		t.Fatalf("Create() zero billing error = %v, want ErrInvalid", err)
 	}
 
+	plan = newPlan("starter", true, time.Now().UTC())
+	plan.Interval = "weekly"
+	if err := store.Create(context.Background(), plan); !errors.Is(err, infraSQL.ErrInvalid) {
+		t.Fatalf("Create() invalid interval error = %v, want ErrInvalid", err)
+	}
+
 	if _, err := store.GetByID(context.Background(), uuid.Nil); !errors.Is(err, infraSQL.ErrInvalid) {
 		t.Fatalf("GetByID() nil id error = %v, want ErrInvalid", err)
 	}
@@ -256,6 +264,7 @@ func newPlan(code string, isActive bool, now time.Time) entities.Plan {
 		ID:                 uuid.New(),
 		Code:               code,
 		Name:               "Plan " + code,
+		Interval:           entities.PlanIntervalMonthly,
 		BillingAmountMinor: 99000,
 		BalanceCreditMinor: 150000,
 		Currency:           entities.RUB,
@@ -278,6 +287,10 @@ func assertPlanEqual(t *testing.T, want, got entities.Plan) {
 
 	if got.Name != want.Name {
 		t.Fatalf("Name = %s, want %s", got.Name, want.Name)
+	}
+
+	if got.Interval != want.Interval {
+		t.Fatalf("Interval = %s, want %s", got.Interval, want.Interval)
 	}
 
 	if got.BillingAmountMinor != want.BillingAmountMinor {

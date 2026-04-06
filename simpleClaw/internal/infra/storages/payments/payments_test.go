@@ -138,6 +138,63 @@ func TestStorageGetByUserIDFiltersOwnerAndOrdersByCreatedAtDesc(t *testing.T) {
 	assertPaymentEqual(t, olderPayment, got[1])
 }
 
+func TestStorageGetLatestBySubscriptionIDFiltersOwnerAndOrdersByCreatedAtDesc(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	store := NewStorage(db)
+	owner := seedUser(t, db)
+	otherUser := seedUser(t, db)
+	subscriptionID := uuid.New()
+
+	olderPending := newPayment(owner.ID)
+	olderPending.SubscriptionID = &subscriptionID
+	olderPending.Purpose = entities.PaymentPurposeSubscription
+	olderPending.Status = entities.Pending
+	olderPending.CreatedAt = olderPending.CreatedAt.Add(-5 * time.Minute)
+
+	newerCanceled := newPayment(owner.ID)
+	newerCanceled.SubscriptionID = &subscriptionID
+	newerCanceled.Purpose = entities.PaymentPurposeSubscription
+	newerCanceled.Status = entities.Canceled
+
+	otherUserPayment := newPayment(otherUser.ID)
+	otherUserPayment.SubscriptionID = &subscriptionID
+	otherUserPayment.Purpose = entities.PaymentPurposeSubscription
+	otherUserPayment.Status = entities.Pending
+	otherUserPayment.CreatedAt = newerCanceled.CreatedAt.Add(5 * time.Minute)
+
+	for _, payment := range []entities.Payment{
+		olderPending,
+		newerCanceled,
+		otherUserPayment,
+	} {
+		if err := store.Create(context.Background(), payment); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+
+	got, err := store.GetLatestBySubscriptionID(
+		context.Background(),
+		subscriptionID,
+		owner.ID,
+	)
+	if err != nil {
+		t.Fatalf("GetLatestBySubscriptionID() owner error = %v", err)
+	}
+
+	assertPaymentEqual(t, newerCanceled, got)
+
+	_, err = store.GetLatestBySubscriptionID(
+		context.Background(),
+		uuid.New(),
+		owner.ID,
+	)
+	if !errors.Is(err, infraSQL.ErrNotFound) {
+		t.Fatalf("GetLatestBySubscriptionID() missing subscription error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestStorageUpdateMutableFieldsPreservesImmutableAmounts(t *testing.T) {
 	t.Parallel()
 

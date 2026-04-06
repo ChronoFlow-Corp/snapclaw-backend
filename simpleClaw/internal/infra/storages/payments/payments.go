@@ -134,6 +134,35 @@ func (s *Storage) GetLatestSucceededByPurpose(
 	return payment, nil
 }
 
+func (s *Storage) GetLatestBySubscriptionID(
+	ctx context.Context,
+	subscriptionID, userID uuid.UUID,
+) (entities.Payment, error) {
+	const op = "storages.Payments.GetLatestBySubscriptionID"
+
+	switch {
+	case subscriptionID == uuid.Nil:
+		return entities.Payment{}, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	case userID == uuid.Nil:
+		return entities.Payment{}, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	paymentModel, err := gorm.G[models.Payment](s.db).
+		Where("subscription_id = ? AND user_id = ?", subscriptionID, userID).
+		Order("created_at DESC").
+		First(ctx)
+	if err != nil {
+		return entities.Payment{}, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
+	}
+
+	payment, err := mapModelToPayment(paymentModel)
+	if err != nil {
+		return entities.Payment{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return payment, nil
+}
+
 func (s *Storage) Update(ctx context.Context, payment entities.Payment) error {
 	const op = "storages.Payments.Update"
 

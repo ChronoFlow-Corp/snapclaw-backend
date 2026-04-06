@@ -20,6 +20,7 @@ type planStorage interface {
 type subscriptionStorage interface {
 	Create(ctx context.Context, subscription entities.UserSubscription) error
 	GetByID(ctx context.Context, id uuid.UUID) (entities.UserSubscription, error)
+	GetByIDAndUserID(ctx context.Context, id, userID uuid.UUID) (entities.UserSubscription, error)
 	GetActiveByUserID(ctx context.Context, userID uuid.UUID) (entities.UserSubscription, error)
 	Update(ctx context.Context, subscription entities.UserSubscription) error
 	Cancel(ctx context.Context, id, userID uuid.UUID, canceledAt time.Time) error
@@ -63,6 +64,10 @@ type paymentStorage interface {
 		userID uuid.UUID,
 		purpose entities.PaymentPurpose,
 	) (entities.Payment, error)
+	GetLatestBySubscriptionID(
+		ctx context.Context,
+		subscriptionID, userID uuid.UUID,
+	) (entities.Payment, error)
 	Create(ctx context.Context, payment entities.Payment) error
 	GetByID(
 		ctx context.Context,
@@ -80,6 +85,7 @@ type paymentInfra interface {
 		userID uuid.UUID,
 		saveMethod bool,
 		paymentMethodID *uuid.UUID,
+		returnURL string,
 	) (entities.Payment, error)
 	Capture(
 		ctx context.Context,

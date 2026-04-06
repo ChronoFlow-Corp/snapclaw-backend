@@ -55,6 +55,11 @@ var serviceErrorMappings = []serviceErrorMapping{
 		message: "plan is inactive",
 	},
 	{
+		err:     billing.ErrSubscriptionChangeWhileActive,
+		code:    http.StatusConflict,
+		message: "subscription change is not allowed while current plan is active",
+	},
+	{
 		err:     billing.ErrInsufficientBalance,
 		code:    http.StatusConflict,
 		message: "insufficient balance",

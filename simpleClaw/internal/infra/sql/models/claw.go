@@ -13,7 +13,7 @@ type Claw struct {
 	Name        string         `gorm:"type:varchar(255);not null"`
 	Config      datatypes.JSON `gorm:"type:jsonb"`
 	UserID      uuid.UUID
-	ServerID    uuid.UUID
+	ServerID    *uuid.UUID
 	Status      string         `gorm:"type:varchar(255);not null"`
 	ContainerID string         `gorm:"type:varchar(255)"`
 	Vars        pq.StringArray `gorm:"type:text[]"`

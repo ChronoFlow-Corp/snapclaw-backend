@@ -7,9 +7,10 @@ import (
 )
 
 type Subscribe struct {
-	UserID uuid.UUID
-	PlanID uuid.UUID
-	Now    time.Time
+	UserID    uuid.UUID
+	PlanID    uuid.UUID
+	ReturnURL string
+	Now       time.Time
 }
 
 type ChangePlan struct {

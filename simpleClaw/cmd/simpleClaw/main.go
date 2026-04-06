@@ -252,6 +252,7 @@ func main() {
 		billingSvc,
 		uService,
 		j,
+		cfg.Auth.Google.FrontendURL,
 		cfg.Payment.OpenRouter.WebhookSecret,
 	)
 	proxyController := controllers.NewPubSubProxy(serverService, controllers.PubSubProxyOptions{

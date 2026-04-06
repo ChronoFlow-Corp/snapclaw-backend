@@ -38,6 +38,38 @@ func TestStorageCreateAndGetByID(t *testing.T) {
 	assertSubscriptionEqual(t, subscription, got)
 }
 
+func TestStorageGetByIDAndUserID(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	store := NewStorage(db)
+	owner := seedUser(t, db)
+	otherUser := seedUser(t, db)
+	plan := seedPlan(t, db, "starter")
+	subscription := newSubscription(
+		owner.ID,
+		plan.ID,
+		entities.SubscriptionStatusPending,
+		time.Now().UTC(),
+	)
+
+	if err := store.Create(context.Background(), subscription); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	got, err := store.GetByIDAndUserID(context.Background(), subscription.ID, owner.ID)
+	if err != nil {
+		t.Fatalf("GetByIDAndUserID() owner error = %v", err)
+	}
+
+	assertSubscriptionEqual(t, subscription, got)
+
+	_, err = store.GetByIDAndUserID(context.Background(), subscription.ID, otherUser.ID)
+	if !errors.Is(err, infraSQL.ErrNotFound) {
+		t.Fatalf("GetByIDAndUserID() other user error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestStorageGetActiveByUserID(t *testing.T) {
 	t.Parallel()
 
