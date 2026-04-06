@@ -41,7 +41,7 @@ type SubscriptionResponse struct {
 }
 
 type BillingSummaryResponse struct {
-	BalanceMinor        string                `json:"balance_minor"`
+	Balance             string                `json:"balance"`
 	CurrentSubscription *SubscriptionResponse `json:"current_subscription,omitempty"`
 	NextChargeAt        *time.Time            `json:"next_charge_at,omitempty"`
 }

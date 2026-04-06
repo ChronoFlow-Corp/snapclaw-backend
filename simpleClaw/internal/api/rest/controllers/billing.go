@@ -704,7 +704,7 @@ func subscriptionToResponse(subscription entities.UserSubscription) dto.Subscrip
 
 func billingSummaryResponse(summary billingsvc.BillingSummary) dto.BillingSummaryResponse {
 	summaryResponse := dto.BillingSummaryResponse{
-		BalanceMinor: summary.BalanceMinor,
+		Balance:      summary.BalanceMinor,
 		NextChargeAt: summary.NextChargeAt,
 	}
 

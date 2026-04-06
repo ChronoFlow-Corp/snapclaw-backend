@@ -88,7 +88,12 @@ func main() {
 
 	st := storage.NewContainer(pool, operationMetrics)
 
-	c := configurer.NewClawConfigurer(cfg.Image.BasePath, cfg.Image.CredentialsPath)
+	c := configurer.NewClawConfigurer(
+		cfg.Image.BasePath,
+		cfg.Image.CredentialsPath,
+		cfg.Image.OwnerUID,
+		cfg.Image.OwnerGID,
+	)
 
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {

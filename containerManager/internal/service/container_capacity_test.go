@@ -109,7 +109,7 @@ func TestContainerCreate_ReturnsCapacityErrorWhenMaxClawsReached(t *testing.T) {
 	svc := &Container{
 		clRepo:   repo,
 		manager:  runtime,
-		cfg:      configurer.NewClawConfigurer(t.TempDir(), ""),
+		cfg:      configurer.NewClawConfigurer(t.TempDir(), "", -1, -1),
 		p:        NewPorter(),
 		maxClaws: 1,
 	}

@@ -35,6 +35,8 @@ type Postgres struct {
 type Image struct {
 	BuildCtx        []string `yaml:"build_context"`
 	BasePath        string   `yaml:"base_path"        env:"CLAW_CONFIGS"`
+	OwnerUID        int      `yaml:"owner_uid"        env:"CLAW_CONFIGS_OWNER_UID" env-default:"-1"`
+	OwnerGID        int      `yaml:"owner_gid"        env:"CLAW_CONFIGS_OWNER_GID" env-default:"-1"`
 	Dockerfile      string   `yaml:"dockerfile"`
 	CredentialsPath string   `yaml:"credentials_path" env:"GOG_CREDENTIALS_PATH"`
 }
@@ -98,6 +100,14 @@ func MustLoadConfig() Config {
 
 func (c *Config) normalize() {
 	c.Observability.Metrics.Path = normalizeMetricsPath(c.Observability.Metrics.Path)
+
+	if (c.Image.OwnerUID < 0) != (c.Image.OwnerGID < 0) {
+		panic("image.owner_uid and image.owner_gid must be configured together")
+	}
+
+	if c.Image.OwnerUID < -1 || c.Image.OwnerGID < -1 {
+		panic("image.owner_uid and image.owner_gid must be greater than or equal to -1")
+	}
 }
 
 func normalizeMetricsPath(path string) string {

@@ -109,7 +109,11 @@ func TestStorageApplyCreditReturnsDetailedEntryValidationError(t *testing.T) {
 	}
 
 	if !strings.Contains(err.Error(), "entry user_id is required") {
-		t.Fatalf("ApplyCredit() error = %q, want to contain %q", err.Error(), "entry user_id is required")
+		t.Fatalf(
+			"ApplyCredit() error = %q, want to contain %q",
+			err.Error(),
+			"entry user_id is required",
+		)
 	}
 }
 
@@ -137,11 +141,19 @@ func TestStorageApplyCreditReturnsDetailedPaymentSnapshotError(t *testing.T) {
 	}
 
 	if !strings.Contains(err.Error(), "map payment snapshot pay_invalid") {
-		t.Fatalf("ApplyCredit() error = %q, want to contain %q", err.Error(), "map payment snapshot pay_invalid")
+		t.Fatalf(
+			"ApplyCredit() error = %q, want to contain %q",
+			err.Error(),
+			"map payment snapshot pay_invalid",
+		)
 	}
 
 	if !strings.Contains(err.Error(), "payment status is required") {
-		t.Fatalf("ApplyCredit() error = %q, want to contain %q", err.Error(), "payment status is required")
+		t.Fatalf(
+			"ApplyCredit() error = %q, want to contain %q",
+			err.Error(),
+			"payment status is required",
+		)
 	}
 }
 
@@ -229,7 +241,12 @@ func TestStorageListByUserIDOrdersNewestFirst(t *testing.T) {
 	store := NewStorage(db)
 	user := seedUser(t, db, 1000)
 	older := newBalanceEntry(user.ID, entities.BalanceEntryTypeTopUpCredit, 100, time.Now().UTC())
-	newer := newBalanceEntry(user.ID, entities.BalanceEntryTypeUsageDebit, 50, older.CreatedAt.Add(time.Minute))
+	newer := newBalanceEntry(
+		user.ID,
+		entities.BalanceEntryTypeUsageDebit,
+		50,
+		older.CreatedAt.Add(time.Minute),
+	)
 
 	if _, err := store.ApplyCredit(context.Background(), older, entities.Payment{}); err != nil {
 		t.Fatalf("ApplyCredit() error = %v", err)
@@ -267,11 +284,26 @@ func TestStorageSumUsageDebitByUserIDInRangeUsesHalfOpenRange(t *testing.T) {
 	start := time.Date(2026, time.April, 3, 0, 0, 0, 0, time.UTC)
 	end := start.Add(24 * time.Hour)
 
-	excludedBefore := newBalanceEntry(user.ID, entities.BalanceEntryTypeUsageDebit, 100, start.Add(-time.Minute))
+	excludedBefore := newBalanceEntry(
+		user.ID,
+		entities.BalanceEntryTypeUsageDebit,
+		100,
+		start.Add(-time.Minute),
+	)
 	includedAtStart := newBalanceEntry(user.ID, entities.BalanceEntryTypeUsageDebit, 200, start)
-	includedInside := newBalanceEntry(user.ID, entities.BalanceEntryTypeUsageDebit, 300, start.Add(12*time.Hour))
+	includedInside := newBalanceEntry(
+		user.ID,
+		entities.BalanceEntryTypeUsageDebit,
+		300,
+		start.Add(12*time.Hour),
+	)
 	excludedAtEnd := newBalanceEntry(user.ID, entities.BalanceEntryTypeUsageDebit, 400, end)
-	excludedType := newBalanceEntry(user.ID, entities.BalanceEntryTypeTopUpCredit, 500, start.Add(time.Hour))
+	excludedType := newBalanceEntry(
+		user.ID,
+		entities.BalanceEntryTypeTopUpCredit,
+		500,
+		start.Add(time.Hour),
+	)
 
 	for _, entry := range []entities.UserBalanceEntry{
 		excludedBefore,
@@ -339,7 +371,12 @@ func seedUser(t *testing.T, db *gorm.DB, balanceMinor int64) models.User {
 	return user
 }
 
-func newBalanceEntry(userID uuid.UUID, entryType string, amountMinor int64, createdAt time.Time) entities.UserBalanceEntry {
+func newBalanceEntry(
+	userID uuid.UUID,
+	entryType string,
+	amountMinor int64,
+	createdAt time.Time,
+) entities.UserBalanceEntry {
 	return entities.UserBalanceEntry{
 		ID:          uuid.New(),
 		UserID:      userID,
@@ -359,7 +396,7 @@ func assertUserBalance(t *testing.T, db *gorm.DB, userID uuid.UUID, want int64) 
 	}
 
 	if user.BalanceMinor != want {
-		t.Fatalf("BalanceMinor = %d, want %d", user.BalanceMinor, want)
+		t.Fatalf("Balance = %d, want %d", user.BalanceMinor, want)
 	}
 }
 

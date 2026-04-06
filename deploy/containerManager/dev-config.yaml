@@ -9,6 +9,8 @@ http:
 
 image:
   base_path: "/claw-configs"
+  owner_uid: 1000
+  owner_gid: 1000
   build_context:
     - "/workspace/containerManager/images"
   dockerfile: ./openclaw/Dockerfile

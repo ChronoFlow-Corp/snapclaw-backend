@@ -54,7 +54,7 @@ func TestContainerApprove_InvalidCode(t *testing.T) {
 	}
 
 	svc := &Container{
-		cfg: configurer.NewClawConfigurer(basePath, ""),
+		cfg: configurer.NewClawConfigurer(basePath, "", -1, -1),
 	}
 
 	err = svc.Approve(clawID, userID, "wrong-code")

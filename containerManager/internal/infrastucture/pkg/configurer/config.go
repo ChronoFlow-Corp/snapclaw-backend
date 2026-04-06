@@ -16,15 +16,21 @@ import (
 	"containermanager/internal/service/commands"
 )
 
+var chownPath = os.Chown
+
 type ClawConfigurer struct {
 	basePath        string
 	credentialsPath string
+	ownerUID        int
+	ownerGID        int
 }
 
-func NewClawConfigurer(basePath string, credentialsPath string) *ClawConfigurer {
+func NewClawConfigurer(basePath string, credentialsPath string, ownerUID int, ownerGID int) *ClawConfigurer {
 	return &ClawConfigurer{
 		basePath:        basePath,
 		credentialsPath: strings.TrimSpace(credentialsPath),
+		ownerUID:        ownerUID,
+		ownerGID:        ownerGID,
 	}
 }
 
@@ -44,6 +50,10 @@ func (c *ClawConfigurer) Configure(cm commands.CreateClaw) (string, error) {
 	err = configure(basePath, cm.Config)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := c.ensureOwnership(basePath); err != nil {
+		return "", fmt.Errorf("%s: ensure ownership: %w", op, err)
 	}
 
 	return basePath, nil
@@ -69,6 +79,10 @@ func (c *ClawConfigurer) Update(cm commands.UpdateClaw) (string, error) {
 	err = configure(basePath, cm.Config)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := c.ensureOwnership(basePath); err != nil {
+		return "", fmt.Errorf("%s: ensure ownership: %w", op, err)
 	}
 
 	return basePath, nil
@@ -213,6 +227,10 @@ func (c *ClawConfigurer) RestoreClawConfig(userID, clawID string, r io.Reader) e
 		}
 	}
 
+	if err := c.ensureOwnership(basePath); err != nil {
+		return fmt.Errorf("%s: ensure ownership: %w", op, err)
+	}
+
 	return nil
 }
 
@@ -327,6 +345,24 @@ func (c *ClawConfigurer) configPath(userID, clawID string) (string, error) {
 	}
 
 	return cleanTarget, nil
+}
+
+func (c *ClawConfigurer) ensureOwnership(root string) error {
+	if c.ownerUID < 0 || c.ownerGID < 0 {
+		return nil
+	}
+
+	return filepath.WalkDir(root, func(current string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if err := chownPath(current, c.ownerUID, c.ownerGID); err != nil {
+			return fmt.Errorf("chown %s: %w", current, err)
+		}
+
+		return nil
+	})
 }
 
 func tarDir(w io.Writer, root string, archiveRoot string) error {
