@@ -534,7 +534,7 @@ func TestHandleOpenRouterUsageWebhookChargesUsageOnce(t *testing.T) {
 	event := commands.OpenRouterUsageEvent{
 		TraceID:    "trace-1",
 		SpanID:     "span-1",
-		APIKeyName: "snapclaw+" + userID.String(),
+		APIKeyName: "snapclaw+claw-" + userID.String(),
 		Model:      "openai/gpt-4.1-mini",
 		TotalCost:  "0.12",
 		OccurredAt: time.Now().UTC(),
@@ -595,7 +595,7 @@ func TestHandleOpenRouterUsageWebhookReturnsInsufficientBalance(t *testing.T) {
 	err := service.HandleOpenRouterUsageWebhook(context.Background(), commands.OpenRouterUsageEvent{
 		TraceID:    "trace-1",
 		SpanID:     "span-1",
-		APIKeyName: "snapclaw+" + userID.String(),
+		APIKeyName: "snapclaw+claw-" + userID.String(),
 		TotalCost:  "0.12",
 		OccurredAt: time.Now().UTC(),
 	})
@@ -772,12 +772,16 @@ func TestEventPaymentReturnsInvalidEventType(t *testing.T) {
 			Type:  "unexpected",
 			Event: "payment.succeeded",
 			Object: entities.Payment{
-				ID: "pay_123",
+				ID:     "pay_123",
+				Status: "unexpected",
 			},
 		},
 	})
-	if !errors.Is(err, ErrPaymentEventTypeInvalid) {
-		t.Fatalf("EventPayment() error = %v, want ErrPaymentEventTypeInvalid", err)
+	if err == nil {
+		t.Fatal("EventPayment() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "unknown status") {
+		t.Fatalf("EventPayment() error = %v, want to contain %q", err, "unknown status")
 	}
 }
 
@@ -1051,6 +1055,15 @@ func (s *fakeSubscriptionStorage) GetActiveByUserID(_ context.Context, userID uu
 	if !ok || subscription.Status != entities.SubscriptionStatusActive {
 		return entities.UserSubscription{}, infraSQL.ErrNotFound
 	}
+	return subscription, nil
+}
+
+func (s *fakeSubscriptionStorage) GetLatestByUserID(_ context.Context, userID uuid.UUID) (entities.UserSubscription, error) {
+	subscription, ok := s.byUser[userID]
+	if !ok {
+		return entities.UserSubscription{}, infraSQL.ErrNotFound
+	}
+
 	return subscription, nil
 }
 

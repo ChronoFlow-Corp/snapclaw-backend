@@ -37,6 +37,7 @@ func TestClientApprovePairing_InvalidCode(t *testing.T) {
 		nil,
 		"user-1",
 		"claw-1",
+		"telegram",
 		"wrong-code",
 	)
 	if err == nil {
@@ -45,5 +46,38 @@ func TestClientApprovePairing_InvalidCode(t *testing.T) {
 
 	if !errors.Is(err, ErrInvalidCode) {
 		t.Fatalf("expected ErrInvalidCode, got: %v", err)
+	}
+}
+
+func TestClientApprovePairing_SendsChannelType(t *testing.T) {
+	t.Parallel()
+
+	c := &client{
+		http: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if got := req.URL.Query().Get("channelType"); got != "telegram" {
+					t.Fatalf("channelType = %q, want %q", got, "telegram")
+				}
+
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(strings.NewReader("")),
+					Header:     make(http.Header),
+				}, nil
+			}),
+		},
+	}
+
+	if err := c.approvePairing(
+		context.Background(),
+		"http://container-manager.local",
+		nil,
+		"user-1",
+		"claw-1",
+		"telegram",
+		"123456",
+	); err != nil {
+		t.Fatalf("approvePairing() error = %v", err)
 	}
 }

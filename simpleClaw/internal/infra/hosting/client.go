@@ -30,36 +30,36 @@ func newClient(timeout time.Duration) *client {
 	}
 }
 
-func (c *client) createClaw(
+func (c *client) ensureRuntime(
 	ctx context.Context,
 	baseURL string,
 	headers map[string]string,
-	payload hostingapi.CreateClawRequest,
-) (hostingapi.CreateClawResponse, error) {
-	const op = "infra.hosting.client.createClaw"
+	payload hostingapi.EnsureRuntimeRequest,
+) (hostingapi.EnsureRuntimeResponse, error) {
+	const op = "infra.hosting.client.ensureRuntime"
 
 	if c == nil || c.http == nil {
-		return hostingapi.CreateClawResponse{}, fmt.Errorf("%s: http client is not initialized", op)
+		return hostingapi.EnsureRuntimeResponse{}, fmt.Errorf("%s: http client is not initialized", op)
 	}
 
 	url := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if url == "" {
-		return hostingapi.CreateClawResponse{}, fmt.Errorf("%s: base url is required", op)
+		return hostingapi.EnsureRuntimeResponse{}, fmt.Errorf("%s: base url is required", op)
 	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return hostingapi.CreateClawResponse{}, fmt.Errorf("%s: %w", op, err)
+		return hostingapi.EnsureRuntimeResponse{}, fmt.Errorf("%s: %w", op, err)
 	}
 
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
-		url+hostingapi.ClawsEndpoint,
+		url+hostingapi.ClawsEnsureEndpoint,
 		bytes.NewReader(body),
 	)
 	if err != nil {
-		return hostingapi.CreateClawResponse{}, fmt.Errorf("%s: %w", op, err)
+		return hostingapi.EnsureRuntimeResponse{}, fmt.Errorf("%s: %w", op, err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -71,25 +71,25 @@ func (c *client) createClaw(
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return hostingapi.CreateClawResponse{}, fmt.Errorf("%s: %w", op, err)
+		return hostingapi.EnsureRuntimeResponse{}, fmt.Errorf("%s: %w", op, err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return hostingapi.CreateClawResponse{}, fmt.Errorf("%s: %w", op, err)
+		return hostingapi.EnsureRuntimeResponse{}, fmt.Errorf("%s: %w", op, err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return hostingapi.CreateClawResponse{}, unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
+		return hostingapi.EnsureRuntimeResponse{}, unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
 	}
 
-	var out hostingapi.CreateClawResponse
+	var out hostingapi.EnsureRuntimeResponse
 
 	if len(respBody) > 0 {
 		err := json.Unmarshal(respBody, &out)
 		if err != nil {
-			return hostingapi.CreateClawResponse{}, fmt.Errorf("%s: %w", op, err)
+			return hostingapi.EnsureRuntimeResponse{}, fmt.Errorf("%s: %w", op, err)
 		}
 	}
 
@@ -150,20 +150,88 @@ func (c *client) capacity(
 	return out, nil
 }
 
-func (c *client) updateClaw(
+func (c *client) runtimeState(
 	ctx context.Context,
 	baseURL string,
 	headers map[string]string,
-	payload hostingapi.UpdateClawRequest,
+	userID string,
+	clawID string,
+) (hostingapi.RuntimeStateResponse, error) {
+	const op = "infra.hosting.client.runtimeState"
+
+	if c == nil || c.http == nil {
+		return hostingapi.RuntimeStateResponse{}, fmt.Errorf("%s: http client is not initialized", op)
+	}
+
+	rawURL := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if rawURL == "" {
+		return hostingapi.RuntimeStateResponse{}, fmt.Errorf("%s: base url is required", op)
+	}
+
+	u, err := url.Parse(rawURL + hostingapi.ClawsStateEndpoint)
+	if err != nil {
+		return hostingapi.RuntimeStateResponse{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	q := u.Query()
+	q.Set(hostingapi.QueryUserID, userID)
+	q.Set(hostingapi.QueryClawID, clawID)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), http.NoBody)
+	if err != nil {
+		return hostingapi.RuntimeStateResponse{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return hostingapi.RuntimeStateResponse{}, fmt.Errorf("%s: %w", op, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return hostingapi.RuntimeStateResponse{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if resp.StatusCode == http.StatusNotFound {
+		return hostingapi.RuntimeStateResponse{}, fmt.Errorf("%s: %w", op, ErrRuntimeNotFound)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return hostingapi.RuntimeStateResponse{}, unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
+	}
+
+	var out hostingapi.RuntimeStateResponse
+	if len(respBody) > 0 {
+		if err := json.Unmarshal(respBody, &out); err != nil {
+			return hostingapi.RuntimeStateResponse{}, fmt.Errorf("%s: %w", op, err)
+		}
+	}
+
+	return out, nil
+}
+
+func (c *client) lifecycleCommand(
+	ctx context.Context,
+	baseURL string,
+	headers map[string]string,
+	endpoint string,
+	payload hostingapi.LifecycleCommandRequest,
 ) error {
-	const op = "infra.hosting.client.updateClaw"
+	const op = "infra.hosting.client.lifecycleCommand"
 
 	if c == nil || c.http == nil {
 		return fmt.Errorf("%s: http client is not initialized", op)
 	}
 
-	url := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if url == "" {
+	rawURL := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if rawURL == "" {
 		return fmt.Errorf("%s: base url is required", op)
 	}
 
@@ -172,12 +240,7 @@ func (c *client) updateClaw(
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPut,
-		url+hostingapi.ClawsEndpoint,
-		bytes.NewReader(body),
-	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL+endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -200,70 +263,7 @@ func (c *client) updateClaw(
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
-	}
-
-	return nil
-}
-
-func (c *client) deleteClaw(
-	ctx context.Context,
-	baseURL string,
-	headers map[string]string,
-	userID string,
-	clawID string,
-	deleteConfig bool,
-) error {
-	const op = "infra.hosting.client.deleteClaw"
-
-	if c == nil || c.http == nil {
-		return fmt.Errorf("%s: http client is not initialized", op)
-	}
-
-	rawURL := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if rawURL == "" {
-		return fmt.Errorf("%s: base url is required", op)
-	}
-
-	u, err := url.Parse(rawURL + hostingapi.ClawsEndpoint)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	q := u.Query()
-	q.Set(hostingapi.QueryUserID, userID)
-	q.Set(hostingapi.QueryClawID, clawID)
-
-	if deleteConfig {
-		q.Set(hostingapi.QueryDeleteConfig, "true")
-	}
-
-	u.RawQuery = q.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u.String(), http.NoBody)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	req.Header.Set("Accept", "application/json")
-
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusNoContent {
 		return unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
 	}
 
@@ -297,7 +297,7 @@ func (c *client) configArchive(
 		return nil, fmt.Errorf("%s: claw id is required", op)
 	}
 
-	u, err := url.Parse(rawURL + hostingapi.ClawsConfigEndpoint)
+	u, err := url.Parse(rawURL + clawsConfigEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
@@ -307,7 +307,7 @@ func (c *client) configArchive(
 	q.Set(hostingapi.QueryClawID, clawID)
 
 	if deleteAfter {
-		q.Set(hostingapi.QueryDeleteAfter, "true")
+		q.Set(queryDeleteAfter, "true")
 	}
 
 	u.RawQuery = q.Encode()
@@ -369,7 +369,7 @@ func (c *client) restoreConfigArchive(
 		return fmt.Errorf("%s: body is required", op)
 	}
 
-	u, err := url.Parse(rawURL + hostingapi.ClawsConfigEndpoint)
+	u, err := url.Parse(rawURL + clawsConfigEndpoint)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -412,54 +412,7 @@ func (c *client) stopClaw(
 	userID string,
 	clawID string,
 ) error {
-	const op = "infra.hosting.client.stopClaw"
-
-	if c == nil || c.http == nil {
-		return fmt.Errorf("%s: http client is not initialized", op)
-	}
-
-	rawURL := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if rawURL == "" {
-		return fmt.Errorf("%s: base url is required", op)
-	}
-
-	u, err := url.Parse(rawURL + hostingapi.ClawsStopEndpoint)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	q := u.Query()
-	q.Set(hostingapi.QueryUserID, userID)
-	q.Set(hostingapi.QueryClawID, clawID)
-	u.RawQuery = q.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), http.NoBody)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	req.Header.Set("Accept", "application/json")
-
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
-	}
-
-	return nil
+	return c.lifecycleCommand(ctx, baseURL, headers, hostingapi.ClawsStopEndpoint, newLifecycleCommandRequest(userID, clawID, "stop"))
 }
 
 func (c *client) startClaw(
@@ -469,54 +422,7 @@ func (c *client) startClaw(
 	userID string,
 	clawID string,
 ) error {
-	const op = "infra.hosting.client.startClaw"
-
-	if c == nil || c.http == nil {
-		return fmt.Errorf("%s: http client is not initialized", op)
-	}
-
-	rawURL := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if rawURL == "" {
-		return fmt.Errorf("%s: base url is required", op)
-	}
-
-	u, err := url.Parse(rawURL + hostingapi.ClawsStartEndpoint)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	q := u.Query()
-	q.Set(hostingapi.QueryUserID, userID)
-	q.Set(hostingapi.QueryClawID, clawID)
-	u.RawQuery = q.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), http.NoBody)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	req.Header.Set("Accept", "application/json")
-
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return unexpectedStatusError(op, resp.StatusCode, resp.Status, respBody)
-	}
-
-	return nil
+	return c.lifecycleCommand(ctx, baseURL, headers, hostingapi.ClawsStartEndpoint, newLifecycleCommandRequest(userID, clawID, "start"))
 }
 
 func (c *client) approvePairing(
@@ -525,6 +431,7 @@ func (c *client) approvePairing(
 	headers map[string]string,
 	userID string,
 	clawID string,
+	channelType string,
 	code string,
 ) error {
 	const op = "infra.hosting.client.approvePairing"
@@ -546,6 +453,10 @@ func (c *client) approvePairing(
 		return fmt.Errorf("%s: claw id is required", op)
 	}
 
+	if channelType == "" {
+		return fmt.Errorf("%s: channel type is required", op)
+	}
+
 	if code == "" {
 		return fmt.Errorf("%s: code is required", op)
 	}
@@ -558,6 +469,7 @@ func (c *client) approvePairing(
 	q := u.Query()
 	q.Set(hostingapi.QueryUserID, userID)
 	q.Set(hostingapi.QueryClawID, clawID)
+	q.Set(hostingapi.QueryChannelType, channelType)
 	q.Set(hostingapi.QueryCode, code)
 	u.RawQuery = q.Encode()
 

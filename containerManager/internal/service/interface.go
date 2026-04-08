@@ -21,6 +21,8 @@ type containerRuntime interface {
 	Start(ctx context.Context, containerID string) error
 	Stop(ctx context.Context, containerID string) error
 	Remove(ctx context.Context, containerID string) error
+	Inspect(ctx context.Context, containerID string) (bool, bool, string, error)
+	ExecPairingApprove(ctx context.Context, containerID string, opts docker.ExecPairingApproveOptions) error
 	ExecGmail(ctx context.Context, containerID string, token []byte, opts docker.ExecGmailOptions) error
 	StartGmailWatch(ctx context.Context, containerID string, opts docker.ExecGmailWatchStartOptions) error
 	StartGmailWatcher(ctx context.Context, containerID string, opts docker.ExecGmailWatcherOptions) error

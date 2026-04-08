@@ -62,9 +62,20 @@ func (r *fakeClawRepository) GetByID(context.Context, string) (entities.Containe
 }
 
 type fakeRuntime struct {
-	createCalled bool
-	startCalled  bool
-	startFunc    func(containerID string) error
+	createCalled              bool
+	startCalled               bool
+	stopCalled                bool
+	removeCalled              bool
+	execPairingApproveCalled  bool
+	execPairingApproveChannel string
+	execPairingApproveCode    string
+	execPairingApproveErr     error
+	inspectExists             bool
+	inspectRunning            bool
+	inspectStatus             string
+	inspectErr                error
+	startFunc                 func(containerID string) error
+	stopFunc                  func(containerID string) error
 }
 
 func (r *fakeRuntime) Create(context.Context, docker.CreateOptions) (string, error) {
@@ -82,8 +93,24 @@ func (r *fakeRuntime) Start(_ context.Context, containerID string) error {
 	return nil
 }
 
-func (r *fakeRuntime) Stop(context.Context, string) error   { return nil }
-func (r *fakeRuntime) Remove(context.Context, string) error { return nil }
+func (r *fakeRuntime) Stop(_ context.Context, containerID string) error {
+	r.stopCalled = true
+	if r.stopFunc != nil {
+		return r.stopFunc(containerID)
+	}
+
+	return nil
+}
+
+func (r *fakeRuntime) Remove(_ context.Context, _ string) error {
+	r.removeCalled = true
+	return nil
+}
+
+func (r *fakeRuntime) Inspect(_ context.Context, _ string) (bool, bool, string, error) {
+	return r.inspectExists, r.inspectRunning, r.inspectStatus, r.inspectErr
+}
+
 func (r *fakeRuntime) ExecGmail(context.Context, string, []byte, docker.ExecGmailOptions) error {
 	return nil
 }
@@ -94,6 +121,14 @@ func (r *fakeRuntime) StartGmailWatch(context.Context, string, docker.ExecGmailW
 
 func (r *fakeRuntime) StartGmailWatcher(context.Context, string, docker.ExecGmailWatcherOptions) error {
 	return nil
+}
+
+func (r *fakeRuntime) ExecPairingApprove(_ context.Context, _ string, opts docker.ExecPairingApproveOptions) error {
+	r.execPairingApproveCalled = true
+	r.execPairingApproveChannel = opts.ChannelType
+	r.execPairingApproveCode = opts.Code
+
+	return r.execPairingApproveErr
 }
 
 func TestContainerCreate_ReturnsCapacityErrorWhenMaxClawsReached(t *testing.T) {

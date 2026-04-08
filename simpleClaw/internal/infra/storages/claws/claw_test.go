@@ -26,7 +26,6 @@ func TestStorageCreate_AllowsNilServerID(t *testing.T) {
 		ID:        uuid.New(),
 		Name:      "draft claw",
 		UserID:    user.ID,
-		Status:    entities.StatusStop,
 		Config:    entities.NewDefaultClawConfig("openrouter/openai/gpt-4.1-mini"),
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -52,6 +51,320 @@ func TestStorageCreate_AllowsNilServerID(t *testing.T) {
 
 	if got.ServerID != uuid.Nil {
 		t.Fatalf("GetByID().ServerID = %s, want uuid.Nil", got.ServerID)
+	}
+}
+
+func TestStorageUpdateLifecycleState(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	store := NewStorage(db)
+	user := seedUser(t, db)
+	now := time.Now().UTC()
+	claw := entities.Claw{
+		ID:                 uuid.New(),
+		Name:               "lifecycle claw",
+		UserID:             user.ID,
+		ClawLifecycleState: entities.NewClawLifecycleState(),
+		Config:             entities.NewDefaultClawConfig("openrouter/openai/gpt-4.1-mini"),
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+
+	if err := store.Create(context.Background(), claw, nil); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	opID := uuid.New()
+	err := store.UpdateLifecycle(context.Background(), claw.ID, LifecycleUpdate{
+		DesiredState:       entities.ClawDesiredStateRunning,
+		ObservedState:      entities.ClawObservedStateUnknown,
+		LifecycleStatus:    entities.ClawLifecycleStatusStartPending,
+		CurrentOperationID: &opID,
+		LastLifecycleError: "boot pending",
+	})
+	if err != nil {
+		t.Fatalf("UpdateLifecycle() error = %v", err)
+	}
+
+	got, err := store.GetByID(context.Background(), claw.ID, user.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+
+	if got.DesiredState != entities.ClawDesiredStateRunning {
+		t.Fatalf("DesiredState = %q, want %q", got.DesiredState, entities.ClawDesiredStateRunning)
+	}
+
+	if got.ObservedState != entities.ClawObservedStateUnknown {
+		t.Fatalf("ObservedState = %q, want %q", got.ObservedState, entities.ClawObservedStateUnknown)
+	}
+
+	if got.LifecycleStatus != entities.ClawLifecycleStatusStartPending {
+		t.Fatalf("LifecycleStatus = %q, want %q", got.LifecycleStatus, entities.ClawLifecycleStatusStartPending)
+	}
+
+	if got.CurrentOperationID == nil || *got.CurrentOperationID != opID {
+		t.Fatalf("CurrentOperationID = %v, want %s", got.CurrentOperationID, opID)
+	}
+
+	if got.LastError != "boot pending" {
+		t.Fatalf("LastError = %q, want %q", got.LastError, "boot pending")
+	}
+}
+
+func TestStorageUpdateLifecycleClearsOperationAndError(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	store := NewStorage(db)
+	user := seedUser(t, db)
+	now := time.Now().UTC()
+	claw := entities.Claw{
+		ID:                 uuid.New(),
+		Name:               "clear lifecycle claw",
+		UserID:             user.ID,
+		ClawLifecycleState: entities.NewClawLifecycleState(),
+		Config:             entities.NewDefaultClawConfig("openrouter/openai/gpt-4.1-mini"),
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+
+	if err := store.Create(context.Background(), claw, nil); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	opID := uuid.New()
+	if err := store.UpdateLifecycle(context.Background(), claw.ID, LifecycleUpdate{
+		DesiredState:       entities.ClawDesiredStateRunning,
+		ObservedState:      entities.ClawObservedStateError,
+		LifecycleStatus:    entities.ClawLifecycleStatusFailed,
+		CurrentOperationID: &opID,
+		LastLifecycleError: "boom",
+	}); err != nil {
+		t.Fatalf("UpdateLifecycle(set) error = %v", err)
+	}
+
+	if err := store.UpdateLifecycle(context.Background(), claw.ID, LifecycleUpdate{
+		DesiredState:       entities.ClawDesiredStateStopped,
+		ObservedState:      entities.ClawObservedStateStopped,
+		LifecycleStatus:    entities.ClawLifecycleStatusIdle,
+		CurrentOperationID: nil,
+		LastLifecycleError: "",
+	}); err != nil {
+		t.Fatalf("UpdateLifecycle(clear) error = %v", err)
+	}
+
+	got, err := store.GetByID(context.Background(), claw.ID, user.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+
+	if got.CurrentOperationID != nil {
+		t.Fatalf("CurrentOperationID = %v, want nil", got.CurrentOperationID)
+	}
+
+	if got.LastError != "" {
+		t.Fatalf("LastError = %q, want empty string", got.LastError)
+	}
+}
+
+func TestStorageUpdateRuntimePersistsLifecycleFields(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	store := NewStorage(db)
+	user := seedUser(t, db)
+	now := time.Now().UTC()
+	serverID := uuid.New()
+	claw := entities.Claw{
+		ID:                 uuid.New(),
+		Name:               "runtime claw",
+		UserID:             user.ID,
+		ClawLifecycleState: entities.NewClawLifecycleState(),
+		Config:             entities.NewDefaultClawConfig("openrouter/openai/gpt-4.1-mini"),
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+
+	if err := db.Create(&models.Server{ID: serverID, Name: "srv", Url: "http://example.com"}).Error; err != nil {
+		t.Fatalf("seed server error = %v", err)
+	}
+
+	if err := store.Create(context.Background(), claw, nil); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	err := store.UpdateRuntime(context.Background(), claw.ID, entities.ClawRuntimeUpdate{
+		ServerID:           serverID,
+		ContainerRecordID:  "runtime-record-1",
+		DesiredState:       entities.ClawDesiredStateRunning,
+		ObservedState:      entities.ClawObservedStateRunning,
+		LifecycleStatus:    entities.ClawLifecycleStatusIdle,
+		LastLifecycleError: "",
+	})
+	if err != nil {
+		t.Fatalf("UpdateRuntime() error = %v", err)
+	}
+
+	got, err := store.GetByID(context.Background(), claw.ID, user.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+
+	if got.ServerID != serverID {
+		t.Fatalf("ServerID = %s, want %s", got.ServerID, serverID)
+	}
+
+	if got.ContainerID != "runtime-record-1" {
+		t.Fatalf("ContainerID = %q, want %q", got.ContainerID, "runtime-record-1")
+	}
+
+	if got.DesiredState != entities.ClawDesiredStateRunning {
+		t.Fatalf("DesiredState = %q, want %q", got.DesiredState, entities.ClawDesiredStateRunning)
+	}
+
+	if got.ObservedState != entities.ClawObservedStateRunning {
+		t.Fatalf("ObservedState = %q, want %q", got.ObservedState, entities.ClawObservedStateRunning)
+	}
+
+	if got.LifecycleStatus != entities.ClawLifecycleStatusIdle {
+		t.Fatalf("LifecycleStatus = %q, want %q", got.LifecycleStatus, entities.ClawLifecycleStatusIdle)
+	}
+
+	if got.LastError != "" {
+		t.Fatalf("LastError = %q, want empty string", got.LastError)
+	}
+}
+
+func TestStorageGetNextReconcilePendingReturnsOldestCandidate(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	store := NewStorage(db)
+	user := seedUser(t, db)
+	now := time.Now().UTC()
+
+	oldest := entities.Claw{
+		ID:        uuid.New(),
+		Name:      "oldest",
+		UserID:    user.ID,
+		Config:    entities.NewDefaultClawConfig("openrouter/openai/gpt-4.1-mini"),
+		CreatedAt: now.Add(-3 * time.Minute),
+		UpdatedAt: now.Add(-3 * time.Minute),
+		ClawLifecycleState: entities.ClawLifecycleState{
+			DesiredState:    entities.ClawDesiredStateRunning,
+			ObservedState:   entities.ClawObservedStateUnknown,
+			LifecycleStatus: entities.ClawLifecycleStatusReconcilePending,
+		},
+	}
+	newer := entities.Claw{
+		ID:        uuid.New(),
+		Name:      "newer",
+		UserID:    user.ID,
+		Config:    entities.NewDefaultClawConfig("openrouter/openai/gpt-4.1-mini"),
+		CreatedAt: now.Add(-time.Minute),
+		UpdatedAt: now.Add(-time.Minute),
+		ClawLifecycleState: entities.ClawLifecycleState{
+			DesiredState:    entities.ClawDesiredStateStopped,
+			ObservedState:   entities.ClawObservedStateUnknown,
+			LifecycleStatus: entities.ClawLifecycleStatusReconcilePending,
+		},
+	}
+	idle := entities.Claw{
+		ID:                 uuid.New(),
+		Name:               "idle",
+		UserID:             user.ID,
+		Config:             entities.NewDefaultClawConfig("openrouter/openai/gpt-4.1-mini"),
+		CreatedAt:          now,
+		UpdatedAt:          now,
+		ClawLifecycleState: entities.NewClawLifecycleState(),
+	}
+
+	for _, cl := range []entities.Claw{newer, oldest, idle} {
+		if err := store.Create(context.Background(), cl, nil); err != nil {
+			t.Fatalf("Create(%s) error = %v", cl.Name, err)
+		}
+	}
+
+	got, err := store.GetNextReconcilePending(context.Background())
+	if err != nil {
+		t.Fatalf("GetNextReconcilePending() error = %v", err)
+	}
+
+	if got.ID != oldest.ID {
+		t.Fatalf("GetNextReconcilePending().ID = %s, want %s", got.ID, oldest.ID)
+	}
+	if got.LifecycleStatus != entities.ClawLifecycleStatusReconcilePending {
+		t.Fatalf("LifecycleStatus = %q, want %q", got.LifecycleStatus, entities.ClawLifecycleStatusReconcilePending)
+	}
+}
+
+func TestStorageListRuntimeSyncCandidatesReturnsBoundClaws(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	store := NewStorage(db)
+	user := seedUser(t, db)
+	serverID := uuid.New()
+	now := time.Now().UTC()
+
+	if err := db.Create(&models.Server{ID: serverID, Name: "srv", Url: "http://example.com"}).Error; err != nil {
+		t.Fatalf("seed server error = %v", err)
+	}
+
+	bound := entities.Claw{
+		ID:        uuid.New(),
+		Name:      "bound",
+		UserID:    user.ID,
+		ServerID:  serverID,
+		Config:    entities.NewDefaultClawConfig("openrouter/openai/gpt-4.1-mini"),
+		CreatedAt: now.Add(-time.Minute),
+		UpdatedAt: now.Add(-time.Minute),
+		ClawLifecycleState: entities.ClawLifecycleState{
+			DesiredState:    entities.ClawDesiredStateRunning,
+			ObservedState:   entities.ClawObservedStateRunning,
+			LifecycleStatus: entities.ClawLifecycleStatusIdle,
+		},
+	}
+	unbound := entities.Claw{
+		ID:                 uuid.New(),
+		Name:               "unbound",
+		UserID:             user.ID,
+		Config:             entities.NewDefaultClawConfig("openrouter/openai/gpt-4.1-mini"),
+		CreatedAt:          now,
+		UpdatedAt:          now,
+		ClawLifecycleState: entities.NewClawLifecycleState(),
+	}
+
+	for _, cl := range []entities.Claw{bound, unbound} {
+		if err := store.Create(context.Background(), cl, nil); err != nil {
+			t.Fatalf("Create(%s) error = %v", cl.Name, err)
+		}
+	}
+
+	if err := store.UpdateRuntime(context.Background(), bound.ID, entities.ClawRuntimeUpdate{
+		ServerID:           serverID,
+		ContainerRecordID:  "runtime-record-1",
+		DesiredState:       entities.ClawDesiredStateRunning,
+		ObservedState:      entities.ClawObservedStateRunning,
+		LifecycleStatus:    entities.ClawLifecycleStatusIdle,
+		LastLifecycleError: "",
+	}); err != nil {
+		t.Fatalf("UpdateRuntime(bound) error = %v", err)
+	}
+
+	got, err := store.ListRuntimeSyncCandidates(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListRuntimeSyncCandidates() error = %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("len(got) = %d, want 1", len(got))
+	}
+
+	if got[0].ID != bound.ID {
+		t.Fatalf("got claw id = %s, want %s", got[0].ID, bound.ID)
 	}
 }
 
@@ -96,8 +409,13 @@ func newTestDB(t *testing.T) *gorm.DB {
 			config JSON,
 			user_id TEXT,
 			server_id TEXT NULL,
-			status TEXT NOT NULL,
 			container_id TEXT,
+			desired_state TEXT NOT NULL,
+			observed_state TEXT NOT NULL,
+			lifecycle_status TEXT NOT NULL,
+			last_lifecycle_error TEXT,
+			last_runtime_sync_at DATETIME,
+			current_operation_id TEXT NULL,
 			vars TEXT,
 			created_at DATETIME,
 			updated_at DATETIME,

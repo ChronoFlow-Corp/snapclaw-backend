@@ -22,26 +22,29 @@ const (
 )
 
 const (
-	defaultHTTPAddr       = ":8080"
-	defaultDevHTTPAddr    = ":1337"
-	defaultBackendPort    = "1337"
-	defaultFrontendPort   = "3000"
-	defaultDevHost        = "localhost"
-	defaultOpenRouterURL  = "https://openrouter.ai"
-	defaultBackupPath     = "/data/simpleclaw/backups"
-	defaultJWTRefreshDev  = "simpleclaw-dev-refresh-secret"
-	defaultJWTPrivateName = "jwtRS256.key"
-	defaultJWTPublicName  = "jwtRS256.key.pub"
-	defaultGooglePath     = "/auth/connect/google/callback"
-	defaultGmailPath      = "/api/me/connect/gmail/callback"
-	defaultJWTAccessTTL   = 24 * time.Hour
-	defaultJWTRefreshTTL  = 168 * time.Hour
-	defaultORTTimeout     = 15 * time.Second
-	defaultCMTimeout      = 15 * time.Second
-	defaultProxyTimeout   = 5 * time.Second
-	defaultProxyRetries   = 2
-	defaultProxyBackoff   = 250 * time.Millisecond
-	defaultTracingRatio   = 1.0
+	defaultHTTPAddr             = ":8080"
+	defaultDevHTTPAddr          = ":1337"
+	defaultBackendPort          = "1337"
+	defaultFrontendPort         = "3000"
+	defaultDevHost              = "localhost"
+	defaultOpenRouterURL        = "https://openrouter.ai"
+	defaultBackupPath           = "/data/simpleclaw/backups"
+	defaultJWTRefreshDev        = "simpleclaw-dev-refresh-secret"
+	defaultJWTPrivateName       = "jwtRS256.key"
+	defaultJWTPublicName        = "jwtRS256.key.pub"
+	defaultGooglePath           = "/auth/connect/google/callback"
+	defaultJWTAccessTTL         = 24 * time.Hour
+	defaultJWTRefreshTTL        = 168 * time.Hour
+	defaultORTTimeout           = 15 * time.Second
+	defaultCMTimeout            = 15 * time.Second
+	defaultProxyTimeout         = 5 * time.Second
+	defaultProxyRetries         = 2
+	defaultProxyBackoff         = 250 * time.Millisecond
+	defaultRuntimeSyncInterval  = 30 * time.Second
+	defaultRuntimeSyncTimeout   = 5 * time.Second
+	defaultRuntimeSyncBatchSize = 100
+	defaultRuntimeSyncWorkers   = 8
+	defaultTracingRatio         = 1.0
 )
 
 type Config struct {
@@ -49,6 +52,7 @@ type Config struct {
 	Http          http          `mapstructure:"http"`
 	Database      database      `mapstructure:"database"`
 	Auth          auth          `mapstructure:"auth"`
+	Brave         brave         `mapstructure:"brave"`
 	OpenRouter    openrouter    `mapstructure:"openrouter"`
 	Hosting       hosting       `mapstructure:"hosting"`
 	Connect       connect       `mapstructure:"connect"`
@@ -87,6 +91,10 @@ type Jwt struct {
 	RefreshExpire       time.Duration `mapstructure:"refresh_expire"`
 }
 
+type brave struct {
+	APIKey string `mapstructure:"api_key"`
+}
+
 type openrouter struct {
 	BaseURL  string        `mapstructure:"base_url"`
 	APIToken string        `mapstructure:"api_token"`
@@ -98,12 +106,21 @@ type hosting struct {
 }
 
 type containerManager struct {
-	Timeout    time.Duration `mapstructure:"timeout"`
-	BackupPath string        `mapstructure:"backup_path"`
+	Timeout     time.Duration `mapstructure:"timeout"`
+	BackupPath  string        `mapstructure:"backup_path"`
+	RuntimeSync runtimeSync   `mapstructure:"runtime_sync"`
+}
+
+type runtimeSync struct {
+	Enabled     bool          `mapstructure:"enabled"`
+	Interval    time.Duration `mapstructure:"interval"`
+	Timeout     time.Duration `mapstructure:"timeout"`
+	BatchSize   int           `mapstructure:"batch_size"`
+	WorkerCount int           `mapstructure:"worker_count"`
 }
 
 type connect struct {
-	Gmail gmail `mapstructure:"gmail"`
+	Gmail gmailConnect `mapstructure:"gmail"`
 }
 
 type proxy struct {
@@ -113,11 +130,8 @@ type proxy struct {
 	RetryBackoff   time.Duration `mapstructure:"retry_backoff"`
 }
 
-type gmail struct {
-	ClientID     string `mapstructure:"client_id"`
-	ClientSecret string `mapstructure:"client_secret"`
-	CallbackURL  string `mapstructure:"callback_url"`
-	Watch        watch  `mapstructure:"watch"`
+type gmailConnect struct {
+	Watch watch `mapstructure:"watch"`
 }
 
 type watch struct {
@@ -218,6 +232,11 @@ func newViper(path string) *viper.Viper {
 	v.SetDefault("auth.jwt.refresh_expire", defaultJWTRefreshTTL)
 	v.SetDefault("openrouter.timeout", defaultORTTimeout)
 	v.SetDefault("hosting.container_manager.timeout", defaultCMTimeout)
+	v.SetDefault("hosting.container_manager.runtime_sync.enabled", true)
+	v.SetDefault("hosting.container_manager.runtime_sync.interval", defaultRuntimeSyncInterval)
+	v.SetDefault("hosting.container_manager.runtime_sync.timeout", defaultRuntimeSyncTimeout)
+	v.SetDefault("hosting.container_manager.runtime_sync.batch_size", defaultRuntimeSyncBatchSize)
+	v.SetDefault("hosting.container_manager.runtime_sync.worker_count", defaultRuntimeSyncWorkers)
 	v.SetDefault("proxy.forward_timeout", defaultProxyTimeout)
 	v.SetDefault("proxy.retry_count", defaultProxyRetries)
 	v.SetDefault("proxy.retry_backoff", defaultProxyBackoff)
@@ -244,6 +263,7 @@ func (c *Config) applyEnvOverrides() error {
 	applyStringEnv(&c.Auth.Jwt.RefreshSecret, "AUTH_JWT_REFRESH_SECRET")
 	applyStringEnv(&c.Auth.Jwt.AccessSecretPublic, "AUTH_JWT_ACCESS_SECRET_PUBLIC")
 	applyStringEnv(&c.Auth.Jwt.AccessSecretPrivate, "AUTH_JWT_ACCESS_SECRET_PRIVATE")
+	applyStringEnv(&c.Brave.APIKey, "BRAVE_API_KEY")
 
 	if err := applyDurationEnv(&c.Auth.Jwt.AccessExpire, "AUTH_JWT_ACCESS_EXPIRE"); err != nil {
 		return err
@@ -265,6 +285,26 @@ func (c *Config) applyEnvOverrides() error {
 	}
 
 	applyStringEnv(&c.Hosting.ContainerManager.BackupPath, "CONTAINER_MANAGER_BACKUP_PATH")
+
+	if err := applyBoolEnv(&c.Hosting.ContainerManager.RuntimeSync.Enabled, "CONTAINER_MANAGER_RUNTIME_SYNC_ENABLED"); err != nil {
+		return err
+	}
+
+	if err := applyDurationEnv(&c.Hosting.ContainerManager.RuntimeSync.Interval, "CONTAINER_MANAGER_RUNTIME_SYNC_INTERVAL"); err != nil {
+		return err
+	}
+
+	if err := applyDurationEnv(&c.Hosting.ContainerManager.RuntimeSync.Timeout, "CONTAINER_MANAGER_RUNTIME_SYNC_TIMEOUT"); err != nil {
+		return err
+	}
+
+	if err := applyIntEnv(&c.Hosting.ContainerManager.RuntimeSync.BatchSize, "CONTAINER_MANAGER_RUNTIME_SYNC_BATCH_SIZE"); err != nil {
+		return err
+	}
+
+	if err := applyIntEnv(&c.Hosting.ContainerManager.RuntimeSync.WorkerCount, "CONTAINER_MANAGER_RUNTIME_SYNC_WORKER_COUNT"); err != nil {
+		return err
+	}
 	applyStringEnv(&c.Proxy.Token, "PROXY_TOKEN")
 
 	if err := applyDurationEnv(&c.Proxy.ForwardTimeout, "PROXY_FORWARD_TIMEOUT"); err != nil {
@@ -279,9 +319,6 @@ func (c *Config) applyEnvOverrides() error {
 		return err
 	}
 
-	applyStringEnv(&c.Connect.Gmail.ClientID, "GMAIL_CLIENT_ID")
-	applyStringEnv(&c.Connect.Gmail.ClientSecret, "GMAIL_CLIENT_SECRET")
-	applyStringEnv(&c.Connect.Gmail.CallbackURL, "GMAIL_CALLBACK_URL")
 	applyStringEnv(&c.Connect.Gmail.Watch.Topic, "CONNECT_GMAIL_WATCH_TOPIC")
 	applyCSVEnv(&c.Connect.Gmail.Watch.Labels, "CONNECT_GMAIL_WATCH_LABELS")
 
@@ -356,17 +393,6 @@ func (c *Config) applyDefaults(configPath string) {
 		}
 	}
 
-	if strings.TrimSpace(c.Connect.Gmail.ClientID) == "" {
-		c.Connect.Gmail.ClientID = c.Auth.Google.ClientID
-	}
-
-	if strings.TrimSpace(c.Connect.Gmail.ClientSecret) == "" {
-		c.Connect.Gmail.ClientSecret = c.Auth.Google.ClientSecret
-	}
-
-	if strings.TrimSpace(c.Connect.Gmail.CallbackURL) == "" {
-		c.Connect.Gmail.CallbackURL = fmt.Sprintf("http://%s:%s%s", host, defaultBackendPort, defaultGmailPath)
-	}
 }
 
 func applyStringEnv(target *string, envName string) {

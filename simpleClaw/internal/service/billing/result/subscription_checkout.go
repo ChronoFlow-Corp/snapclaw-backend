@@ -21,3 +21,28 @@ type SubscriptionCheckoutStatus struct {
 	PlanID             uuid.UUID
 	NextChargeAt       *time.Time
 }
+
+const (
+	OnboardingStepSubscriptionRequired = "subscription_required"
+	OnboardingStepTelegramChoice       = "telegram_choice"
+	OnboardingStepTelegramConfirm      = "telegram_confirm"
+	OnboardingStepDashboardReady       = "dashboard_ready"
+)
+
+type Bootstrap struct {
+	DashboardAllowed bool
+	Subscription     *BootstrapSubscription
+	Onboarding       BootstrapOnboarding
+}
+
+type BootstrapSubscription struct {
+	Status           string
+	CurrentPeriodEnd *time.Time
+	AccessActive     bool
+}
+
+type BootstrapOnboarding struct {
+	Required bool
+	Step     string
+	ClawID   *uuid.UUID
+}

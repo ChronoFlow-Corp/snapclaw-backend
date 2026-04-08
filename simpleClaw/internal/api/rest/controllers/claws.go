@@ -12,6 +12,7 @@ import (
 	"simpleClaw/internal/api/rest/middleware"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/service/claw/commands"
+	clawcapabilityservice "simpleClaw/internal/service/clawcapability"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -24,20 +25,27 @@ type clawService interface {
 	Update(ctx context.Context, cm commands.UpdateClaw) (entities.Claw, error)
 	Start(ctx context.Context, cm commands.StartClaw) (entities.Claw, error)
 	Stop(ctx context.Context, cm commands.StopClaw) (entities.Claw, error)
-	Delete(ctx context.Context, cm commands.DeleteClaw) error
+	Delete(ctx context.Context, cm commands.DeleteClaw) (entities.Claw, error)
 	ApprovePairing(ctx context.Context, cm commands.ApprovePairing) error
 	Connect(ctx context.Context, cm commands.ConnectClaw) error
 }
 
 type Claw struct {
-	service clawService
-	j       jwt.JWT
+	service           clawService
+	capabilityService clawCapabilityService
+	j                 jwt.JWT
 }
 
-func NewClaw(service clawService, j jwt.JWT) *Claw {
+type clawCapabilityService interface {
+	Attach(ctx context.Context, cmd clawcapabilityservice.AttachCommand) error
+	Detach(ctx context.Context, userID, clawID uuid.UUID, capabilityID entities.CapabilityID) error
+}
+
+func NewClaw(service clawService, capabilityService clawCapabilityService, j jwt.JWT) *Claw {
 	return &Claw{
-		service: service,
-		j:       j,
+		service:           service,
+		capabilityService: capabilityService,
+		j:                 j,
 	}
 }
 
@@ -52,6 +60,8 @@ func (c *Claw) Register(r chi.Router) {
 		r.Post("/claws/{id}/stop", c.Stop)
 		r.Post("/claws/{id}/approve", c.ApprovePairing)
 		r.Post("/claws/{id}/connect", c.Connect)
+		r.Put("/claws/{id}/capabilities/{capability}", c.AttachCapability)
+		r.Delete("/claws/{id}/capabilities/{capability}", c.DetachCapability)
 		r.Delete("/claws/{id}", c.Delete)
 	})
 }
@@ -100,11 +110,12 @@ func (c *Claw) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cl, err := c.service.Create(r.Context(), commands.CreateClaw{
-		UserID:      userID,
-		Name:        req.Name,
-		Model:       req.Model,
-		ChannelIDs:  channelIDs,
-		ApiKeyLimit: limits,
+		UserID:       userID,
+		Name:         req.Name,
+		Model:        req.Model,
+		ChannelIDs:   channelIDs,
+		ApiKeyLimit:  limits,
+		Capabilities: mapCreateCapabilities(req.Capabilities),
 	})
 	if err != nil {
 		respondServiceError(w, err)
@@ -112,11 +123,35 @@ func (c *Claw) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.RespondOK(w, dto.CreateClawResponse{
-		ID:     cl.ID.String(),
-		Name:   cl.Name,
-		Status: cl.Status,
-	})
+	response.RespondOK(w, clawResponse(cl))
+}
+
+func mapCreateCapabilities(req *dto.CreateClawCapabilitiesRequest) commands.CreateCapabilitySet {
+	if req == nil {
+		return commands.CreateCapabilitySet{}
+	}
+
+	out := commands.CreateCapabilitySet{}
+	if req.WebSearch != nil {
+		out.WebSearch = &commands.WebSearchCapabilityInput{
+			Enabled:  req.WebSearch.Enabled,
+			Provider: req.WebSearch.Provider,
+		}
+	}
+
+	if req.FilesImages != nil {
+		out.FilesImages = &commands.ToggleCapabilityInput{Enabled: req.FilesImages.Enabled}
+	}
+
+	if req.Memory != nil {
+		out.Memory = &commands.ToggleCapabilityInput{Enabled: req.Memory.Enabled}
+	}
+
+	if req.Gmail != nil {
+		out.Gmail = &commands.ToggleCapabilityInput{Enabled: req.Gmail.Enabled}
+	}
+
+	return out
 }
 
 func (c *Claw) List(w http.ResponseWriter, r *http.Request) {
@@ -140,11 +175,7 @@ func (c *Claw) List(w http.ResponseWriter, r *http.Request) {
 	rs := make([]dto.CreateClawResponse, 0, len(cls))
 
 	for _, cl := range cls {
-		rs = append(rs, dto.CreateClawResponse{
-			ID:     cl.ID.String(),
-			Name:   cl.Name,
-			Status: cl.Status,
-		})
+		rs = append(rs, clawResponse(cl))
 	}
 
 	response.RespondOK(w, rs)
@@ -180,11 +211,15 @@ func (c *Claw) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.RespondOK(w, dto.CreateClawResponse{
-		ID:     cl.ID.String(),
-		Name:   cl.Name,
-		Status: cl.Status,
-	})
+	response.RespondOK(w, clawResponse(cl))
+}
+
+func stringifyUUID(id *uuid.UUID) string {
+	if id == nil {
+		return ""
+	}
+
+	return id.String()
 }
 
 func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +294,7 @@ func (c *Claw) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.RespondOK(w, cl)
+	response.RespondOK(w, clawResponse(cl))
 }
 
 func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
@@ -285,17 +320,18 @@ func (c *Claw) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := c.service.Delete(r.Context(), commands.DeleteClaw{
+	cl, err := c.service.Delete(r.Context(), commands.DeleteClaw{
 		UserID:       userID,
 		ClawID:       id,
 		DeleteConfig: true,
-	}); err != nil {
+	})
+	if err != nil {
 		respondServiceError(w, err)
 
 		return
 	}
 
-	response.RespondOK(w, map[string]any{"deleted": true})
+	respondAccepted(w, clawResponse(cl))
 }
 
 func (c *Claw) Start(w http.ResponseWriter, r *http.Request) {
@@ -321,7 +357,7 @@ func (c *Claw) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = c.service.Start(r.Context(), commands.StartClaw{
+	cl, err := c.service.Start(r.Context(), commands.StartClaw{
 		UserID: userID,
 		ClawID: id,
 	})
@@ -331,7 +367,7 @@ func (c *Claw) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.RespondOK(w, map[string]any{"started": true})
+	respondAccepted(w, clawResponse(cl))
 }
 
 func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
@@ -357,7 +393,7 @@ func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = c.service.Stop(r.Context(), commands.StopClaw{
+	cl, err := c.service.Stop(r.Context(), commands.StopClaw{
 		UserID: userID,
 		ClawID: id,
 	})
@@ -367,7 +403,35 @@ func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.RespondOK(w, map[string]any{"stopped": true})
+	respondAccepted(w, clawResponse(cl))
+}
+
+func clawResponse(cl entities.Claw) dto.ClawResponse {
+	return dto.ClawResponse{
+		ID:                 cl.ID.String(),
+		Name:               cl.Name,
+		DesiredState:       string(cl.DesiredState),
+		ObservedState:      string(cl.ObservedState),
+		LifecycleStatus:    string(cl.LifecycleStatus),
+		CurrentOperationID: stringifyUUID(cl.CurrentOperationID),
+		LastError:          cl.LastError,
+	}
+}
+
+func respondAccepted(w http.ResponseWriter, data any) {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusInternalServerError,
+			Message: err.Error(),
+		})
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_, _ = w.Write(raw)
 }
 
 func (c *Claw) ApprovePairing(w http.ResponseWriter, r *http.Request) {
@@ -414,9 +478,10 @@ func (c *Claw) ApprovePairing(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := c.service.ApprovePairing(r.Context(), commands.ApprovePairing{
-		UserID: userID,
-		ClawID: id,
-		Code:   code,
+		UserID:      userID,
+		ClawID:      id,
+		Code:        code,
+		ChannelType: strings.TrimSpace(req.ChannelType),
 	}); err != nil {
 		respondServiceError(w, err)
 
@@ -465,4 +530,129 @@ func (c *Claw) Connect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.RespondOK(w, map[string]any{"connected": true})
+}
+
+func (c *Claw) AttachCapability(w http.ResponseWriter, r *http.Request) {
+	if c.capabilityService == nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusServiceUnavailable,
+			Message: "capability service is not configured",
+		})
+
+		return
+	}
+
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	clawID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid claw id",
+		})
+
+		return
+	}
+
+	capabilityID, err := clawcapabilityservice.ParseCapabilityID(strings.TrimSpace(chi.URLParam(r, "capability")))
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	var req dto.AttachClawCapabilityRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid request body",
+		})
+
+		return
+	}
+
+	var accountIntegrationID *uuid.UUID
+	if raw := strings.TrimSpace(req.AccountIntegrationID); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			response.RespondError(w, response.Error{
+				Code:    http.StatusBadRequest,
+				Message: "invalid account integration id",
+			})
+
+			return
+		}
+
+		accountIntegrationID = &id
+	}
+
+	if err := c.capabilityService.Attach(r.Context(), clawcapabilityservice.AttachCommand{
+		UserID:               userID,
+		ClawID:               clawID,
+		CapabilityID:         capabilityID,
+		Provider:             strings.TrimSpace(req.Provider),
+		AccountIntegrationID: accountIntegrationID,
+		Enabled:              req.Enabled,
+		Settings:             req.Settings,
+	}); err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	response.RespondOK(w, map[string]any{"attached": true})
+}
+
+func (c *Claw) DetachCapability(w http.ResponseWriter, r *http.Request) {
+	if c.capabilityService == nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusServiceUnavailable,
+			Message: "capability service is not configured",
+		})
+
+		return
+	}
+
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	clawID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid claw id",
+		})
+
+		return
+	}
+
+	capabilityID, err := clawcapabilityservice.ParseCapabilityID(strings.TrimSpace(chi.URLParam(r, "capability")))
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	if err := c.capabilityService.Detach(r.Context(), userID, clawID, capabilityID); err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	response.RespondOK(w, map[string]any{"detached": true})
 }

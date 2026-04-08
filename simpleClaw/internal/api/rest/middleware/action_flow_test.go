@@ -20,11 +20,11 @@ func TestClassifyActionFlow(t *testing.T) {
 			wantFlow:   "claw_lifecycle",
 		},
 		{
-			name:       "gmail callback route",
-			method:     "GET",
-			path:       "/api/me/connect/gmail/callback?code=1",
-			wantAction: "channel.connect.callback",
-			wantFlow:   "channel_connect",
+			name:       "integration connect route",
+			method:     "POST",
+			path:       "/api/me/integrations/gmail/connect",
+			wantAction: "integration.connect",
+			wantFlow:   "account_integration",
 		},
 		{
 			name:       "yookassa webhook route",

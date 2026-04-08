@@ -9,6 +9,8 @@ import (
 const (
 	ErrCodeValidation              = "validation"
 	ErrCodeInvalidCode             = "invalid_code"
+	ErrCodeConflictInProgress      = "lifecycle_in_progress"
+	ErrCodeUnknownState            = "runtime_state_unknown"
 	ErrCodeNotFound                = "not_found"
 	ErrCodeInternal                = "internal"
 	ErrCodeServerCapacityExceeded  = "server_capacity_exceeded"

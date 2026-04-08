@@ -206,7 +206,7 @@ func TestStorageApplyUsageDebitOnceIsIdempotent(t *testing.T) {
 	assertUsageEventCount(t, db, user.ID, 1)
 }
 
-func TestStorageApplyUsageDebitOnceRollsBackUsageEventOnInsufficientBalance(t *testing.T) {
+func TestStorageApplyUsageDebitOnceAllowsBalanceToGoNegative(t *testing.T) {
 	t.Parallel()
 
 	db := newTestDB(t)
@@ -224,14 +224,22 @@ func TestStorageApplyUsageDebitOnceRollsBackUsageEventOnInsufficientBalance(t *t
 		CreatedAt:  time.Now().UTC(),
 	}
 
-	_, _, err := store.ApplyUsageDebitOnce(context.Background(), entry, event)
-	if err == nil {
-		t.Fatal("ApplyUsageDebitOnce() error = nil, want non-nil")
+	balance, applied, err := store.ApplyUsageDebitOnce(context.Background(), entry, event)
+	if err != nil {
+		t.Fatalf("ApplyUsageDebitOnce() error = %v", err)
 	}
 
-	assertUserBalance(t, db, user.ID, 10)
-	assertEntryCount(t, db, user.ID, 0)
-	assertUsageEventCount(t, db, user.ID, 0)
+	if !applied {
+		t.Fatal("ApplyUsageDebitOnce() applied = false, want true")
+	}
+
+	if balance != -15 {
+		t.Fatalf("ApplyUsageDebitOnce() balance = %d, want -15", balance)
+	}
+
+	assertUserBalance(t, db, user.ID, -15)
+	assertEntryCount(t, db, user.ID, 1)
+	assertUsageEventCount(t, db, user.ID, 1)
 }
 
 func TestStorageListByUserIDOrdersNewestFirst(t *testing.T) {

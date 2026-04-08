@@ -27,6 +27,11 @@ type DeleteClaw struct {
 	DeleteConfig bool
 }
 
+type StateClaw struct {
+	UserID string
+	ClawID string
+}
+
 type UpdateClaw struct {
 	UserID string
 	ClawID string

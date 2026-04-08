@@ -46,6 +46,24 @@ type BillingSummaryResponse struct {
 	NextChargeAt        *time.Time            `json:"next_charge_at,omitempty"`
 }
 
+type BootstrapResponse struct {
+	DashboardAllowed bool                        `json:"dashboard_allowed"`
+	Subscription     *BootstrapSubscriptionDTO   `json:"subscription,omitempty"`
+	Onboarding       BootstrapOnboardingResponse `json:"onboarding"`
+}
+
+type BootstrapSubscriptionDTO struct {
+	Status           string     `json:"status"`
+	CurrentPeriodEnd *time.Time `json:"current_period_end,omitempty"`
+	AccessActive     bool       `json:"access_active"`
+}
+
+type BootstrapOnboardingResponse struct {
+	Required bool   `json:"required"`
+	Step     string `json:"step"`
+	ClawID   string `json:"claw_id,omitempty"`
+}
+
 type TopUpRequest struct {
 	Amount          string     `json:"amount"`
 	PaymentMethodID *uuid.UUID `json:"payment_method_id,omitempty"`

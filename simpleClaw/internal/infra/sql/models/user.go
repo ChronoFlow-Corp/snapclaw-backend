@@ -19,7 +19,6 @@ type User struct {
 	CreatedAt        time.Time          `gorm:"autoCreateTime"`
 	UpdatedAt        time.Time          `gorm:"autoUpdateTime"`
 	Sessions         []Session          `gorm:"constraint:OnDelete:CASCADE"`
-	GmailToken       *GmailToken        `gorm:"constraint:OnDelete:CASCADE"`
 	Channels         []Channel          `gorm:"constraint:OnDelete:CASCADE"`
 	Claws            []Claw             `gorm:"constraint:OnDelete:CASCADE"`
 	Payments         []Payment          `gorm:"constraint:OnDelete:CASCADE"`

@@ -5,19 +5,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"reflect"
 	"shared/consts"
+	"shared/pkg/hostingapi"
 	"shared/pkg/observability"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"simpleClaw/internal/entities"
+	"simpleClaw/internal/entities/channels"
 	"simpleClaw/internal/infra/hosting"
 	"simpleClaw/internal/infra/sql"
+	"simpleClaw/internal/infra/storages/claws"
+	"simpleClaw/internal/service/claw/capabilities"
 	"simpleClaw/internal/service/claw/commands"
 
 	"github.com/google/uuid"
@@ -30,29 +32,35 @@ const (
 )
 
 const (
-	updateStageValidate      = "validate"
-	updateStageHostingUpdate = "hosting_update"
-	updateStageDBUpdate      = "db_update"
-	updateStageArchiveSync   = "archive_sync"
+	updateStageValidate = "validate"
+	updateStageDBUpdate = "db_update"
 )
 
 var (
-	ErrUserIDRequired            = errors.New("user id is required")
-	ErrClawIDRequired            = errors.New("claw id is required")
-	ErrNameRequired              = errors.New("name is required")
-	ErrModelRequired             = errors.New("model is required")
-	ErrChannelNotFound           = errors.New("channel not found")
-	ErrHostingMissing            = errors.New("hosting manager is not configured")
-	ErrOpenRouterClient          = errors.New("openrouter manager is not configured")
-	ErrServerIDRequired          = errors.New("server id is required")
-	ErrContainerIDRequired       = errors.New("claw container id is required")
-	ErrNoServerCapacity          = errors.New("no server capacity available")
-	ErrConfigArchivePathRequired = errors.New("config archive path is required")
-	ErrPairingCodeRequired       = errors.New("pairing code is required")
-	ErrPairingCodeInvalid        = errors.New("invalid code")
-	ErrProviderUnsupported       = errors.New("provider is not supported")
-	ErrGmailTokenRequired        = errors.New("gmail token is required")
-	ErrGmailWatchTopicRequired   = errors.New("gmail watch topic is required")
+	ErrUserIDRequired               = errors.New("user id is required")
+	ErrClawIDRequired               = errors.New("claw id is required")
+	ErrNameRequired                 = errors.New("name is required")
+	ErrModelRequired                = errors.New("model is required")
+	ErrChannelNotFound              = errors.New("channel not found")
+	ErrHostingMissing               = errors.New("hosting manager is not configured")
+	ErrOpenRouterClient             = errors.New("openrouter manager is not configured")
+	ErrServerIDRequired             = errors.New("server id is required")
+	ErrContainerIDRequired          = errors.New("claw container id is required")
+	ErrNoServerCapacity             = errors.New("no server capacity available")
+	ErrPairingCodeRequired          = errors.New("pairing code is required")
+	ErrPairingCodeInvalid           = errors.New("invalid code")
+	ErrApproveChannelRequired       = errors.New("channel type is required")
+	ErrApproveChannelUnsupported    = errors.New("approve channel is not supported")
+	ErrBraveAPIKeyMissing           = errors.New("brave api key is not configured")
+	ErrProviderUnsupported          = errors.New("provider is not supported")
+	ErrGmailCapabilityRequired      = errors.New("gmail capability is not attached")
+	ErrGmailIntegrationRequired     = errors.New("gmail integration is required")
+	ErrGmailWatchTopicRequired      = errors.New("gmail watch topic is required")
+	ErrOperationStorageRequired     = errors.New("lifecycle operation storage is not configured")
+	ErrLifecycleOperationInProgress = errors.New("lifecycle operation already in progress")
+	ErrWebSearchRequired            = errors.New("web search capability is required")
+	ErrWebSearchProviderUnsupported = errors.New("web search provider is not supported")
+	ErrCreateCapabilityUnsupported  = errors.New("capability is not supported during claw create")
 )
 
 type UpdateStageError struct {
@@ -77,15 +85,20 @@ func (e *UpdateStageError) Unwrap() error {
 }
 
 type Service struct {
-	claws       clawStorage
-	channels    channelStorage
-	users       userStorage
-	servers     serverStorage
-	hosting     hostingManager
-	keys        apiKeyManager
-	archivePath string
-	watch       GmailWatchConfig
-	metrics     *observability.OperationMetrics
+	claws              clawStorage
+	operations         lifecycleOperationStorage
+	channels           channelStorage
+	users              userStorage
+	integrations       integrationStorage
+	attachments        capabilityAttachmentStorage
+	servers            serverStorage
+	hosting            hostingManager
+	keys               apiKeyManager
+	archivePath        string
+	watch              GmailWatchConfig
+	braveAPIKey        string
+	metrics            *observability.OperationMetrics
+	runtimeSyncRunning atomic.Bool
 }
 
 type GmailWatchConfig struct {
@@ -95,6 +108,7 @@ type GmailWatchConfig struct {
 
 func NewClaw(
 	claws clawStorage,
+	operations lifecycleOperationStorage,
 	channels channelStorage,
 	users userStorage,
 	servers serverStorage,
@@ -112,6 +126,7 @@ func NewClaw(
 
 	return &Service{
 		claws:       claws,
+		operations:  operations,
 		channels:    channels,
 		users:       users,
 		servers:     servers,
@@ -124,6 +139,22 @@ func NewClaw(
 		},
 		metrics: opMetrics,
 	}
+}
+
+func (s *Service) WithCapabilityDependencies(
+	attachments capabilityAttachmentStorage,
+	integrations integrationStorage,
+) *Service {
+	s.attachments = attachments
+	s.integrations = integrations
+
+	return s
+}
+
+func (s *Service) WithBraveAPIKey(apiKey string) *Service {
+	s.braveAPIKey = strings.TrimSpace(apiKey)
+
+	return s
 }
 
 func (s *Service) Create(
@@ -210,26 +241,36 @@ func (s *Service) Create(
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	cfg := entities.NewCreateClawConfig(entities.CreateClawConfigInput{
-		PrimaryModel: primaryModel,
-	})
+	cfg := capabilities.BuildBaseClawConfig(primaryModel)
 	ensureConfigVars(&cfg, keyValue, "")
+	cfg.Channels = mergeChannelConfigs(chs)
 
-	for _, ch := range chs {
-		if ch.Config.Telegram != nil {
-			cfg.AddTelegramChannel(ch.Config.Telegram)
+	if err := capabilities.ApplyCreateCapabilities(ctx, &cfg, cm.Capabilities); err != nil {
+		switch {
+		case errors.Is(err, capabilities.ErrWebSearchRequired):
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrWebSearchRequired)
+		case errors.Is(err, capabilities.ErrWebSearchProviderUnsupported):
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrWebSearchProviderUnsupported)
+		case errors.Is(err, capabilities.ErrCreateCapabilityUnsupported):
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrCreateCapabilityUnsupported)
+		default:
+			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 		}
+	}
+
+	if _, ok := cfg.Env.Vars["BRAVE_API_KEY"]; ok && s.braveAPIKey == "" {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrBraveAPIKeyMissing)
 	}
 
 	now := time.Now()
 	cl := entities.Claw{
-		ID:        uuid.New(),
-		Name:      cm.Name,
-		UserID:    user.ID,
-		Status:    entities.StatusStop,
-		Config:    cfg,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:                 uuid.New(),
+		Name:               cm.Name,
+		UserID:             user.ID,
+		ClawLifecycleState: entities.NewClawLifecycleState(),
+		Config:             cfg,
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	}
 
 	if err = s.claws.Create(ctx, cl, channelIDs); err != nil {
@@ -447,21 +488,6 @@ func (s *Service) Update(
 	desired.Config = updatedCfg
 	desired.UpdatedAt = time.Now()
 
-	if desired.ContainerID != "" && desired.ServerID != uuid.Nil {
-		if s.hosting == nil {
-			return entities.Claw{}, wrapUpdateStage(op, updateStageHostingUpdate, ErrHostingMissing)
-		}
-
-		availableSrv, err := s.servers.GetByID(ctx, desired.ServerID)
-		if err != nil {
-			return entities.Claw{}, wrapUpdateStage(op, updateStageHostingUpdate, err)
-		}
-
-		if err := s.hosting.Update(ctx, desired, availableSrv); err != nil {
-			return entities.Claw{}, wrapUpdateStage(op, updateStageHostingUpdate, err)
-		}
-	}
-
 	if err := s.claws.Update(ctx, desired, channelUpdate.ChannelIDs, channelUpdate.Replace); err != nil {
 		return entities.Claw{}, wrapUpdateStage(op, updateStageDBUpdate, err)
 	}
@@ -484,10 +510,11 @@ func (s *Service) DeleteByID(
 		return fmt.Errorf("%s: %w", op, ErrClawIDRequired)
 	}
 
-	return s.Delete(ctx, commands.DeleteClaw{
+	_, err := s.Delete(ctx, commands.DeleteClaw{
 		UserID: userID,
 		ClawID: clawID,
 	})
+	return err
 }
 
 func (s *Service) Start(
@@ -517,81 +544,20 @@ func (s *Service) Start(
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrClawIDRequired)
 	}
 
-	if s.hosting == nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrHostingMissing)
-	}
-
 	cl, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
 	if err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	if cl.ContainerID != "" && cl.ServerID != uuid.Nil {
-		srv, err := s.servers.GetByID(ctx, cl.ServerID)
-		if err != nil {
-			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-		}
-
-		if err := s.hosting.Start(ctx, cl, srv); err != nil {
-			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-		}
-
-		cl.Status = entities.StatusRunning
-
-		if err := s.claws.UpdateRuntime(
-			ctx,
-			cl.ID,
-			cl.ServerID,
-			cl.ContainerID,
-			cl.Status,
-		); err != nil {
-			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-		}
-
-		return cl, nil
-	}
-
-	srv, err := s.selectAvailableServer(ctx)
-	if err != nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-	}
-
-	archiveExists, err := s.archiveExists(cl)
-	if err != nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-	}
-
-	if archiveExists {
-		if err := s.restoreConfigArchive(ctx, cl, srv); err != nil {
-			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-		}
-	}
-
-	container, err := s.hosting.Create(ctx, cl, srv)
-	if err != nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-	}
-
-	cl.ContainerID = container.ID
-	if container.ServerID != uuid.Nil {
-		cl.ServerID = container.ServerID
-	} else {
-		cl.ServerID = srv.ID
-	}
-
-	if err := s.hosting.Start(ctx, cl, srv); err != nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-	}
-
-	cl.Status = entities.StatusRunning
-
-	if err := s.claws.UpdateRuntime(
+	cl, err = s.enqueueLifecycleIntent(
 		ctx,
-		cl.ID,
-		cl.ServerID,
-		cl.ContainerID,
-		cl.Status,
-	); err != nil {
+		cl,
+		entities.ClawLifecycleOperationTypeStart,
+		entities.ClawDesiredStateRunning,
+		entities.ClawLifecycleStatusStartPending,
+		boolPtr(!requiresOnboardingApprove(cl.Config)),
+	)
+	if err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -625,47 +591,20 @@ func (s *Service) Stop(
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrClawIDRequired)
 	}
 
-	if s.hosting == nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrHostingMissing)
-	}
-
 	cl, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
 	if err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	if cl.ContainerID == "" {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrContainerIDRequired)
-	}
-
-	if cl.ServerID == uuid.Nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrServerIDRequired)
-	}
-
-	srv, err := s.servers.GetByID(ctx, cl.ServerID)
-	if err != nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-	}
-
-	if err := s.backupConfigArchive(ctx, cl, srv, true); err != nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-	}
-
-	if err := s.hosting.Delete(ctx, cl, srv, false); err != nil {
-		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
-	}
-
-	cl.Status = entities.StatusStop
-	cl.ServerID = uuid.Nil
-	cl.ContainerID = ""
-
-	if err := s.claws.UpdateRuntime(
+	cl, err = s.enqueueLifecycleIntent(
 		ctx,
-		cl.ID,
-		cl.ServerID,
-		cl.ContainerID,
-		cl.Status,
-	); err != nil {
+		cl,
+		entities.ClawLifecycleOperationTypeStop,
+		entities.ClawDesiredStateStopped,
+		entities.ClawLifecycleStatusStopPending,
+		nil,
+	)
+	if err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
@@ -724,12 +663,33 @@ func (s *Service) ApprovePairing(
 		return fmt.Errorf("%s: %w", op, err)
 	}
 
-	if err := s.hosting.ApprovePairing(ctx, cl, srv, code); err != nil {
+	channelType, err := resolveApproveChannelType(cl, cm.ChannelType)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err := s.hosting.ApprovePairing(ctx, cl, srv, channelType, code); err != nil {
 		if errors.Is(err, hosting.ErrInvalidCode) {
 			return fmt.Errorf("%s: %w", op, ErrPairingCodeInvalid)
 		}
 
+		if errors.Is(err, hosting.ErrApproveChannelUnsupported) {
+			return fmt.Errorf("%s: %w", op, ErrApproveChannelUnsupported)
+		}
+
 		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	completed := true
+	if err := s.claws.UpdateLifecycle(ctx, cl.ID, claws.LifecycleUpdate{
+		DesiredState:       cl.DesiredState,
+		ObservedState:      cl.ObservedState,
+		LifecycleStatus:    cl.LifecycleStatus,
+		CurrentOperationID: cl.CurrentOperationID,
+		LastLifecycleError: cl.LastError,
+		OnboardingComplete: &completed,
+	}); err != nil {
+		return fmt.Errorf("%s: mark onboarding complete: %w", op, err)
 	}
 
 	return nil
@@ -773,27 +733,6 @@ func (s *Service) Connect(
 		return fmt.Errorf("%s: %w", op, ErrProviderUnsupported)
 	}
 
-	token, err := s.users.GetGmailToken(ctx, cm.UserID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNotFound) {
-			return fmt.Errorf("%s: %w", op, ErrGmailTokenRequired)
-		}
-
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	if token.Client == "" {
-		token.Client = "default"
-	}
-
-	if token.Token.TokenType == "" {
-		token.Token.TokenType = "Bearer"
-	}
-
-	if token.Token.RefreshToken == "" {
-		return fmt.Errorf("%s: %w", op, ErrGmailTokenRequired)
-	}
-
 	cl, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
@@ -810,6 +749,53 @@ func (s *Service) Connect(
 	srv, err := s.servers.GetByID(ctx, cl.ServerID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if s.attachments == nil || s.integrations == nil {
+		return fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	attachments, err := s.attachments.ListByClawID(ctx, cm.ClawID, cm.UserID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	var gmailAttachment *entities.ClawCapabilityAttachment
+	for i := range attachments {
+		if attachments[i].CapabilityID == entities.CapabilityGmail && attachments[i].Enabled {
+			gmailAttachment = &attachments[i]
+			break
+		}
+	}
+
+	if gmailAttachment == nil || gmailAttachment.AccountIntegrationID == nil {
+		return fmt.Errorf("%s: %w", op, ErrGmailCapabilityRequired)
+	}
+
+	integration, err := s.integrations.GetByID(
+		ctx,
+		*gmailAttachment.AccountIntegrationID,
+		cm.UserID,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNotFound) {
+			return fmt.Errorf("%s: %w", op, ErrGmailIntegrationRequired)
+		}
+
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	email := firstNonEmpty(
+		integration.ExternalAccountID,
+		stringFromMap(integration.Metadata, "email"),
+	)
+	client := firstNonEmpty(
+		stringFromMap(integration.Metadata, "client"),
+		"default",
+	)
+	refreshToken := stringFromMap(integration.SecretPayload, "refresh_token")
+	if email == "" || refreshToken == "" {
+		return fmt.Errorf("%s: %w", op, ErrGmailIntegrationRequired)
 	}
 
 	watchTopic := strings.TrimSpace(s.watch.Topic)
@@ -836,9 +822,9 @@ func (s *Service) Connect(
 		Topic        string   `json:"topic"`
 		Labels       []string `json:"labels,omitempty"`
 	}{
-		Email:        token.Email,
-		Client:       token.Client,
-		RefreshToken: token.Token.RefreshToken,
+		Email:        email,
+		Client:       client,
+		RefreshToken: refreshToken,
 		Topic:        watchTopic,
 		Labels:       watchLabels,
 	})
@@ -856,7 +842,7 @@ func (s *Service) Connect(
 func (s *Service) Delete(
 	ctx context.Context,
 	cm commands.DeleteClaw,
-) (err error) {
+) (entities.Claw, error) {
 	const op = "service.Claw.Delete"
 
 	ctx, _, finish := observability.StartOperation(
@@ -868,278 +854,110 @@ func (s *Service) Delete(
 		"claw_lifecycle",
 	)
 
+	var err error
 	defer func() { finish(err) }()
 
 	if cm.UserID == uuid.Nil {
-		return fmt.Errorf("%s: %w", op, ErrUserIDRequired)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrUserIDRequired)
 	}
 
 	if cm.ClawID == uuid.Nil {
-		return fmt.Errorf("%s: %w", op, ErrClawIDRequired)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrClawIDRequired)
 	}
 
 	cl, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
 	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	if cl.ContainerID != "" {
-		if s.hosting == nil {
-			return fmt.Errorf("%s: %w", op, ErrHostingMissing)
-		}
-
-		if cl.ServerID == uuid.Nil {
-			return fmt.Errorf("%s: %w", op, ErrServerIDRequired)
-		}
-
-		srv, err := s.servers.GetByID(ctx, cl.ServerID)
-		if err != nil {
-			return fmt.Errorf("%s: %w", op, err)
-		}
-
-		if err := s.hosting.Delete(ctx, cl, srv, true); err != nil {
-			return fmt.Errorf("%s: %w", op, err)
-		}
+	cl, err = s.enqueueLifecycleIntent(
+		ctx,
+		cl,
+		entities.ClawLifecycleOperationTypeDelete,
+		entities.ClawDesiredStateDeleted,
+		entities.ClawLifecycleStatusDeletePending,
+		nil,
+	)
+	if err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	if err := s.claws.Delete(ctx, cm.ClawID, cm.UserID); err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	if err := s.removeArchive(cl); err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	return nil
+	return cl, nil
 }
 
-func (s *Service) backupConfigArchive(
+func (s *Service) enqueueLifecycleIntent(
 	ctx context.Context,
 	cl entities.Claw,
-	server entities.Server,
-	deleteAfter bool,
-) error {
-	const op = "service.Claw.backupConfigArchive"
-
-	if s.archivePath == "" {
-		return fmt.Errorf("%s: %w", op, ErrConfigArchivePathRequired)
+	opType entities.ClawLifecycleOperationType,
+	desiredState entities.ClawDesiredState,
+	lifecycleStatus entities.ClawLifecycleStatus,
+	onboardingComplete *bool,
+) (entities.Claw, error) {
+	if s.operations == nil {
+		return entities.Claw{}, ErrOperationStorageRequired
 	}
 
-	if s.hosting == nil {
-		return fmt.Errorf("%s: %w", op, ErrHostingMissing)
+	active, err := s.operations.GetActiveByClawID(ctx, cl.ID)
+	switch {
+	case err == nil:
+		return entities.Claw{}, fmt.Errorf(
+			"active lifecycle operation %s exists: %w",
+			active.ID,
+			ErrLifecycleOperationInProgress,
+		)
+	case errors.Is(err, sql.ErrNotFound):
+	default:
+		return entities.Claw{}, err
 	}
 
-	body, err := s.hosting.ConfigArchive(ctx, cl, server, deleteAfter)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-	defer body.Close()
-
-	archiveFile, err := s.archiveFilePath(cl)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(archiveFile), 0o755); err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+	now := time.Now().UTC()
+	opID := uuid.New()
+	op := entities.ClawLifecycleOperation{
+		ID:        opID,
+		ClawID:    cl.ID,
+		Type:      opType,
+		Status:    entities.ClawLifecycleOperationStatusPending,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
-	tmp := archiveFile + ".tmp"
-
-	f, err := os.Create(tmp)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+	if err := s.operations.Create(ctx, op); err != nil {
+		return entities.Claw{}, err
 	}
 
-	_, err = io.Copy(f, body)
-	if err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("%s: %w", op, err)
+	if err := s.claws.UpdateLifecycle(ctx, cl.ID, claws.LifecycleUpdate{
+		DesiredState:       desiredState,
+		ObservedState:      cl.ObservedState,
+		LifecycleStatus:    lifecycleStatus,
+		CurrentOperationID: &opID,
+		LastLifecycleError: "",
+		OnboardingComplete: onboardingComplete,
+	}); err != nil {
+		return entities.Claw{}, err
 	}
 
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("%s: %w", op, err)
+	cl.DesiredState = desiredState
+	cl.LifecycleStatus = lifecycleStatus
+	cl.CurrentOperationID = &opID
+	cl.LastError = ""
+	if onboardingComplete != nil {
+		cl.OnboardingComplete = *onboardingComplete
 	}
 
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
+	s.logLifecycleEvent("queued_operation", op,
+		slog.String("desired_state", string(desiredState)),
+		slog.String("lifecycle_status", string(lifecycleStatus)),
+	)
 
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	if err := os.Rename(tmp, archiveFile); err != nil {
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	return nil
+	return cl, nil
 }
 
-func (s *Service) syncConfigArchive(
-	ctx context.Context,
-	cl entities.Claw,
-	server *entities.Server,
-) error {
-	const op = "service.Claw.syncConfigArchive"
-
-	if server != nil && cl.ContainerID != "" && cl.ServerID != uuid.Nil {
-		err := s.backupConfigArchive(ctx, cl, *server, false)
-		if err == nil {
-			return nil
-		}
-	}
-
-	err := s.writeArchiveFromConfig(cl)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	return nil
+func requiresOnboardingApprove(cfg entities.ClawConfig) bool {
+	return len(listApproveChannels(cfg)) > 0
 }
 
-func (s *Service) writeArchiveFromConfig(cl entities.Claw) error {
-	const op = "service.Claw.writeArchiveFromConfig"
-
-	if s.archivePath == "" {
-		return fmt.Errorf("%s: %w", op, ErrConfigArchivePathRequired)
-	}
-
-	archiveFile, err := s.archiveFilePath(cl)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(archiveFile), 0o755); err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	tmp := archiveFile + ".tmp"
-
-	f, err := os.Create(tmp)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	if err := hosting.WriteConfigArchive(cl.Config, cl.ID.String(), f); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	if err := os.Rename(tmp, archiveFile); err != nil {
-		_ = os.Remove(tmp)
-
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	return nil
-}
-
-func (s *Service) restoreConfigArchive(
-	ctx context.Context,
-	cl entities.Claw,
-	server entities.Server,
-) error {
-	const op = "service.Claw.restoreConfigArchive"
-
-	if s.archivePath == "" {
-		return fmt.Errorf("%s: %w", op, ErrConfigArchivePathRequired)
-	}
-
-	if s.hosting == nil {
-		return fmt.Errorf("%s: %w", op, ErrHostingMissing)
-	}
-
-	archiveFile, err := s.archiveFilePath(cl)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	f, err := os.Open(archiveFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-
-		return fmt.Errorf("%s: %w", op, err)
-	}
-	defer f.Close()
-
-	if err := s.hosting.RestoreConfigArchive(ctx, cl, server, f); err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	return nil
-}
-
-func (s *Service) archiveFilePath(cl entities.Claw) (string, error) {
-	if s.archivePath == "" {
-		return "", ErrConfigArchivePathRequired
-	}
-
-	return filepath.Join(s.archivePath, cl.UserID.String(), cl.ID.String()+".tar"), nil
-}
-
-func (s *Service) archiveExists(cl entities.Claw) (bool, error) {
-	const op = "service.Claw.archiveExists"
-
-	if s.archivePath == "" {
-		return false, nil
-	}
-
-	archiveFile, err := s.archiveFilePath(cl)
-	if err != nil {
-		return false, fmt.Errorf("%s: %w", op, err)
-	}
-
-	if _, err := os.Stat(archiveFile); err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-
-		return false, fmt.Errorf("%s: %w", op, err)
-	}
-
-	return true, nil
-}
-
-func (s *Service) removeArchive(cl entities.Claw) error {
-	const op = "service.Claw.removeArchive"
-
-	if s.archivePath == "" {
-		return nil
-	}
-
-	archiveFile, err := s.archiveFilePath(cl)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	if err := os.Remove(archiveFile); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	return nil
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 func (s *Service) selectAvailableServer(ctx context.Context) (entities.Server, error) {
@@ -1252,6 +1070,35 @@ func isVarRef(value string, name string) bool {
 	return strings.TrimSpace(value) == varRef(name)
 }
 
+func stringFromMap(values map[string]any, key string) string {
+	if len(values) == 0 {
+		return ""
+	}
+
+	raw, ok := values[key]
+	if !ok {
+		return ""
+	}
+
+	value, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+
+	return strings.TrimSpace(value)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+
+	return ""
+}
+
 func newConfigMeta(now time.Time) *entities.ConfigMeta {
 	return &entities.ConfigMeta{
 		LastTouchedVersion: openClawConfigVersion,
@@ -1297,6 +1144,63 @@ func mergeChannelConfigs(chs []entities.Channel) *entities.ClawChannels {
 	}
 
 	return cfg
+}
+
+func resolveApproveChannelType(cl entities.Claw, raw string) (string, error) {
+	explicit := strings.TrimSpace(raw)
+	if explicit != "" {
+		channelType, err := hostingapi.NormalizeApproveChannelType(explicit)
+		if err != nil {
+			return "", ErrApproveChannelUnsupported
+		}
+
+		if !clawSupportsApproveChannel(cl.Config, channelType) {
+			return "", ErrApproveChannelUnsupported
+		}
+
+		return channelType, nil
+	}
+
+	candidates := listApproveChannels(cl.Config)
+	if len(candidates) == 0 {
+		return "", ErrApproveChannelUnsupported
+	}
+
+	if len(candidates) > 1 {
+		return "", ErrApproveChannelRequired
+	}
+
+	return candidates[0], nil
+}
+
+func listApproveChannels(cfg entities.ClawConfig) []string {
+	if cfg.Channels == nil {
+		return nil
+	}
+
+	var out []string
+
+	if cfg.Channels.Telegram != nil && cfg.Channels.Telegram.Enabled &&
+		cfg.Channels.Telegram.DmPolicy == channels.DmPairing {
+		out = append(out, entities.ChannelTelegramType)
+	}
+
+	if cfg.Channels.WhatsApp != nil &&
+		strings.EqualFold(cfg.Channels.WhatsApp.DmPolicy, "pairing") {
+		out = append(out, entities.ChannelWhatsappType)
+	}
+
+	return out
+}
+
+func clawSupportsApproveChannel(cfg entities.ClawConfig, channelType string) bool {
+	for _, candidate := range listApproveChannels(cfg) {
+		if candidate == channelType {
+			return true
+		}
+	}
+
+	return false
 }
 
 func currentPrimaryModel(cfg entities.ClawConfig) string {

@@ -1,10 +1,14 @@
 package hostingapi
 
 const (
-	ClawsEndpoint       = "/claws"
+	ClawsEnsureEndpoint = "/claws/ensure"
 	ClawsStartEndpoint  = "/claws/start"
 	ClawsStopEndpoint   = "/claws/stop"
-	ClawsConfigEndpoint = "/claws/config"
+	ClawsDeleteEndpoint = "/claws/delete"
+	ClawsStateEndpoint  = "/claws/state"
+)
+
+const (
 	CapacityEndpoint    = "/capacity"
 	ApproveEndpoint     = "/approve"
 	ConnectEndpoint     = "/connect"
@@ -12,10 +16,9 @@ const (
 )
 
 const (
-	QueryUserID       = "userId"
-	QueryClawID       = "clawId"
-	QueryProvider     = "provider"
-	QueryCode         = "code"
-	QueryDeleteConfig = "deleteConfig"
-	QueryDeleteAfter  = "deleteAfter"
+	QueryUserID      = "userId"
+	QueryClawID      = "clawId"
+	QueryProvider    = "provider"
+	QueryChannelType = "channelType"
+	QueryCode        = "code"
 )

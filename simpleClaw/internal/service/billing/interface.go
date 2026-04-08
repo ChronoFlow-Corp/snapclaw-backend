@@ -22,8 +22,13 @@ type subscriptionStorage interface {
 	GetByID(ctx context.Context, id uuid.UUID) (entities.UserSubscription, error)
 	GetByIDAndUserID(ctx context.Context, id, userID uuid.UUID) (entities.UserSubscription, error)
 	GetActiveByUserID(ctx context.Context, userID uuid.UUID) (entities.UserSubscription, error)
+	GetLatestByUserID(ctx context.Context, userID uuid.UUID) (entities.UserSubscription, error)
 	Update(ctx context.Context, subscription entities.UserSubscription) error
 	Cancel(ctx context.Context, id, userID uuid.UUID, canceledAt time.Time) error
+}
+
+type bootstrapClawReader interface {
+	GetByUserID(ctx context.Context, userID uuid.UUID) ([]entities.Claw, error)
 }
 
 type balanceEntryStorage interface {

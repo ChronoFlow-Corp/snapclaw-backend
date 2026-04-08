@@ -45,6 +45,11 @@ var serviceErrorMappings = []serviceErrorMapping{
 		message: "channel not found",
 	},
 	{
+		err:     claw.ErrLifecycleOperationInProgress,
+		code:    http.StatusConflict,
+		message: "lifecycle operation already in progress",
+	},
+	{
 		err:     sql.ErrConflict,
 		code:    http.StatusConflict,
 		message: "resource already exists",
@@ -131,6 +136,21 @@ var serviceErrorMappings = []serviceErrorMapping{
 		message: "model is required",
 	},
 	{
+		err:     claw.ErrWebSearchRequired,
+		code:    http.StatusBadRequest,
+		message: "web search capability is required",
+	},
+	{
+		err:     claw.ErrWebSearchProviderUnsupported,
+		code:    http.StatusBadRequest,
+		message: "web search provider is not supported",
+	},
+	{
+		err:     claw.ErrCreateCapabilityUnsupported,
+		code:    http.StatusBadRequest,
+		message: "capability is not supported during claw create",
+	},
+	{
 		err:     server.ErrServerIDRequired,
 		code:    http.StatusBadRequest,
 		message: "server id is required",
@@ -176,14 +196,29 @@ var serviceErrorMappings = []serviceErrorMapping{
 		message: "invalid code",
 	},
 	{
+		err:     claw.ErrApproveChannelRequired,
+		code:    http.StatusBadRequest,
+		message: "channel type is required",
+	},
+	{
+		err:     claw.ErrApproveChannelUnsupported,
+		code:    http.StatusBadRequest,
+		message: "channel type is not supported",
+	},
+	{
 		err:     claw.ErrProviderUnsupported,
 		code:    http.StatusBadRequest,
 		message: "provider is not supported",
 	},
 	{
-		err:     claw.ErrGmailTokenRequired,
+		err:     claw.ErrGmailCapabilityRequired,
 		code:    http.StatusBadRequest,
-		message: "gmail token is required",
+		message: "gmail capability is not attached",
+	},
+	{
+		err:     claw.ErrGmailIntegrationRequired,
+		code:    http.StatusBadRequest,
+		message: "gmail integration is required",
 	},
 	{
 		err:     openrouter.ErrModelRequired,
@@ -233,14 +268,14 @@ var serviceErrorMappings = []serviceErrorMapping{
 		message: "openrouter is not configured",
 	},
 	{
-		err:     claw.ErrConfigArchivePathRequired,
-		code:    http.StatusServiceUnavailable,
-		message: "config archive path is not configured",
-	},
-	{
 		err:     claw.ErrGmailWatchTopicRequired,
 		code:    http.StatusServiceUnavailable,
 		message: "gmail watch topic is not configured",
+	},
+	{
+		err:     claw.ErrBraveAPIKeyMissing,
+		code:    http.StatusServiceUnavailable,
+		message: "brave api key is not configured",
 	},
 	{
 		err:     openrouter.ErrMissingBaseURL,

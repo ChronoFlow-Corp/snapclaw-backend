@@ -3,11 +3,28 @@ package commands
 import "github.com/google/uuid"
 
 type CreateClaw struct {
-	UserID      uuid.UUID
-	Name        string
-	ChannelIDs  []uuid.UUID
-	Model       string
-	ApiKeyLimit ApiKeyLimits
+	UserID       uuid.UUID
+	Name         string
+	ChannelIDs   []uuid.UUID
+	Model        string
+	ApiKeyLimit  ApiKeyLimits
+	Capabilities CreateCapabilitySet
+}
+
+type CreateCapabilitySet struct {
+	WebSearch   *WebSearchCapabilityInput
+	FilesImages *ToggleCapabilityInput
+	Memory      *ToggleCapabilityInput
+	Gmail       *ToggleCapabilityInput
+}
+
+type WebSearchCapabilityInput struct {
+	Enabled  bool
+	Provider string
+}
+
+type ToggleCapabilityInput struct {
+	Enabled bool
 }
 
 type ApiKeyLimits struct {
@@ -40,9 +57,10 @@ type DeleteClaw struct {
 }
 
 type ApprovePairing struct {
-	UserID uuid.UUID
-	ClawID uuid.UUID
-	Code   string
+	UserID      uuid.UUID
+	ClawID      uuid.UUID
+	Code        string
+	ChannelType string
 }
 
 type ConnectClaw struct {

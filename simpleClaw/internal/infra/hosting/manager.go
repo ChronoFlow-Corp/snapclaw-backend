@@ -25,6 +25,7 @@ const (
 type Manager struct {
 	client  *client
 	metrics *observability.OperationMetrics
+	secrets RuntimeSecrets
 }
 
 func NewManager(metrics ...*observability.OperationMetrics) *Manager {
@@ -38,6 +39,12 @@ func NewManager(metrics ...*observability.OperationMetrics) *Manager {
 		client:  newClient(defaultHTTPTimeout),
 		metrics: opMetrics,
 	}
+}
+
+func (m *Manager) WithRuntimeSecrets(secrets RuntimeSecrets) *Manager {
+	m.secrets = secrets
+
+	return m
 }
 
 func (m *Manager) Create(
@@ -70,13 +77,13 @@ func (m *Manager) Create(
 		return Container{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	vars := buildVars(cl.Config)
+	vars := buildVars(cl.Config, m.secrets)
 
-	resp, err := m.client.createClaw(
+	resp, err := m.client.ensureRuntime(
 		ctx,
 		server.URL,
 		map[string]string{"Authorization": server.SecretKey},
-		hostingapi.CreateClawRequest{
+		hostingapi.EnsureRuntimeRequest{
 			UserID:     cl.UserID.String(),
 			ClawID:     cl.ID.String(),
 			Vars:       vars,
@@ -87,29 +94,18 @@ func (m *Manager) Create(
 		return Container{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	if resp.ContainerID == "" {
-		return Container{}, fmt.Errorf("%s: empty container id received", op)
+	if resp.RuntimeRecordID == "" {
+		return Container{}, fmt.Errorf("%s: empty runtime record id received", op)
 	}
 
 	container := Container{
-		ID:     resp.ContainerID,
-		Status: entities.StatusStop,
+		ID: resp.RuntimeRecordID,
 	}
 
 	if server.ID != uuid.Nil {
 		container.ServerID = server.ID
 	} else if cl.ServerID != uuid.Nil {
 		container.ServerID = cl.ServerID
-	}
-
-	if resp.ServerID != "" {
-		if srvID, err := uuid.Parse(resp.ServerID); err == nil {
-			container.ServerID = srvID
-		}
-	}
-
-	if resp.Status != "" {
-		container.Status = resp.Status
 	}
 
 	return container, nil
@@ -172,13 +168,12 @@ func (m *Manager) Delete(
 
 	_ = m.Stop(ctx, cl, server)
 
-	if err := m.client.deleteClaw(
+	if err := m.client.lifecycleCommand(
 		ctx,
 		server.URL,
 		map[string]string{"Authorization": server.SecretKey},
-		cl.UserID.String(),
-		cl.ID.String(),
-		deleteConfig,
+		hostingapi.ClawsDeleteEndpoint,
+		newLifecycleCommandRequest(cl.UserID.String(), cl.ID.String(), "delete"),
 	); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -266,55 +261,49 @@ func (m *Manager) Stop(
 	return nil
 }
 
-func (m *Manager) Update(
+func (m *Manager) State(
 	ctx context.Context,
 	cl entities.Claw,
 	server entities.Server,
-) (err error) {
-	const op = "infra.hosting.Manager.Update"
+) (RuntimeState, error) {
+	const op = "infra.hosting.Manager.State"
 
-	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.update", "claw_lifecycle")
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.hosting", "hosting.state", "claw_lifecycle")
 
+	var err error
 	defer func() { finish(err) }()
 
 	if m == nil || m.client == nil {
-		return fmt.Errorf("%s: http client is not configured", op)
+		return RuntimeState{}, fmt.Errorf("%s: http client is not configured", op)
 	}
 
 	if cl.UserID == uuid.Nil {
-		return fmt.Errorf("%s: user id is required", op)
-	}
-
-	if cl.ContainerID == "" {
-		return nil
+		return RuntimeState{}, fmt.Errorf("%s: user id is required", op)
 	}
 
 	if server.URL == "" {
-		return fmt.Errorf("%s: server url is required", op)
+		return RuntimeState{}, fmt.Errorf("%s: server url is required", op)
 	}
 
-	configFiles, err := buildConfigFiles(cl.Config)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	vars := buildVars(cl.Config)
-
-	if err := m.client.updateClaw(
+	resp, err := m.client.runtimeState(
 		ctx,
 		server.URL,
 		map[string]string{"Authorization": server.SecretKey},
-		hostingapi.UpdateClawRequest{
-			UserID:     cl.UserID.String(),
-			ClawID:     cl.ID.String(),
-			Vars:       vars,
-			ClawConfig: configFiles,
-		},
-	); err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+		cl.UserID.String(),
+		cl.ID.String(),
+	)
+	if err != nil {
+		return RuntimeState{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	return nil
+	return RuntimeState{
+		RuntimeRecordID:   resp.RuntimeRecordID,
+		DockerContainerID: resp.DockerContainerID,
+		ObservedState:     string(resp.ObservedState),
+		RuntimeStatus:     string(resp.RuntimeStatus),
+		Port:              string(resp.Port),
+		LastError:         resp.LastError,
+	}, nil
 }
 
 func (m *Manager) ConfigArchive(
@@ -400,6 +389,7 @@ func (m *Manager) ApprovePairing(
 	ctx context.Context,
 	cl entities.Claw,
 	server entities.Server,
+	channelType string,
 	code string,
 ) error {
 	const op = "infra.hosting.Manager.ApprovePairing"
@@ -424,12 +414,17 @@ func (m *Manager) ApprovePairing(
 		return fmt.Errorf("%s: code is required", op)
 	}
 
+	if channelType == "" {
+		return fmt.Errorf("%s: channel type is required", op)
+	}
+
 	err := m.client.approvePairing(
 		ctx,
 		server.URL,
 		map[string]string{"Authorization": server.SecretKey},
 		cl.UserID.String(),
 		cl.ID.String(),
+		channelType,
 		code,
 	)
 	if err != nil {
@@ -498,21 +493,43 @@ func buildConfigFiles(cfg entities.ClawConfig) ([]hostingapi.ClawConfigFile, err
 		return nil, fmt.Errorf("marshal openclaw config: %w", err)
 	}
 
-	return []hostingapi.ClawConfigFile{
+	files := []hostingapi.ClawConfigFile{
 		{
 			Name:     openClawConfigName,
 			FileType: fileTypeJSON,
 			Data:     string(data),
 		},
-	}, nil
+	}
+
+	manifest := buildRuntimeBindingManifest(cfg)
+	if len(manifest.Bindings) > 0 {
+		bindingData, err := json.Marshal(manifest)
+		if err != nil {
+			return nil, fmt.Errorf("marshal runtime bindings: %w", err)
+		}
+
+		files = append(files, hostingapi.ClawConfigFile{
+			Name:     runtimeBindingsName,
+			FileType: fileTypeJSON,
+			Data:     string(bindingData),
+		})
+	}
+
+	return files, nil
 }
 
-func buildVars(cfg entities.ClawConfig) []string {
+func buildVars(cfg entities.ClawConfig, secrets RuntimeSecrets) []string {
 	vars := make(map[string]string, len(cfg.Env.Vars))
 	for key, value := range cfg.Env.Vars {
 		value = strings.TrimSpace(value)
 		if value == "" {
 			continue
+		}
+
+		if key == "BRAVE_API_KEY" && isVarRef(value) {
+			if secret := strings.TrimSpace(secrets.BraveAPIKey); secret != "" {
+				value = secret
+			}
 		}
 
 		vars[key] = value

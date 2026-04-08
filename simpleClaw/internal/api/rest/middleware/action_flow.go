@@ -38,12 +38,12 @@ func classifySimpleClawActionFlow(method, path string) (string, string) {
 		}
 	}
 
-	if strings.HasPrefix(path, "/api/me/connect/") {
-		switch {
-		case strings.HasSuffix(path, "/callback"):
-			return "channel.connect.callback", "channel_connect"
-		default:
-			return "channel.connect", "channel_connect"
+	if strings.HasPrefix(path, "/api/me/integrations/") {
+		switch method {
+		case "GET":
+			return "integration.list", "account_integration"
+		case "POST":
+			return "integration.connect", "account_integration"
 		}
 	}
 

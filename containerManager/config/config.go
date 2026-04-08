@@ -10,15 +10,16 @@ import (
 )
 
 type Config struct {
-	Environment   string        `env:"ENVIRONMENT" env-default:"development" yaml:"environment"`
-	Postgres      Postgres      `                                            yaml:"postgres"`
-	Http          Http          `                                            yaml:"http"`
-	Image         Image         `                                            yaml:"image"`
-	MaxClaws      MaxClaws      `env:"MAX_CLAWS"   env-default:"auto"        yaml:"max_claws"`
-	Gog           gog           `                                            yaml:"gog"`
-	PubSub        pubSub        `                                            yaml:"pubsub"`
-	Migrations    Migrations    `                                            yaml:"migrations"`
-	Observability observability `                                            yaml:"observability"`
+	Environment    string         `env:"ENVIRONMENT" env-default:"development" yaml:"environment"`
+	Postgres       Postgres       `                                            yaml:"postgres"`
+	Http           Http           `                                            yaml:"http"`
+	Image          Image          `                                            yaml:"image"`
+	MaxClaws       MaxClaws       `env:"MAX_CLAWS"   env-default:"auto"        yaml:"max_claws"`
+	Gog            gog            `                                            yaml:"gog"`
+	PubSub         pubSub         `                                            yaml:"pubsub"`
+	RuntimeWatcher runtimeWatcher `                                          yaml:"runtime_watcher"`
+	Migrations     Migrations     `                                            yaml:"migrations"`
+	Observability  observability  `                                            yaml:"observability"`
 }
 
 type Http struct {
@@ -50,6 +51,12 @@ type pubSub struct {
 	ForwardTimeout time.Duration `env:"PUBSUB_FORWARD_TIMEOUT" env-default:"5s"  yaml:"forward_timeout"`
 	Workers        int           `env:"PUBSUB_WORKERS"         env-default:"32"  yaml:"workers"`
 	DedupTTL       time.Duration `env:"PUBSUB_DEDUP_TTL"       env-default:"10m" yaml:"dedup_ttl"`
+}
+
+type runtimeWatcher struct {
+	Enabled        bool          `env:"RUNTIME_WATCHER_ENABLED" env-default:"true" yaml:"enabled"`
+	Interval       time.Duration `env:"RUNTIME_WATCHER_INTERVAL" env-default:"15s" yaml:"interval"`
+	InspectTimeout time.Duration `env:"RUNTIME_WATCHER_INSPECT_TIMEOUT" env-default:"3s" yaml:"inspect_timeout"`
 }
 
 type Migrations struct {

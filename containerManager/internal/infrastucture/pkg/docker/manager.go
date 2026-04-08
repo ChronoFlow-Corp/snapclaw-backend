@@ -10,12 +10,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"shared/pkg/observability"
 	"slices"
 	"strings"
 	"time"
 
 	"containermanager/internal/pkg/logctx"
-	"shared/pkg/observability"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/build"
@@ -36,7 +36,11 @@ type Manager struct {
 	metrics *observability.OperationMetrics
 }
 
-func NewManager(ctx context.Context, cl *client.Client, metrics ...*observability.OperationMetrics) (*Manager, error) {
+func NewManager(
+	ctx context.Context,
+	cl *client.Client,
+	metrics ...*observability.OperationMetrics,
+) (*Manager, error) {
 	var opMetrics *observability.OperationMetrics
 
 	if len(metrics) > 0 {
@@ -62,7 +66,14 @@ func NewManager(ctx context.Context, cl *client.Client, metrics ...*observabilit
 func (m *Manager) Build(ctx context.Context, dockerfile string, buildCtxPaths []string) error {
 	const op = "container.Manager.Build"
 
-	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.docker", "docker.image.build", "claw_lifecycle")
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		m.metrics,
+		"infra.docker",
+		"docker.image.build",
+		"claw_lifecycle",
+	)
 
 	var err error
 
@@ -114,7 +125,14 @@ func (m *Manager) Build(ctx context.Context, dockerfile string, buildCtxPaths []
 func (m *Manager) Create(ctx context.Context, opts CreateOptions) (string, error) {
 	const op = "container.Manager.Create"
 
-	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.docker", "docker.container.create", "claw_lifecycle")
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		m.metrics,
+		"infra.docker",
+		"docker.container.create",
+		"claw_lifecycle",
+	)
 
 	var err error
 
@@ -147,7 +165,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (string, error
 	}, &dcontainer.HostConfig{
 		PortBindings:  portBindings,
 		Binds:         opts.Volumes,
-		RestartPolicy: dcontainer.RestartPolicy{Name: "unless-stopped"},
+		RestartPolicy: dcontainer.RestartPolicy{Name: "on-failure", MaximumRetryCount: 3},
 		NetworkMode:   "bridge",
 		LogConfig: dcontainer.LogConfig{
 			Type:   "json-file",
@@ -168,7 +186,14 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (string, error
 func (m *Manager) Start(ctx context.Context, containerID string) (err error) {
 	const op = "container.Manager.Start"
 
-	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.docker", "docker.container.start", "claw_lifecycle")
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		m.metrics,
+		"infra.docker",
+		"docker.container.start",
+		"claw_lifecycle",
+	)
 
 	defer func() { finish(err) }()
 
@@ -189,7 +214,14 @@ func (m *Manager) Attach(ctx context.Context, containerID string) (*types.Hijack
 func (m *Manager) Stop(ctx context.Context, containerID string) (err error) {
 	const op = "container.Manager.Stop"
 
-	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.docker", "docker.container.stop", "claw_lifecycle")
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		m.metrics,
+		"infra.docker",
+		"docker.container.stop",
+		"claw_lifecycle",
+	)
 
 	defer func() { finish(err) }()
 
@@ -204,7 +236,14 @@ func (m *Manager) Stop(ctx context.Context, containerID string) (err error) {
 func (m *Manager) Remove(ctx context.Context, containerID string) (err error) {
 	const op = "container.Manager.Remove"
 
-	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.docker", "docker.container.remove", "claw_lifecycle")
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		m.metrics,
+		"infra.docker",
+		"docker.container.remove",
+		"claw_lifecycle",
+	)
 
 	defer func() { finish(err) }()
 
@@ -217,6 +256,38 @@ func (m *Manager) Remove(ctx context.Context, containerID string) (err error) {
 	}
 
 	return nil
+}
+
+func (m *Manager) Inspect(ctx context.Context, containerID string) (bool, bool, string, error) {
+	const op = "container.Manager.Inspect"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		m.metrics,
+		"infra.docker",
+		"docker.container.inspect",
+		"claw_lifecycle",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
+	res, err := m.cl.ContainerInspect(ctx, containerID)
+	if err != nil {
+		if client.IsErrNotFound(err) {
+			return false, false, "", nil
+		}
+
+		return false, false, "", fmt.Errorf("%s: %w", op, err)
+	}
+
+	if res.ContainerJSONBase == nil || res.ContainerJSONBase.State == nil {
+		return true, false, "", nil
+	}
+
+	return true, res.ContainerJSONBase.State.Running, res.ContainerJSONBase.State.Status, nil
 }
 
 func (m *Manager) Stat(ctx context.Context, containerID string) error {
@@ -233,7 +304,14 @@ func (m *Manager) ExecGmail(
 ) error {
 	const op = "container.Manager.ExecGmail"
 
-	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), m.metrics, "infra.docker", "docker.exec.gmail", "claw_pairing")
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		m.metrics,
+		"infra.docker",
+		"docker.exec.gmail",
+		"claw_pairing",
+	)
 
 	var err error
 
@@ -327,6 +405,90 @@ func (m *Manager) ExecGmail(
 			slog.Int("exit_code", inspect.ExitCode),
 			slog.String("stderr", trim(stderrStr)),
 			slog.String("stdout", trim(stdoutStr)),
+		)
+
+		return fmt.Errorf("%s: exec failed with exit code %d: %s", op, inspect.ExitCode, errText)
+	}
+
+	return nil
+}
+
+func (m *Manager) ExecPairingApprove(
+	ctx context.Context,
+	containerID string,
+	opts ExecPairingApproveOptions,
+) error {
+	const op = "container.Manager.ExecPairingApprove"
+
+	log := logctx.Logger(ctx).With(slog.String("container_id", containerID))
+
+	if containerID == "" {
+		err := fmt.Errorf("%s: container id is required", op)
+		log.Error("pairing approve exec failed", slog.Any("err", err))
+
+		return err
+	}
+
+	if strings.TrimSpace(opts.ChannelType) == "" {
+		err := fmt.Errorf("%s: channel type is required", op)
+		log.Error("pairing approve exec failed", slog.Any("err", err))
+
+		return err
+	}
+
+	if strings.TrimSpace(opts.Code) == "" {
+		err := fmt.Errorf("%s: code is required", op)
+		log.Error("pairing approve exec failed", slog.Any("err", err))
+
+		return err
+	}
+
+	createRs, err := m.cl.ContainerExecCreate(ctx, containerID, execPairingApprove(opts))
+	if err != nil {
+		log.Error("pairing approve exec create failed", slog.Any("err", err))
+
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	hjr, err := m.cl.ContainerExecAttach(ctx, createRs.ID, dcontainer.ExecAttachOptions{})
+	if err != nil {
+		log.Error("pairing approve exec attach failed", slog.Any("err", err))
+
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	defer hjr.Close()
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	if _, err := stdcopy.StdCopy(&stdoutBuf, &stderrBuf, hjr.Reader); err != nil {
+		log.Error("pairing approve exec read failed", slog.Any("err", err))
+
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	inspect, err := m.cl.ContainerExecInspect(ctx, createRs.ID)
+	if err != nil {
+		log.Error("pairing approve exec inspect failed", slog.Any("err", err))
+
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if inspect.ExitCode != 0 {
+		stdoutStr := strings.TrimSpace(stdoutBuf.String())
+		stderrStr := strings.TrimSpace(stderrBuf.String())
+
+		errText := stderrStr
+		if errText == "" {
+			errText = stdoutStr
+		}
+		if errText == "" {
+			errText = "unknown error"
+		}
+
+		log.Error(
+			"pairing approve exec failed",
+			slog.Int("exit_code", inspect.ExitCode),
+			slog.String("stderr", stderrStr),
+			slog.String("stdout", stdoutStr),
 		)
 
 		return fmt.Errorf("%s: exec failed with exit code %d: %s", op, inspect.ExitCode, errText)

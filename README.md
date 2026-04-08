@@ -6,9 +6,8 @@
 
 1. Copy `.env.example` to `.env`.
 2. Fill in `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
-3. Register these Google OAuth redirect URLs:
+3. Register this Google OAuth redirect URL:
    - `http://localhost:1337/auth/connect/google/callback`
-   - `http://localhost:1337/api/me/connect/gmail/callback`
 4. Run `task up`.
 
 ### What starts by default

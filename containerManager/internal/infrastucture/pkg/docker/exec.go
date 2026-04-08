@@ -9,6 +9,11 @@ type ExecGmailOptions struct {
 	KeyringPassword string
 }
 
+type ExecPairingApproveOptions struct {
+	ChannelType string
+	Code        string
+}
+
 type ExecGmailWatchStartOptions struct {
 	Account         string
 	Topic           string
@@ -51,6 +56,21 @@ gog auth tokens import "$tmp"`,
 		AttachStdout: true,
 		AttachStderr: true,
 		AttachStdin:  true,
+	}
+}
+
+func execPairingApprove(opts ExecPairingApproveOptions) container.ExecOptions {
+	return container.ExecOptions{
+		Cmd: []string{
+			"openclaw",
+			"pairing",
+			"approve",
+			opts.ChannelType,
+			opts.Code,
+		},
+		User:         "node",
+		AttachStdout: true,
+		AttachStderr: true,
 	}
 }
 

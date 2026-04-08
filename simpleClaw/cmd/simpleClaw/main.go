@@ -6,9 +6,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"shared/pkg/jwt"
 	"shared/pkg/observability"
 	"strings"
+	"syscall"
+	"time"
 
 	"simpleClaw/internal/infra/convert"
 
@@ -29,11 +32,16 @@ import (
 	"simpleClaw/internal/infra/openrouter"
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/infra/storages/channels"
+	"simpleClaw/internal/infra/storages/clawcapabilities"
+	"simpleClaw/internal/infra/storages/clawoperations"
 	"simpleClaw/internal/infra/storages/claws"
+	"simpleClaw/internal/infra/storages/integrations"
 	"simpleClaw/internal/infra/storages/servers"
 	"simpleClaw/internal/infra/storages/users"
 	billingservice "simpleClaw/internal/service/billing"
 	"simpleClaw/internal/service/claw"
+	clawcapabilityservice "simpleClaw/internal/service/clawcapability"
+	integrationservice "simpleClaw/internal/service/integrations"
 	serverservice "simpleClaw/internal/service/server"
 	"simpleClaw/internal/service/user"
 
@@ -66,12 +74,15 @@ type clawAPIKeyManager interface {
 }
 
 func main() {
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	cfg := config.New()
 	logger := setupLogger(cfg.Environment)
 	fmt.Println(cfg.OpenRouter.APIToken)
 
 	shutdownTracing, err := observability.SetupTracing(
-		context.Background(),
+		rootCtx,
 		observability.TracingConfig{
 			ServiceName: "simpleclaw",
 			Environment: cfg.Environment,
@@ -101,28 +112,13 @@ func main() {
 		"openid",
 	)
 
-	gmailConnect := google.New(
-		cfg.Connect.Gmail.ClientID,
-		cfg.Connect.Gmail.ClientSecret,
-		cfg.Connect.Gmail.CallbackURL,
-		"https://www.googleapis.com/auth/userinfo.profile",
-		"https://www.googleapis.com/auth/userinfo.email",
-		"openid",
-		"https://www.googleapis.com/auth/gmail.send",
-		"https://www.googleapis.com/auth/gmail.readonly",
-		"https://www.googleapis.com/auth/gmail.modify",
-		"https://www.googleapis.com/auth/gmail.labels",
-	)
-
-	gmailConnect.SetName("gmail")
-	gmailConnect.SetPrompt("consent")
 	gAuth.SetName("google")
 
-	goth.UseProviders(gAuth, gmailConnect)
+	goth.UseProviders(gAuth)
 
 	db, err := gorm.Open(
 		postgres.Open(cfg.Database.Dsn),
-		&gorm.Config{},
+		&gorm.Config{TranslateError: true},
 	)
 	if err != nil {
 		panic(err)
@@ -153,6 +149,9 @@ func main() {
 	userStorage := users.NewStorage(db, operationMetrics)
 	channelsStorage := channels.NewStorage(db)
 	clawStorage := claws.NewStorage(db, operationMetrics)
+	clawOperationStorage := clawoperations.NewStorage(db, operationMetrics)
+	integrationStorage := integrations.NewStorage(db)
+	clawCapabilityStorage := clawcapabilities.NewStorage(db)
 	serversStorage := servers.NewStorage(db, operationMetrics)
 	paymentMethodStorage := paymentmethods.NewStorage(db)
 	paymentStorage := payments.NewStorage(db)
@@ -191,14 +190,16 @@ func main() {
 		logger.Warn("openrouter is disabled; google oauth works, claw creation requires OPENROUTER_API_TOKEN")
 	}
 
-	hostingManager := hosting.NewManager(operationMetrics)
+	hostingManager := hosting.NewManager(operationMetrics).WithRuntimeSecrets(hosting.RuntimeSecrets{
+		BraveAPIKey: cfg.Brave.APIKey,
+	})
 	paymentManager := payment.NewYooKassa(
 		cfg.Environment,
 		cfg.Payment.Yookassa.StoreID,
 		cfg.Payment.Yookassa.SecretKey,
 		cfg.Auth.Google.FrontendURL,
 	)
-	ctx := context.Background()
+	ctx := rootCtx
 
 	conv := convert.NewAmount(ctx)
 
@@ -226,12 +227,15 @@ func main() {
 	)
 
 	serverService := serverservice.New(serversStorage, hostingManager, operationMetrics)
+	integrationSvc := integrationservice.NewService(integrationStorage)
+	clawCapabilitySvc := clawcapabilityservice.NewService(clawStorage, clawCapabilityStorage, integrationStorage)
 	if err := serverService.SyncCapacities(context.Background()); err != nil {
 		logger.Error("failed to sync server capacities", slog.Any("err", err))
 	}
 
 	clawService := claw.NewClaw(
 		clawStorage,
+		clawOperationStorage,
 		channelsStorage,
 		userStorage,
 		serversStorage,
@@ -243,10 +247,22 @@ func main() {
 			Labels: cfg.Connect.Gmail.Watch.Labels,
 		},
 		operationMetrics,
-	)
+	).WithBraveAPIKey(cfg.Brave.APIKey).WithCapabilityDependencies(clawCapabilityStorage, integrationStorage)
+	billingSvc.WithBootstrapClawReader(clawService)
+	go clawService.RunLifecycleWorker(rootCtx, 0)
+	go clawService.RunReconciler(rootCtx, 0)
+	if cfg.Hosting.ContainerManager.RuntimeSync.Enabled {
+		go clawService.RunRuntimeSync(
+			rootCtx,
+			cfg.Hosting.ContainerManager.RuntimeSync.Interval,
+			cfg.Hosting.ContainerManager.RuntimeSync.Timeout,
+			cfg.Hosting.ContainerManager.RuntimeSync.BatchSize,
+			cfg.Hosting.ContainerManager.RuntimeSync.WorkerCount,
+		)
+	}
 
-	uController := controllers.NewUser(cfg.Environment, uService, j, cfg.Auth.Google.FrontendURL)
-	clawController := controllers.NewClaw(clawService, j)
+	uController := controllers.NewUser(cfg.Environment, uService, integrationSvc, j, cfg.Auth.Google.FrontendURL)
+	clawController := controllers.NewClaw(clawService, clawCapabilitySvc, j)
 	serverController := controllers.NewServer(serverService, uService, j)
 	billingController := controllers.NewBilling(
 		billingSvc,
@@ -291,9 +307,23 @@ func main() {
 
 	logger.Info("simpleClaw server starting", slog.String("addr", cfg.Http.Addr))
 
-	if err := s.ListenAndServe(); err != nil {
+	serverErrCh := make(chan error, 1)
+	go func() {
+		serverErrCh <- s.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErrCh:
 		logger.Error("simpleClaw server stopped", slog.Any("err", err))
 		panic(err)
+	case <-rootCtx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := s.Shutdown(shutdownCtx); err != nil {
+			logger.Error("simpleClaw shutdown failed", slog.Any("err", err))
+			panic(err)
+		}
 	}
 }
 

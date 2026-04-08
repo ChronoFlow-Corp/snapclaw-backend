@@ -5,8 +5,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"shared/pkg/observability"
 	"strings"
+	"syscall"
+	"time"
 
 	"containermanager/config"
 	"containermanager/internal/infrastucture/pkg/configurer"
@@ -25,6 +28,9 @@ import (
 )
 
 func main() {
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	cfg := config.MustLoadConfig()
 	logger := setupLogger()
 
@@ -34,7 +40,7 @@ func main() {
 	}
 
 	shutdownTracing, err := observability.SetupTracing(
-		context.Background(),
+		rootCtx,
 		observability.TracingConfig{
 			ServiceName: "containermanager",
 			Environment: cfg.Environment,
@@ -55,7 +61,7 @@ func main() {
 		}
 	}()
 
-	ctx := context.Background()
+	ctx := rootCtx
 
 	if cfg.Migrations.Auto {
 		err := migrations.Run(ctx, cfg.Postgres.URL, cfg.Migrations.Path)
@@ -118,6 +124,8 @@ func main() {
 		panic(err)
 	}
 
+	watcher := service.NewRuntimeWatcher(st, m, cfg.RuntimeWatcher.Interval, cfg.RuntimeWatcher.InspectTimeout)
+
 	cl := controllers.NewClaw(s, cfg.Http.ApiKey, controllers.ClawOptions{
 		PubSubForwardTimeout: cfg.PubSub.ForwardTimeout,
 		PubSubWorkers:        cfg.PubSub.Workers,
@@ -149,9 +157,27 @@ func main() {
 
 	logger.Info("containerManager server starting", slog.String("addr", cfg.Http.Addr))
 
-	if err := server.Start(); err != nil {
+	if cfg.RuntimeWatcher.Enabled {
+		go watcher.Run(rootCtx)
+	}
+
+	serverErrCh := make(chan error, 1)
+	go func() {
+		serverErrCh <- server.Start()
+	}()
+
+	select {
+	case err := <-serverErrCh:
 		logger.Error("containerManager server stopped", slog.Any("err", err))
 		panic(err)
+	case <-rootCtx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := server.Stop(shutdownCtx); err != nil {
+			logger.Error("containerManager shutdown failed", slog.Any("err", err))
+			panic(err)
+		}
 	}
 }
 

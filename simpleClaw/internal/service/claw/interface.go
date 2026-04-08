@@ -2,19 +2,24 @@ package claw
 
 import (
 	"context"
-	"io"
+	"time"
 
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/hosting"
+	"simpleClaw/internal/infra/storages/claws"
 
 	"github.com/google/uuid"
 )
 
 type clawStorage interface {
 	Create(ctx context.Context, cl entities.Claw, channelIDs []uuid.UUID) error
+	GetBySystemID(ctx context.Context, id uuid.UUID) (entities.Claw, error)
+	GetNextReconcilePending(ctx context.Context) (entities.Claw, error)
 	GetByID(ctx context.Context, id, userID uuid.UUID) (entities.Claw, error)
 	GetByUserID(ctx context.Context, userID uuid.UUID) ([]entities.Claw, error)
+	ListRuntimeSyncCandidates(ctx context.Context, limit int) ([]entities.Claw, error)
 	CountOccupiedByServer(ctx context.Context) (map[uuid.UUID]int, error)
+	UpdateLifecycle(ctx context.Context, clID uuid.UUID, update claws.LifecycleUpdate) error
 	Update(
 		ctx context.Context,
 		cl entities.Claw,
@@ -25,10 +30,15 @@ type clawStorage interface {
 	UpdateRuntime(
 		ctx context.Context,
 		clID uuid.UUID,
-		serverID uuid.UUID,
-		containerID string,
-		status string,
+		update entities.ClawRuntimeUpdate,
 	) error
+}
+
+type lifecycleOperationStorage interface {
+	Create(ctx context.Context, op entities.ClawLifecycleOperation) error
+	GetActiveByClawID(ctx context.Context, clawID uuid.UUID) (entities.ClawLifecycleOperation, error)
+	LockNextRunnable(ctx context.Context, now time.Time) (entities.ClawLifecycleOperation, error)
+	Update(ctx context.Context, op entities.ClawLifecycleOperation) error
 }
 
 type channelStorage interface {
@@ -38,7 +48,14 @@ type channelStorage interface {
 type userStorage interface {
 	GetByID(ctx context.Context, id uuid.UUID) (entities.User, error)
 	UpdateOpenRouterKey(ctx context.Context, id uuid.UUID, key entities.OpenRouterKey) error
-	GetGmailToken(ctx context.Context, userID uuid.UUID) (entities.GmailToken, error)
+}
+
+type integrationStorage interface {
+	GetByID(ctx context.Context, id, userID uuid.UUID) (entities.AccountIntegration, error)
+}
+
+type capabilityAttachmentStorage interface {
+	ListByClawID(ctx context.Context, clawID, userID uuid.UUID) ([]entities.ClawCapabilityAttachment, error)
 }
 
 type serverStorage interface {
@@ -61,25 +78,13 @@ type hostingManager interface {
 	Start(ctx context.Context, cl entities.Claw, server entities.Server) error
 	Stop(ctx context.Context, cl entities.Claw, server entities.Server) error
 	Delete(ctx context.Context, cl entities.Claw, server entities.Server, deleteConfig bool) error
-	Update(ctx context.Context, cl entities.Claw, server entities.Server) error
-	ApprovePairing(ctx context.Context, cl entities.Claw, server entities.Server, code string) error
+	State(ctx context.Context, cl entities.Claw, server entities.Server) (hosting.RuntimeState, error)
+	ApprovePairing(ctx context.Context, cl entities.Claw, server entities.Server, channelType string, code string) error
 	Connect(
 		ctx context.Context,
 		cl entities.Claw,
 		server entities.Server,
 		provider string,
 		token []byte,
-	) error
-	ConfigArchive(
-		ctx context.Context,
-		cl entities.Claw,
-		server entities.Server,
-		deleteAfter bool,
-	) (io.ReadCloser, error)
-	RestoreConfigArchive(
-		ctx context.Context,
-		cl entities.Claw,
-		server entities.Server,
-		body io.Reader,
 	) error
 }

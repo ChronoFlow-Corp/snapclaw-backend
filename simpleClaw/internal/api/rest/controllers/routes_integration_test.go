@@ -22,13 +22,17 @@ import (
 	"shared/pkg/jwt"
 	"simpleClaw/config"
 	"simpleClaw/internal/api/rest/controllers"
+	"simpleClaw/internal/api/rest/dto"
 	"simpleClaw/internal/entities"
 	entitychannels "simpleClaw/internal/entities/channels"
 	"simpleClaw/internal/infra/sql"
 	billingservice "simpleClaw/internal/service/billing"
 	billingcommands "simpleClaw/internal/service/billing/commands"
 	billingresult "simpleClaw/internal/service/billing/result"
+	clawservice "simpleClaw/internal/service/claw"
 	clawcommands "simpleClaw/internal/service/claw/commands"
+	clawcapabilityservice "simpleClaw/internal/service/clawcapability"
+	integrationservice "simpleClaw/internal/service/integrations"
 	servercommands "simpleClaw/internal/service/server/commands"
 	usercommands "simpleClaw/internal/service/user/commands"
 )
@@ -42,6 +46,8 @@ type testEnv struct {
 	openRouterWebhookSecret string
 	userService             *fakeUserService
 	clawService             *fakeClawService
+	integrationService      *fakeIntegrationService
+	clawCapabilityService   *fakeClawCapabilityService
 	serverService           *fakeServerService
 	billingService          *fakeBillingService
 }
@@ -130,10 +136,11 @@ func TestRoutesIntegration(t *testing.T) {
 		}
 
 		var payload struct {
-			ID          string `json:"ID"`
-			Name        string `json:"Name"`
-			ChannelType string `json:"ChannelType"`
-			UserID      string `json:"UserID"`
+			ID        string   `json:"id"`
+			Name      string   `json:"name"`
+			BotToken  string   `json:"botToken"`
+			DmPolicy  string   `json:"dmPolicy"`
+			AllowFrom []string `json:"allowFrom"`
 		}
 		decodeJSON(t, rr, &payload)
 
@@ -145,67 +152,29 @@ func TestRoutesIntegration(t *testing.T) {
 			t.Fatalf("unexpected channel name: %s", payload.Name)
 		}
 
-		if payload.ChannelType != entities.ChannelTelegramType {
-			t.Fatalf("unexpected channel type: %s", payload.ChannelType)
+		if payload.BotToken != "test-bot-token" {
+			t.Fatalf("unexpected bot token: %s", payload.BotToken)
 		}
 
-		if payload.UserID != env.user.ID.String() {
-			t.Fatalf("unexpected user ID: %s", payload.UserID)
-		}
-	})
-
-	t.Run("POST /api/me/payment-method", func(t *testing.T) {
-		env := newTestEnv(t)
-
-		body := map[string]any{
-			"title":      "Primary card",
-			"is_default": false,
+		if payload.DmPolicy != "allowlist" {
+			t.Fatalf("unexpected dm policy: %s", payload.DmPolicy)
 		}
 
-		rr := env.request(t, http.MethodPost, "/api/me/payment-method", body, accessCookie(env.accessToken))
-
-		if rr.Code != http.StatusOK {
-			t.Fatalf("unexpected status: %d", rr.Code)
-		}
-
-		var payload struct {
-			ID        string `json:"id"`
-			Title     string `json:"title"`
-			IsDefault bool   `json:"is_default"`
-		}
-		decodeJSON(t, rr, &payload)
-
-		if payload.ID == "" {
-			t.Fatal("expected non-empty payment method id")
-		}
-
-		if payload.Title != "Primary card" {
-			t.Fatalf("unexpected payment method title: %s", payload.Title)
-		}
-
-		if !payload.IsDefault {
-			t.Fatal("first payment method should become default")
+		if len(payload.AllowFrom) != 2 || payload.AllowFrom[0] != "1001" || payload.AllowFrom[1] != "1002" {
+			t.Fatalf("unexpected allowFrom: %#v", payload.AllowFrom)
 		}
 	})
 
 	t.Run("GET /api/me/payment-method", func(t *testing.T) {
 		env := newTestEnv(t)
-
-		createBody := map[string]any{
-			"title":      "Primary card",
-			"is_default": false,
+		method := entities.PaymentMethod{
+			ID:        uuid.New(),
+			UserID:    env.user.ID,
+			Title:     "Primary card",
+			IsDefault: true,
+			CreatedAt: time.Now().UTC(),
 		}
-
-		createRR := env.request(
-			t,
-			http.MethodPost,
-			"/api/me/payment-method",
-			createBody,
-			accessCookie(env.accessToken),
-		)
-		if createRR.Code != http.StatusOK {
-			t.Fatalf("unexpected create status: %d", createRR.Code)
-		}
+		env.userService.paymentMethods[method.ID] = method
 
 		rr := env.request(t, http.MethodGet, "/api/me/payment-method", nil, accessCookie(env.accessToken))
 
@@ -218,39 +187,26 @@ func TestRoutesIntegration(t *testing.T) {
 		}
 		decodeJSON(t, rr, &payload)
 
-		if len(payload) != 1 {
-			t.Fatalf("expected 1 payment method, got %d", len(payload))
+		if len(payload) != 1 || payload[0].ID != method.ID.String() {
+			t.Fatalf("unexpected payment methods payload: %#v", payload)
 		}
 	})
 
 	t.Run("GET /api/me/payment-method/{id}", func(t *testing.T) {
 		env := newTestEnv(t)
-
-		createBody := map[string]any{
-			"title":      "Primary card",
-			"is_default": false,
+		method := entities.PaymentMethod{
+			ID:        uuid.New(),
+			UserID:    env.user.ID,
+			Title:     "Primary card",
+			IsDefault: true,
+			CreatedAt: time.Now().UTC(),
 		}
-
-		createRR := env.request(
-			t,
-			http.MethodPost,
-			"/api/me/payment-method",
-			createBody,
-			accessCookie(env.accessToken),
-		)
-		if createRR.Code != http.StatusOK {
-			t.Fatalf("unexpected create status: %d", createRR.Code)
-		}
-
-		var created struct {
-			ID string `json:"id"`
-		}
-		decodeJSON(t, createRR, &created)
+		env.userService.paymentMethods[method.ID] = method
 
 		rr := env.request(
 			t,
 			http.MethodGet,
-			"/api/me/payment-method/"+created.ID,
+			"/api/me/payment-method/"+method.ID.String(),
 			nil,
 			accessCookie(env.accessToken),
 		)
@@ -264,76 +220,64 @@ func TestRoutesIntegration(t *testing.T) {
 		}
 		decodeJSON(t, rr, &payload)
 
-		if payload.ID != created.ID {
+		if payload.ID != method.ID.String() {
 			t.Fatalf("unexpected payment method id: %s", payload.ID)
 		}
 	})
 
 	t.Run("PATCH /api/me/payment-method/{id}", func(t *testing.T) {
 		env := newTestEnv(t)
-
-		firstRR := env.request(
-			t,
-			http.MethodPost,
-			"/api/me/payment-method",
-			map[string]any{"title": "First", "is_default": false},
-			accessCookie(env.accessToken),
-		)
-		if firstRR.Code != http.StatusOK {
-			t.Fatalf("unexpected first create status: %d", firstRR.Code)
+		first := entities.PaymentMethod{
+			ID:        uuid.New(),
+			UserID:    env.user.ID,
+			Title:     "First",
+			IsDefault: true,
+			CreatedAt: time.Now().UTC().Add(-time.Minute),
 		}
-
-		secondRR := env.request(
-			t,
-			http.MethodPost,
-			"/api/me/payment-method",
-			map[string]any{"title": "Second", "is_default": false},
-			accessCookie(env.accessToken),
-		)
-		if secondRR.Code != http.StatusOK {
-			t.Fatalf("unexpected second create status: %d", secondRR.Code)
+		second := entities.PaymentMethod{
+			ID:        uuid.New(),
+			UserID:    env.user.ID,
+			Title:     "Second",
+			IsDefault: false,
+			CreatedAt: time.Now().UTC(),
 		}
-
-		var second struct {
-			ID string `json:"id"`
-		}
-		decodeJSON(t, secondRR, &second)
+		env.userService.paymentMethods[first.ID] = first
+		env.userService.paymentMethods[second.ID] = second
 
 		patchRR := env.request(
 			t,
 			http.MethodPatch,
-			"/api/me/payment-method/"+second.ID,
+			"/api/me/payment-method/"+second.ID.String(),
 			map[string]any{"is_default": true},
 			accessCookie(env.accessToken),
 		)
 		if patchRR.Code != http.StatusOK {
 			t.Fatalf("unexpected patch status: %d", patchRR.Code)
 		}
+
+		if env.userService.paymentMethods[first.ID].IsDefault {
+			t.Fatal("first method should no longer be default")
+		}
+		if !env.userService.paymentMethods[second.ID].IsDefault {
+			t.Fatal("second method should become default")
+		}
 	})
 
 	t.Run("PATCH /api/me/payment-method/{id} rejects false", func(t *testing.T) {
 		env := newTestEnv(t)
-
-		createRR := env.request(
-			t,
-			http.MethodPost,
-			"/api/me/payment-method",
-			map[string]any{"title": "Primary", "is_default": false},
-			accessCookie(env.accessToken),
-		)
-		if createRR.Code != http.StatusOK {
-			t.Fatalf("unexpected create status: %d", createRR.Code)
+		method := entities.PaymentMethod{
+			ID:        uuid.New(),
+			UserID:    env.user.ID,
+			Title:     "Primary",
+			IsDefault: true,
+			CreatedAt: time.Now().UTC(),
 		}
-
-		var created struct {
-			ID string `json:"id"`
-		}
-		decodeJSON(t, createRR, &created)
+		env.userService.paymentMethods[method.ID] = method
 
 		rr := env.request(
 			t,
 			http.MethodPatch,
-			"/api/me/payment-method/"+created.ID,
+			"/api/me/payment-method/"+method.ID.String(),
 			map[string]any{"is_default": false},
 			accessCookie(env.accessToken),
 		)
@@ -345,33 +289,29 @@ func TestRoutesIntegration(t *testing.T) {
 
 	t.Run("DELETE /api/me/payment-method/{id}", func(t *testing.T) {
 		env := newTestEnv(t)
-
-		createRR := env.request(
-			t,
-			http.MethodPost,
-			"/api/me/payment-method",
-			map[string]any{"title": "Primary", "is_default": false},
-			accessCookie(env.accessToken),
-		)
-		if createRR.Code != http.StatusOK {
-			t.Fatalf("unexpected create status: %d", createRR.Code)
+		method := entities.PaymentMethod{
+			ID:        uuid.New(),
+			UserID:    env.user.ID,
+			Title:     "Primary",
+			IsDefault: true,
+			CreatedAt: time.Now().UTC(),
 		}
-
-		var created struct {
-			ID string `json:"id"`
-		}
-		decodeJSON(t, createRR, &created)
+		env.userService.paymentMethods[method.ID] = method
 
 		rr := env.request(
 			t,
 			http.MethodDelete,
-			"/api/me/payment-method/"+created.ID,
+			"/api/me/payment-method/"+method.ID.String(),
 			nil,
 			accessCookie(env.accessToken),
 		)
 
 		if rr.Code != http.StatusOK {
 			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		if _, ok := env.userService.paymentMethods[method.ID]; ok {
+			t.Fatalf("payment method %s should be removed", method.ID)
 		}
 	})
 
@@ -762,13 +702,28 @@ func TestRoutesIntegration(t *testing.T) {
 		}
 
 		var payload []struct {
-			ID   string `json:"ID"`
-			Name string `json:"Name"`
+			ID              string `json:"id"`
+			Name            string `json:"name"`
+			DesiredState    string `json:"desiredState"`
+			ObservedState   string `json:"observedState"`
+			LifecycleStatus string `json:"lifecycleStatus"`
 		}
 		decodeJSON(t, rr, &payload)
 
 		if len(payload) != 2 {
 			t.Fatalf("expected 2 claws, got %d", len(payload))
+		}
+
+		if payload[0].DesiredState != string(entities.ClawDesiredStateStopped) {
+			t.Fatalf("unexpected desired state: %s", payload[0].DesiredState)
+		}
+
+		if payload[0].ObservedState != string(entities.ClawObservedStateUnknown) {
+			t.Fatalf("unexpected observed state: %s", payload[0].ObservedState)
+		}
+
+		if payload[0].LifecycleStatus != string(entities.ClawLifecycleStatusIdle) {
+			t.Fatalf("unexpected lifecycle status: %s", payload[0].LifecycleStatus)
 		}
 	})
 
@@ -789,8 +744,11 @@ func TestRoutesIntegration(t *testing.T) {
 		}
 
 		var payload struct {
-			ID   string `json:"ID"`
-			Name string `json:"Name"`
+			ID              string `json:"id"`
+			Name            string `json:"name"`
+			DesiredState    string `json:"desiredState"`
+			ObservedState   string `json:"observedState"`
+			LifecycleStatus string `json:"lifecycleStatus"`
 		}
 		decodeJSON(t, rr, &payload)
 
@@ -800,6 +758,18 @@ func TestRoutesIntegration(t *testing.T) {
 
 		if payload.Name != "single" {
 			t.Fatalf("unexpected claw name: %s", payload.Name)
+		}
+
+		if payload.DesiredState != string(entities.ClawDesiredStateStopped) {
+			t.Fatalf("unexpected desired state: %s", payload.DesiredState)
+		}
+
+		if payload.ObservedState != string(entities.ClawObservedStateUnknown) {
+			t.Fatalf("unexpected observed state: %s", payload.ObservedState)
+		}
+
+		if payload.LifecycleStatus != string(entities.ClawLifecycleStatusIdle) {
+			t.Fatalf("unexpected lifecycle status: %s", payload.LifecycleStatus)
 		}
 	})
 
@@ -823,9 +793,11 @@ func TestRoutesIntegration(t *testing.T) {
 		}
 
 		var payload struct {
-			ID     string `json:"ID"`
-			Name   string `json:"Name"`
-			Status string `json:"Status"`
+			ID              string `json:"id"`
+			Name            string `json:"name"`
+			DesiredState    string `json:"desiredState"`
+			ObservedState   string `json:"observedState"`
+			LifecycleStatus string `json:"lifecycleStatus"`
 		}
 		decodeJSON(t, rr, &payload)
 
@@ -837,8 +809,16 @@ func TestRoutesIntegration(t *testing.T) {
 			t.Fatalf("unexpected claw name: %s", payload.Name)
 		}
 
-		if payload.Status != entities.StatusStop {
-			t.Fatalf("unexpected claw status: %s", payload.Status)
+		if payload.DesiredState != string(entities.ClawDesiredStateStopped) {
+			t.Fatalf("unexpected desired state: %s", payload.DesiredState)
+		}
+
+		if payload.ObservedState != string(entities.ClawObservedStateUnknown) {
+			t.Fatalf("unexpected observed state: %s", payload.ObservedState)
+		}
+
+		if payload.LifecycleStatus != string(entities.ClawLifecycleStatusIdle) {
+			t.Fatalf("unexpected lifecycle status: %s", payload.LifecycleStatus)
 		}
 	})
 
@@ -930,15 +910,15 @@ func TestRoutesIntegration(t *testing.T) {
 			accessCookie(env.accessToken),
 		)
 
-		if rr.Code != http.StatusOK {
+		if rr.Code != http.StatusAccepted {
 			t.Fatalf("unexpected status: %d", rr.Code)
 		}
 
-		var payload map[string]bool
+		var payload dto.ClawResponse
 		decodeJSON(t, rr, &payload)
 
-		if !payload["started"] {
-			t.Fatalf("expected started=true, got payload=%v", payload)
+		if payload.LifecycleStatus != string(entities.ClawLifecycleStatusStartPending) {
+			t.Fatalf("unexpected lifecycle status: %s", payload.LifecycleStatus)
 		}
 
 		updated, err := env.clawService.GetByID(context.Background(), cl.ID, env.user.ID)
@@ -946,15 +926,51 @@ func TestRoutesIntegration(t *testing.T) {
 			t.Fatalf("get claw after start: %v", err)
 		}
 
-		if updated.Status != entities.StatusRunning {
-			t.Fatalf("unexpected status after start: %s", updated.Status)
+		if updated.DesiredState != entities.ClawDesiredStateRunning {
+			t.Fatalf("unexpected desired state after start: %s", updated.DesiredState)
+		}
+
+		if updated.ObservedState != entities.ClawObservedStateUnknown {
+			t.Fatalf("unexpected observed state after start: %s", updated.ObservedState)
+		}
+	})
+
+	t.Run("POST /api/claws/{id}/start returns conflict when lifecycle operation is active", func(t *testing.T) {
+		env := newTestEnv(t)
+		cl := env.clawService.seed(env.user.ID, "already-starting")
+		opID := uuid.New()
+		cl.CurrentOperationID = &opID
+		cl.LifecycleStatus = entities.ClawLifecycleStatusStartPending
+		env.clawService.claws[cl.ID] = cl
+
+		rr := env.request(
+			t,
+			http.MethodPost,
+			"/api/claws/"+cl.ID.String()+"/start",
+			nil,
+			accessCookie(env.accessToken),
+		)
+
+		if rr.Code != http.StatusConflict {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		var payload struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if payload.Message != "lifecycle operation already in progress" {
+			t.Fatalf("unexpected message: %s", payload.Message)
 		}
 	})
 
 	t.Run("POST /api/claws/{id}/stop", func(t *testing.T) {
 		env := newTestEnv(t)
 		cl := env.clawService.seed(env.user.ID, "to-stop")
-		cl.Status = entities.StatusRunning
+		cl.DesiredState = entities.ClawDesiredStateRunning
+		cl.ObservedState = entities.ClawObservedStateRunning
 		env.clawService.claws[cl.ID] = cl
 
 		rr := env.request(
@@ -965,15 +981,15 @@ func TestRoutesIntegration(t *testing.T) {
 			accessCookie(env.accessToken),
 		)
 
-		if rr.Code != http.StatusOK {
+		if rr.Code != http.StatusAccepted {
 			t.Fatalf("unexpected status: %d", rr.Code)
 		}
 
-		var payload map[string]bool
+		var payload dto.ClawResponse
 		decodeJSON(t, rr, &payload)
 
-		if !payload["stopped"] {
-			t.Fatalf("expected stopped=true, got payload=%v", payload)
+		if payload.LifecycleStatus != string(entities.ClawLifecycleStatusStopPending) {
+			t.Fatalf("unexpected lifecycle status: %s", payload.LifecycleStatus)
 		}
 
 		updated, err := env.clawService.GetByID(context.Background(), cl.ID, env.user.ID)
@@ -981,8 +997,12 @@ func TestRoutesIntegration(t *testing.T) {
 			t.Fatalf("get claw after stop: %v", err)
 		}
 
-		if updated.Status != entities.StatusStop {
-			t.Fatalf("unexpected status after stop: %s", updated.Status)
+		if updated.DesiredState != entities.ClawDesiredStateStopped {
+			t.Fatalf("unexpected desired state after stop: %s", updated.DesiredState)
+		}
+
+		if updated.ObservedState != entities.ClawObservedStateRunning {
+			t.Fatalf("unexpected observed state after stop: %s", updated.ObservedState)
 		}
 	})
 
@@ -998,19 +1018,19 @@ func TestRoutesIntegration(t *testing.T) {
 			accessCookie(env.accessToken),
 		)
 
-		if rr.Code != http.StatusOK {
+		if rr.Code != http.StatusAccepted {
 			t.Fatalf("unexpected status: %d", rr.Code)
 		}
 
-		var payload map[string]bool
+		var payload dto.ClawResponse
 		decodeJSON(t, rr, &payload)
 
-		if !payload["deleted"] {
-			t.Fatalf("expected deleted=true, got payload=%v", payload)
+		if payload.LifecycleStatus != string(entities.ClawLifecycleStatusDeletePending) {
+			t.Fatalf("unexpected lifecycle status: %s", payload.LifecycleStatus)
 		}
 
-		if env.clawService.exists(cl.ID) {
-			t.Fatalf("claw %s should be deleted", cl.ID)
+		if !env.clawService.exists(cl.ID) {
+			t.Fatalf("claw %s should still exist while delete is pending", cl.ID)
 		}
 	})
 
@@ -1240,13 +1260,15 @@ func newTestEnvWithRole(t *testing.T, role string) *testEnv {
 
 	uService := newFakeUserService(user, j, sessionID, refresh.Raw)
 	cService := newFakeClawService()
+	iService := newFakeIntegrationService()
+	ccService := newFakeClawCapabilityService()
 	sService := newFakeServerService()
 	bService := newFakeBillingService(user.ID)
 	openRouterWebhookSecret := "test-openrouter-webhook-secret"
 
 	api := chi.NewRouter()
-	controllers.NewUser(config.EnvDevelopment, uService, j, "http://example.com").Register(api)
-	controllers.NewClaw(cService, j).Register(api)
+	controllers.NewUser(config.EnvDevelopment, uService, iService, j, "http://example.com").Register(api)
+	controllers.NewClaw(cService, ccService, j).Register(api)
 	controllers.NewServer(sService, uService, j).Register(api)
 	controllers.NewBilling(
 		bService,
@@ -1269,6 +1291,8 @@ func newTestEnvWithRole(t *testing.T, role string) *testEnv {
 		openRouterWebhookSecret: openRouterWebhookSecret,
 		userService:             uService,
 		clawService:             cService,
+		integrationService:      iService,
+		clawCapabilityService:   ccService,
 		serverService:           sService,
 		billingService:          bService,
 	}
@@ -1569,6 +1593,76 @@ type fakeClawService struct {
 	claws map[uuid.UUID]entities.Claw
 }
 
+type fakeIntegrationService struct {
+	items map[uuid.UUID]entities.AccountIntegration
+}
+
+func newFakeIntegrationService() *fakeIntegrationService {
+	return &fakeIntegrationService{items: map[uuid.UUID]entities.AccountIntegration{}}
+}
+
+func (s *fakeIntegrationService) List(_ context.Context, userID uuid.UUID) ([]entities.AccountIntegration, error) {
+	out := make([]entities.AccountIntegration, 0, len(s.items))
+	for _, item := range s.items {
+		if item.UserID == userID {
+			out = append(out, item)
+		}
+	}
+
+	return out, nil
+}
+
+func (s *fakeIntegrationService) Connect(
+	_ context.Context,
+	cmd integrationservice.ConnectCommand,
+) (entities.AccountIntegration, error) {
+	id := cmd.ID
+	if id == uuid.Nil {
+		id = uuid.New()
+	}
+
+	capability := integrationservice.CapabilityFromProvider(cmd.Provider)
+	integration := entities.AccountIntegration{
+		ID:                id,
+		UserID:            cmd.UserID,
+		CapabilityID:      capability,
+		Provider:          cmd.Provider,
+		ExternalAccountID: cmd.ExternalAccountID,
+		DisplayName:       cmd.DisplayName,
+		Status:            entities.AccountIntegrationStatusActive,
+		SecretPayload:     cmd.SecretPayload,
+		Metadata:          cmd.Metadata,
+		CreatedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+	}
+
+	s.items[id] = integration
+
+	return integration, nil
+}
+
+type fakeClawCapabilityService struct{}
+
+func newFakeClawCapabilityService() *fakeClawCapabilityService {
+	return &fakeClawCapabilityService{}
+}
+
+func (s *fakeClawCapabilityService) Attach(
+	_ context.Context,
+	_ clawcapabilityservice.AttachCommand,
+) error {
+	return nil
+}
+
+func (s *fakeClawCapabilityService) Detach(
+	_ context.Context,
+	_ uuid.UUID,
+	_ uuid.UUID,
+	_ entities.CapabilityID,
+) error {
+	return nil
+}
+
 func newFakeClawService() *fakeClawService {
 	return &fakeClawService{
 		claws: map[uuid.UUID]entities.Claw{},
@@ -1578,12 +1672,12 @@ func newFakeClawService() *fakeClawService {
 func (s *fakeClawService) seed(userID uuid.UUID, name string) entities.Claw {
 	now := time.Now()
 	cl := entities.Claw{
-		ID:        uuid.New(),
-		Name:      name,
-		UserID:    userID,
-		Status:    entities.StatusStop,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:                 uuid.New(),
+		Name:               name,
+		UserID:             userID,
+		ClawLifecycleState: entities.NewClawLifecycleState(),
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	}
 	s.claws[cl.ID] = cl
 
@@ -1602,12 +1696,12 @@ func (s *fakeClawService) Create(
 ) (entities.Claw, error) {
 	now := time.Now()
 	cl := entities.Claw{
-		ID:        uuid.New(),
-		Name:      cm.Name,
-		UserID:    cm.UserID,
-		Status:    entities.StatusStop,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:                 uuid.New(),
+		Name:               cm.Name,
+		UserID:             cm.UserID,
+		ClawLifecycleState: entities.NewClawLifecycleState(),
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	}
 	s.claws[cl.ID] = cl
 
@@ -1672,8 +1766,14 @@ func (s *fakeClawService) Start(
 	if !ok || existing.UserID != cm.UserID {
 		return entities.Claw{}, sql.ErrNotFound
 	}
+	if existing.CurrentOperationID != nil {
+		return entities.Claw{}, clawservice.ErrLifecycleOperationInProgress
+	}
 
-	existing.Status = entities.StatusRunning
+	existing.DesiredState = entities.ClawDesiredStateRunning
+	existing.LifecycleStatus = entities.ClawLifecycleStatusStartPending
+	opID := uuid.New()
+	existing.CurrentOperationID = &opID
 	existing.UpdatedAt = time.Now()
 	s.claws[existing.ID] = existing
 
@@ -1688,8 +1788,14 @@ func (s *fakeClawService) Stop(
 	if !ok || existing.UserID != cm.UserID {
 		return entities.Claw{}, sql.ErrNotFound
 	}
+	if existing.CurrentOperationID != nil {
+		return entities.Claw{}, clawservice.ErrLifecycleOperationInProgress
+	}
 
-	existing.Status = entities.StatusStop
+	existing.DesiredState = entities.ClawDesiredStateStopped
+	existing.LifecycleStatus = entities.ClawLifecycleStatusStopPending
+	opID := uuid.New()
+	existing.CurrentOperationID = &opID
 	existing.UpdatedAt = time.Now()
 	s.claws[existing.ID] = existing
 
@@ -1713,20 +1819,29 @@ func (s *fakeClawService) Connect(
 func (s *fakeClawService) Delete(
 	_ context.Context,
 	cm clawcommands.DeleteClaw,
-) error {
+) (entities.Claw, error) {
 	existing, ok := s.claws[cm.ClawID]
 	if !ok || existing.UserID != cm.UserID {
-		return sql.ErrNotFound
+		return entities.Claw{}, sql.ErrNotFound
+	}
+	if existing.CurrentOperationID != nil {
+		return entities.Claw{}, clawservice.ErrLifecycleOperationInProgress
 	}
 
-	delete(s.claws, cm.ClawID)
+	existing.DesiredState = entities.ClawDesiredStateDeleted
+	existing.LifecycleStatus = entities.ClawLifecycleStatusDeletePending
+	opID := uuid.New()
+	existing.CurrentOperationID = &opID
+	existing.UpdatedAt = time.Now()
+	s.claws[existing.ID] = existing
 
-	return nil
+	return existing, nil
 }
 
 type fakeBillingService struct {
 	plans                       map[uuid.UUID]entities.Plan
 	subscriptions               map[uuid.UUID]entities.UserSubscription
+	bootstrapResults            map[uuid.UUID]billingresult.Bootstrap
 	paymentStatusBySubscription map[uuid.UUID]string
 	balance                     map[uuid.UUID]int64
 	lastWebhook                 billingcommands.PaymentEvent
@@ -1740,6 +1855,7 @@ func newFakeBillingService(userID uuid.UUID) *fakeBillingService {
 	return &fakeBillingService{
 		plans:                       map[uuid.UUID]entities.Plan{},
 		subscriptions:               map[uuid.UUID]entities.UserSubscription{},
+		bootstrapResults:            map[uuid.UUID]billingresult.Bootstrap{},
 		paymentStatusBySubscription: map[uuid.UUID]string{},
 		balance:                     map[uuid.UUID]int64{userID: 0},
 	}
@@ -1979,6 +2095,20 @@ func (s *fakeBillingService) GetBillingSummary(_ context.Context, userID uuid.UU
 	summary.CurrentSubscription = current
 
 	return summary, nil
+}
+
+func (s *fakeBillingService) GetBootstrap(_ context.Context, userID uuid.UUID) (billingresult.Bootstrap, error) {
+	if bootstrap, ok := s.bootstrapResults[userID]; ok {
+		return bootstrap, nil
+	}
+
+	return billingresult.Bootstrap{
+		DashboardAllowed: false,
+		Onboarding: billingresult.BootstrapOnboarding{
+			Required: true,
+			Step:     billingresult.OnboardingStepSubscriptionRequired,
+		},
+	}, nil
 }
 
 func (s *fakeBillingService) EventPayment(_ context.Context, event billingcommands.PaymentEvent) error {

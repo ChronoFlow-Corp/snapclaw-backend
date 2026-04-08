@@ -137,37 +137,19 @@ func TestPaymentMethodEntityExists(t *testing.T) {
 	}
 }
 
-func TestAddPaymentMethodFirstMethodBecomesDefault(t *testing.T) {
-	t.Parallel()
-
-	service := NewUser(
-		newTestJWT(t),
-		newFakeUserStorage(),
-		fakeChannelStorage{},
-		newFakePaymentMethodStorage(),
-		fakeAPIKeyManager{},
-		nil,
-	)
-
-	method, err := service.AddPaymentMethod(context.Background(), commands.AddPaymentMethod{
-		UserID:    uuid.New(),
-		Title:     "Primary card",
-		IsDefault: false,
-	})
-	if err != nil {
-		t.Fatalf("AddPaymentMethod() error = %v", err)
-	}
-
-	if !method.IsDefault {
-		t.Fatal("first payment method must become default")
-	}
-}
-
-func TestAddPaymentMethodExplicitDefaultClearsPreviousDefault(t *testing.T) {
+func TestGetPaymentMethodReturnsStoredMethod(t *testing.T) {
 	t.Parallel()
 
 	userID := uuid.New()
+	methodID := uuid.New()
 	pmStore := newFakePaymentMethodStorage()
+	pmStore.methods[methodID] = entities.PaymentMethod{
+		ID:        methodID,
+		UserID:    userID,
+		Title:     "Primary card",
+		IsDefault: true,
+	}
+
 	service := NewUser(
 		newTestJWT(t),
 		newFakeUserStorage(),
@@ -177,35 +159,63 @@ func TestAddPaymentMethodExplicitDefaultClearsPreviousDefault(t *testing.T) {
 		nil,
 	)
 
-	first, err := service.AddPaymentMethod(context.Background(), commands.AddPaymentMethod{
+	method, err := service.GetPaymentMethod(context.Background(), methodID, userID)
+	if err != nil {
+		t.Fatalf("GetPaymentMethod() error = %v", err)
+	}
+
+	if method.ID != methodID {
+		t.Fatalf("method id = %s, want %s", method.ID, methodID)
+	}
+
+	if method.Title != "Primary card" {
+		t.Fatalf("method title = %q, want %q", method.Title, "Primary card")
+	}
+}
+
+func TestGetPaymentMethodsListsUserMethods(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	pmStore := newFakePaymentMethodStorage()
+	firstID := uuid.New()
+	secondID := uuid.New()
+	otherID := uuid.New()
+	pmStore.methods[firstID] = entities.PaymentMethod{
+		ID:        firstID,
 		UserID:    userID,
 		Title:     "First",
-		IsDefault: false,
-	})
-	if err != nil {
-		t.Fatalf("AddPaymentMethod() first error = %v", err)
+		IsDefault: true,
 	}
-
-	second, err := service.AddPaymentMethod(context.Background(), commands.AddPaymentMethod{
+	pmStore.methods[secondID] = entities.PaymentMethod{
+		ID:        secondID,
 		UserID:    userID,
 		Title:     "Second",
-		IsDefault: true,
-	})
+		IsDefault: false,
+	}
+	pmStore.methods[otherID] = entities.PaymentMethod{
+		ID:        otherID,
+		UserID:    uuid.New(),
+		Title:     "Other user",
+		IsDefault: false,
+	}
+
+	service := NewUser(
+		newTestJWT(t),
+		newFakeUserStorage(),
+		fakeChannelStorage{},
+		pmStore,
+		fakeAPIKeyManager{},
+		nil,
+	)
+
+	methods, err := service.GetPaymentMethods(context.Background(), userID)
 	if err != nil {
-		t.Fatalf("AddPaymentMethod() second error = %v", err)
+		t.Fatalf("GetPaymentMethods() error = %v", err)
 	}
 
-	if !second.IsDefault {
-		t.Fatal("second method must become default")
-	}
-
-	storedFirst, err := pmStore.GetByID(context.Background(), first.ID, userID)
-	if err != nil {
-		t.Fatalf("GetByID() first error = %v", err)
-	}
-
-	if storedFirst.IsDefault {
-		t.Fatal("previous default must be cleared")
+	if len(methods) != 2 {
+		t.Fatalf("methods len = %d, want 2", len(methods))
 	}
 }
 
@@ -223,25 +233,12 @@ func TestSetDefaultPaymentMethodSwitchesDefault(t *testing.T) {
 		nil,
 	)
 
-	first, err := service.AddPaymentMethod(context.Background(), commands.AddPaymentMethod{
-		UserID:    userID,
-		Title:     "First",
-		IsDefault: false,
-	})
-	if err != nil {
-		t.Fatalf("AddPaymentMethod() first error = %v", err)
-	}
+	first := entities.PaymentMethod{ID: uuid.New(), UserID: userID, Title: "First", IsDefault: true}
+	second := entities.PaymentMethod{ID: uuid.New(), UserID: userID, Title: "Second", IsDefault: false}
+	pmStore.methods[first.ID] = first
+	pmStore.methods[second.ID] = second
 
-	second, err := service.AddPaymentMethod(context.Background(), commands.AddPaymentMethod{
-		UserID:    userID,
-		Title:     "Second",
-		IsDefault: false,
-	})
-	if err != nil {
-		t.Fatalf("AddPaymentMethod() second error = %v", err)
-	}
-
-	err = service.SetDefaultPaymentMethod(context.Background(), commands.SetDefaultPaymentMethod{
+	err := service.SetDefaultPaymentMethod(context.Background(), commands.SetDefaultPaymentMethod{
 		UserID:          userID,
 		PaymentMethodID: second.ID,
 	})
@@ -282,20 +279,14 @@ func TestRemovePaymentMethodDeletesOwnerScopedMethod(t *testing.T) {
 		nil,
 	)
 
-	method, err := service.AddPaymentMethod(context.Background(), commands.AddPaymentMethod{
-		UserID:    userID,
-		Title:     "Primary card",
-		IsDefault: false,
-	})
-	if err != nil {
-		t.Fatalf("AddPaymentMethod() error = %v", err)
-	}
+	method := entities.PaymentMethod{ID: uuid.New(), UserID: userID, Title: "Primary card", IsDefault: true}
+	pmStore.methods[method.ID] = method
 
 	if err := service.RemovePaymentMethod(context.Background(), method.ID, userID); err != nil {
 		t.Fatalf("RemovePaymentMethod() error = %v", err)
 	}
 
-	_, err = pmStore.GetByID(context.Background(), method.ID, userID)
+	_, err := pmStore.GetByID(context.Background(), method.ID, userID)
 	if !errors.Is(err, sql.ErrNotFound) {
 		t.Fatalf("GetByID() after delete error = %v, want ErrNotFound", err)
 	}
@@ -443,18 +434,6 @@ func (s *fakeUserStorage) UpdateOpenRouterKey(
 	return nil
 }
 
-func (s *fakeUserStorage) GetGmailToken(_ context.Context, _ uuid.UUID) (entities.GmailToken, error) {
-	return entities.GmailToken{}, sql.ErrNotFound
-}
-
-func (s *fakeUserStorage) UpsertGmailToken(
-	_ context.Context,
-	_ uuid.UUID,
-	_ entities.GmailToken,
-) error {
-	return nil
-}
-
 type fakeChannelStorage struct{}
 
 func (fakeChannelStorage) Create(context.Context, entities.Channel) error { return nil }
@@ -586,7 +565,6 @@ type fakeAPIKeyManager struct{}
 func (fakeAPIKeyManager) Create(
 	context.Context,
 	uuid.UUID,
-	string,
 	float64,
 ) (entities.OpenRouterKey, error) {
 	return entities.OpenRouterKey{

@@ -24,8 +24,6 @@ type UStorage interface {
 	GetByID(ctx context.Context, id uuid.UUID) (entities.User, error)
 	UpdateRole(ctx context.Context, id uuid.UUID, role string) error
 	UpdateOpenRouterKey(ctx context.Context, id uuid.UUID, key entities.OpenRouterKey) error
-	GetGmailToken(ctx context.Context, userID uuid.UUID) (entities.GmailToken, error)
-	UpsertGmailToken(ctx context.Context, userID uuid.UUID, token entities.GmailToken) error
 }
 
 type ChannelStorage interface {

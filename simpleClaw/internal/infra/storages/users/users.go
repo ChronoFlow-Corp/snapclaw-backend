@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"shared/pkg/observability"
 	"simpleClaw/internal/entities"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type Storage struct {
@@ -304,77 +302,4 @@ func (s *Storage) UpdateOpenRouterKey(
 	}
 
 	return nil
-}
-
-func (s *Storage) GetGmailToken(ctx context.Context, userID uuid.UUID) (entities.GmailToken, error) {
-	const op = "storages.Users.GetGmailToken"
-
-	tDB, err := gorm.G[models.GmailToken](s.db).Where("user_id = ?", userID).First(ctx)
-	if err != nil {
-		return entities.GmailToken{}, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
-	}
-
-	expiry := ""
-
-	if !tDB.ExpiresAt.IsZero() {
-		expiry = tDB.ExpiresAt.UTC().Format(time.RFC3339)
-	}
-
-	return entities.GmailToken{
-		Email:  tDB.Email,
-		Client: tDB.Client,
-		Token: entities.Token{
-			AccessToken:  tDB.AccessToken,
-			RefreshToken: tDB.RefreshToken,
-			TokenType:    tDB.TokenType,
-			Expiry:       expiry,
-		},
-	}, nil
-}
-
-func (s *Storage) UpsertGmailToken(ctx context.Context, userID uuid.UUID, token entities.GmailToken) error {
-	const op = "storages.Users.UpsertGmailToken"
-
-	expiresAt, err := parseExpiry(token.Token.Expiry)
-	if err != nil {
-		return fmt.Errorf("%s: %w", op, sql.ErrInvalid)
-	}
-
-	model := models.GmailToken{
-		UserID:       userID,
-		Email:        token.Email,
-		Client:       token.Client,
-		AccessToken:  token.Token.AccessToken,
-		RefreshToken: token.Token.RefreshToken,
-		TokenType:    token.Token.TokenType,
-		ExpiresAt:    expiresAt,
-	}
-
-	tx := s.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "user_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"access_token",
-			"refresh_token",
-			"expires_at",
-			"updated_at",
-		}),
-	}).Create(&model)
-	if err := tx.Error; err != nil {
-		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
-	}
-
-	return nil
-}
-
-func parseExpiry(value string) (time.Time, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return time.Time{}, nil
-	}
-
-	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
-		return t, nil
-	}
-
-	return time.Parse(time.RFC3339, value)
 }

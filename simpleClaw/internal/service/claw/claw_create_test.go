@@ -2,6 +2,7 @@ package claw
 
 import (
 	"context"
+	"errors"
 	"io"
 	"maps"
 	"testing"
@@ -11,13 +12,20 @@ import (
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/entities/channels"
 	"simpleClaw/internal/infra/hosting"
+	"simpleClaw/internal/infra/sql"
+	"simpleClaw/internal/infra/storages/claws"
 	"simpleClaw/internal/service/claw/commands"
 )
+
+type createRuntimeUpdateCall struct {
+	ID     uuid.UUID
+	Update entities.ClawRuntimeUpdate
+}
 
 type createTestClawStorage struct {
 	created          entities.Claw
 	createdChannels  []uuid.UUID
-	runtimeUpdated   entities.Claw
+	runtimeUpdated   createRuntimeUpdateCall
 	occupiedByServer map[uuid.UUID]int
 }
 
@@ -33,7 +41,19 @@ func (s *createTestClawStorage) GetByID(context.Context, uuid.UUID, uuid.UUID) (
 	return entities.Claw{}, nil
 }
 
+func (s *createTestClawStorage) GetBySystemID(context.Context, uuid.UUID) (entities.Claw, error) {
+	return entities.Claw{}, nil
+}
+
+func (s *createTestClawStorage) GetNextReconcilePending(context.Context) (entities.Claw, error) {
+	return entities.Claw{}, sql.ErrNotFound
+}
+
 func (s *createTestClawStorage) GetByUserID(context.Context, uuid.UUID) ([]entities.Claw, error) {
+	return nil, nil
+}
+
+func (s *createTestClawStorage) ListRuntimeSyncCandidates(context.Context, int) ([]entities.Claw, error) {
 	return nil, nil
 }
 
@@ -52,6 +72,10 @@ func (s *createTestClawStorage) Update(context.Context, entities.Claw, []uuid.UU
 	return nil
 }
 
+func (s *createTestClawStorage) UpdateLifecycle(context.Context, uuid.UUID, claws.LifecycleUpdate) error {
+	return nil
+}
+
 func (s *createTestClawStorage) Delete(context.Context, uuid.UUID, uuid.UUID) error {
 	return nil
 }
@@ -59,20 +83,34 @@ func (s *createTestClawStorage) Delete(context.Context, uuid.UUID, uuid.UUID) er
 func (s *createTestClawStorage) UpdateRuntime(
 	_ context.Context,
 	clID uuid.UUID,
-	serverID uuid.UUID,
-	containerID string,
-	status string,
+	update entities.ClawRuntimeUpdate,
 ) error {
 	s.runtimeUpdated.ID = clID
-	s.runtimeUpdated.ServerID = serverID
-	s.runtimeUpdated.ContainerID = containerID
-	s.runtimeUpdated.Status = status
+	s.runtimeUpdated.Update = update
 
 	return nil
 }
 
 type createTestChannelStorage struct {
 	channels []entities.Channel
+}
+
+type createTestOperationStorage struct{}
+
+func (s *createTestOperationStorage) Create(context.Context, entities.ClawLifecycleOperation) error {
+	return nil
+}
+
+func (s *createTestOperationStorage) GetActiveByClawID(context.Context, uuid.UUID) (entities.ClawLifecycleOperation, error) {
+	return entities.ClawLifecycleOperation{}, sql.ErrNotFound
+}
+
+func (s *createTestOperationStorage) LockNextRunnable(context.Context, time.Time) (entities.ClawLifecycleOperation, error) {
+	return entities.ClawLifecycleOperation{}, sql.ErrNotFound
+}
+
+func (s *createTestOperationStorage) Update(context.Context, entities.ClawLifecycleOperation) error {
+	return nil
 }
 
 func (s *createTestChannelStorage) GetByIDs(context.Context, []uuid.UUID, uuid.UUID) ([]entities.Channel, error) {
@@ -89,10 +127,6 @@ func (s *createTestUserStorage) GetByID(context.Context, uuid.UUID) (entities.Us
 
 func (s *createTestUserStorage) UpdateOpenRouterKey(context.Context, uuid.UUID, entities.OpenRouterKey) error {
 	return nil
-}
-
-func (s *createTestUserStorage) GetGmailToken(context.Context, uuid.UUID) (entities.GmailToken, error) {
-	return entities.GmailToken{}, nil
 }
 
 type createTestServerStorage struct {
@@ -170,11 +204,11 @@ func (h *createTestHosting) Delete(context.Context, entities.Claw, entities.Serv
 	return nil
 }
 
-func (h *createTestHosting) Update(context.Context, entities.Claw, entities.Server) error {
-	return nil
+func (h *createTestHosting) State(context.Context, entities.Claw, entities.Server) (hosting.RuntimeState, error) {
+	return hosting.RuntimeState{}, nil
 }
 
-func (h *createTestHosting) ApprovePairing(context.Context, entities.Claw, entities.Server, string) error {
+func (h *createTestHosting) ApprovePairing(context.Context, entities.Claw, entities.Server, string, string) error {
 	return nil
 }
 
@@ -198,6 +232,7 @@ func TestServiceCreate_BuildsMinimalConfigWithMainAgent(t *testing.T) {
 	hostingStub := &createTestHosting{}
 	svc := NewClaw(
 		storage,
+		&createTestOperationStorage{},
 		&createTestChannelStorage{},
 		&createTestUserStorage{user: entities.User{
 			ID:               userID,
@@ -210,12 +245,18 @@ func TestServiceCreate_BuildsMinimalConfigWithMainAgent(t *testing.T) {
 		keys,
 		"",
 		GmailWatchConfig{},
-	)
+	).WithBraveAPIKey("brave-secret")
 
 	cl, err := svc.Create(context.Background(), commands.CreateClaw{
 		UserID: userID,
 		Name:   "demo",
 		Model:  "openai/gpt-4.1-mini",
+		Capabilities: commands.CreateCapabilitySet{
+			WebSearch: &commands.WebSearchCapabilityInput{
+				Enabled:  true,
+				Provider: "brave",
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("create claw: %v", err)
@@ -250,6 +291,36 @@ func TestServiceCreate_BuildsMinimalConfigWithMainAgent(t *testing.T) {
 		t.Fatalf("expected unified tools config")
 	}
 
+	if cl.Config.Plugins == nil {
+		t.Fatalf("expected plugins config")
+	}
+
+	brave, ok := cl.Config.Plugins.Entries["brave"]
+	if !ok {
+		t.Fatalf("expected brave plugin entry, got %#v", cl.Config.Plugins.Entries)
+	}
+
+	webSearch, ok := brave.Config["webSearch"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected brave webSearch config, got %#v", brave.Config["webSearch"])
+	}
+
+	if webSearch["apiKey"] != "${BRAVE_API_KEY}" {
+		t.Fatalf("expected brave api key ref, got %#v", webSearch["apiKey"])
+	}
+
+	if cl.Config.Tools.Web == nil || cl.Config.Tools.Web.Search == nil {
+		t.Fatalf("expected web search tools config, got %#v", cl.Config.Tools)
+	}
+
+	if !cl.Config.Tools.Web.Search.Enabled {
+		t.Fatalf("expected web search enabled")
+	}
+
+	if cl.Config.Tools.Web.Search.Provider != "brave" {
+		t.Fatalf("expected brave provider, got %q", cl.Config.Tools.Web.Search.Provider)
+	}
+
 	if keys.resolveModelCalls != 1 {
 		t.Fatalf("expected one resolve model call, got %d", keys.resolveModelCalls)
 	}
@@ -280,6 +351,7 @@ func TestServiceCreate_AddsNormalizedTelegramChannel(t *testing.T) {
 	hostingStub := &createTestHosting{}
 	svc := NewClaw(
 		storage,
+		&createTestOperationStorage{},
 		&createTestChannelStorage{channels: []entities.Channel{
 			{
 				ID:          channelID,
@@ -308,13 +380,19 @@ func TestServiceCreate_AddsNormalizedTelegramChannel(t *testing.T) {
 		keys,
 		"",
 		GmailWatchConfig{},
-	)
+	).WithBraveAPIKey("brave-secret")
 
 	cl, err := svc.Create(context.Background(), commands.CreateClaw{
 		UserID:     userID,
 		Name:       "demo",
 		Model:      "openai/gpt-4.1-mini",
 		ChannelIDs: []uuid.UUID{channelID},
+		Capabilities: commands.CreateCapabilitySet{
+			WebSearch: &commands.WebSearchCapabilityInput{
+				Enabled:  true,
+				Provider: "brave",
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("create claw: %v", err)
@@ -339,5 +417,174 @@ func TestServiceCreate_AddsNormalizedTelegramChannel(t *testing.T) {
 
 	if hostingStub.createCalls != 0 {
 		t.Fatalf("expected hosting create to not be called, got %d", hostingStub.createCalls)
+	}
+}
+
+func TestServiceCreate_AddsWhatsAppChannel(t *testing.T) {
+	userID := uuid.New()
+	channelID := uuid.New()
+
+	storage := &createTestClawStorage{}
+	keys := &createTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"}
+	hostingStub := &createTestHosting{}
+	svc := NewClaw(
+		storage,
+		&createTestOperationStorage{},
+		&createTestChannelStorage{channels: []entities.Channel{
+			{
+				ID:          channelID,
+				ChannelType: entities.ChannelWhatsappType,
+				UserID:      userID,
+				Config: entities.ClawChannels{
+					WhatsApp: &entities.WhatsAppConfig{
+						DmPolicy:       "pairing",
+						AllowFrom:      []string{"wa:1"},
+						GroupPolicy:    "allowlist",
+						GroupAllowFrom: []string{"wa:2"},
+					},
+				},
+				CreatedAt: time.Now(),
+			},
+		}},
+		&createTestUserStorage{user: entities.User{
+			ID:               userID,
+			OpenRouterApiKey: "secret",
+			OpenRouterKeyID:  "key-id",
+			CreatedAt:        time.Now(),
+		}},
+		&createTestServerStorage{},
+		hostingStub,
+		keys,
+		"",
+		GmailWatchConfig{},
+	).WithBraveAPIKey("brave-secret")
+
+	cl, err := svc.Create(context.Background(), commands.CreateClaw{
+		UserID:     userID,
+		Name:       "demo",
+		Model:      "openai/gpt-4.1-mini",
+		ChannelIDs: []uuid.UUID{channelID},
+		Capabilities: commands.CreateCapabilitySet{
+			WebSearch: &commands.WebSearchCapabilityInput{
+				Enabled:  true,
+				Provider: "brave",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create claw: %v", err)
+	}
+
+	if cl.Config.Channels == nil || cl.Config.Channels.WhatsApp == nil {
+		t.Fatalf("expected whatsapp channel config, got %#v", cl.Config.Channels)
+	}
+
+	if cl.Config.Channels.WhatsApp.DmPolicy != "pairing" {
+		t.Fatalf("expected whatsapp dm policy pairing, got %q", cl.Config.Channels.WhatsApp.DmPolicy)
+	}
+}
+
+func TestServiceCreate_RejectsMissingRequiredWebSearchCapability(t *testing.T) {
+	userID := uuid.New()
+
+	svc := NewClaw(
+		&createTestClawStorage{},
+		&createTestOperationStorage{},
+		&createTestChannelStorage{},
+		&createTestUserStorage{user: entities.User{
+			ID:               userID,
+			OpenRouterApiKey: "secret",
+			OpenRouterKeyID:  "key-id",
+			CreatedAt:        time.Now(),
+		}},
+		&createTestServerStorage{},
+		&createTestHosting{},
+		&createTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"},
+		"",
+		GmailWatchConfig{},
+	).WithBraveAPIKey("brave-secret")
+
+	_, err := svc.Create(context.Background(), commands.CreateClaw{
+		UserID: userID,
+		Name:   "demo",
+		Model:  "openai/gpt-4.1-mini",
+	})
+	if err == nil {
+		t.Fatal("expected error when web search capability is missing")
+	}
+}
+
+func TestServiceCreate_RejectsNonOnboardingCapability(t *testing.T) {
+	userID := uuid.New()
+
+	svc := NewClaw(
+		&createTestClawStorage{},
+		&createTestOperationStorage{},
+		&createTestChannelStorage{},
+		&createTestUserStorage{user: entities.User{
+			ID:               userID,
+			OpenRouterApiKey: "secret",
+			OpenRouterKeyID:  "key-id",
+			CreatedAt:        time.Now(),
+		}},
+		&createTestServerStorage{},
+		&createTestHosting{},
+		&createTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"},
+		"",
+		GmailWatchConfig{},
+	)
+
+	_, err := svc.Create(context.Background(), commands.CreateClaw{
+		UserID: userID,
+		Name:   "demo",
+		Model:  "openai/gpt-4.1-mini",
+		Capabilities: commands.CreateCapabilitySet{
+			WebSearch: &commands.WebSearchCapabilityInput{
+				Enabled:  true,
+				Provider: "brave",
+			},
+			Gmail: &commands.ToggleCapabilityInput{
+				Enabled: true,
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error when non-onboarding capability is passed to create")
+	}
+}
+
+func TestServiceCreate_RejectsBraveWhenBackendKeyMissing(t *testing.T) {
+	userID := uuid.New()
+
+	svc := NewClaw(
+		&createTestClawStorage{},
+		&createTestOperationStorage{},
+		&createTestChannelStorage{},
+		&createTestUserStorage{user: entities.User{
+			ID:               userID,
+			OpenRouterApiKey: "secret",
+			OpenRouterKeyID:  "key-id",
+			CreatedAt:        time.Now(),
+		}},
+		&createTestServerStorage{},
+		&createTestHosting{},
+		&createTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"},
+		"",
+		GmailWatchConfig{},
+	)
+
+	_, err := svc.Create(context.Background(), commands.CreateClaw{
+		UserID: userID,
+		Name:   "demo",
+		Model:  "openai/gpt-4.1-mini",
+		Capabilities: commands.CreateCapabilitySet{
+			WebSearch: &commands.WebSearchCapabilityInput{
+				Enabled:  true,
+				Provider: "brave",
+			},
+		},
+	})
+	if !errors.Is(err, ErrBraveAPIKeyMissing) {
+		t.Fatalf("Create() error = %v, want ErrBraveAPIKeyMissing", err)
 	}
 }

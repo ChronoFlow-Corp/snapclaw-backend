@@ -18,6 +18,8 @@ import (
 
 var chownPath = os.Chown
 
+const runtimeBindingsFileName = "runtime-bindings.json"
+
 type ClawConfigurer struct {
 	basePath        string
 	credentialsPath string
@@ -61,6 +63,31 @@ func (c *ClawConfigurer) Configure(cm commands.CreateClaw) (string, error) {
 
 func (c *ClawConfigurer) GetCredentialsPath() string {
 	return c.credentialsPath
+}
+
+func (c *ClawConfigurer) RuntimeBindings(userID, clawID string) (entities.RuntimeBindingManifest, error) {
+	const op = "configurer.ClawConfigurer.RuntimeBindings"
+
+	basePath, err := c.configPath(userID, clawID)
+	if err != nil {
+		return entities.RuntimeBindingManifest{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(basePath, runtimeBindingsFileName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return entities.RuntimeBindingManifest{}, nil
+		}
+
+		return entities.RuntimeBindingManifest{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	var manifest entities.RuntimeBindingManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return entities.RuntimeBindingManifest{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return manifest, nil
 }
 
 func (c *ClawConfigurer) Update(cm commands.UpdateClaw) (string, error) {

@@ -44,16 +44,8 @@ auth:
 		t.Fatalf("origins = %#v", cfg.Http.Origins)
 	}
 
-	if cfg.Connect.Gmail.ClientID != "google-client-id" {
-		t.Fatalf("gmail client id = %q", cfg.Connect.Gmail.ClientID)
-	}
-
-	if cfg.Connect.Gmail.ClientSecret != "google-client-secret" {
-		t.Fatalf("gmail client secret = %q", cfg.Connect.Gmail.ClientSecret)
-	}
-
-	if cfg.Connect.Gmail.CallbackURL != "http://localhost:1337/api/me/connect/gmail/callback" {
-		t.Fatalf("gmail callback = %q", cfg.Connect.Gmail.CallbackURL)
+	if cfg.Connect.Gmail.Watch.Topic != "" {
+		t.Fatalf("gmail watch topic = %q, want empty", cfg.Connect.Gmail.Watch.Topic)
 	}
 
 	if cfg.Auth.Jwt.RefreshSecret == "" {
@@ -109,8 +101,34 @@ auth:
 		t.Fatalf("frontend url = %q", cfg.Auth.Google.FrontendURL)
 	}
 
-	if cfg.Connect.Gmail.CallbackURL != "http://simpleclaw.local:1337/api/me/connect/gmail/callback" {
-		t.Fatalf("gmail callback = %q", cfg.Connect.Gmail.CallbackURL)
+	if cfg.Connect.Gmail.Watch.Topic != "" {
+		t.Fatalf("gmail watch topic = %q, want empty", cfg.Connect.Gmail.Watch.Topic)
+	}
+}
+
+func TestLoadConfigUsesBraveAPIKeyFromEnv(t *testing.T) {
+	t.Setenv("BRAVE_API_KEY", "brave-api-key-1")
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "dev-config.yaml")
+
+	writeTestConfig(t, configPath, `
+environment: development
+database:
+  dsn: "postgresql://simpleclaw:simpleclaw@simpleclaw-db:5432/simpleclaw?sslmode=disable"
+auth:
+  google:
+    client_id: "google-client-id"
+    client_secret: "google-client-secret"
+`)
+
+	cfg, err := load(configPath)
+	if err != nil {
+		t.Fatalf("load() error = %v", err)
+	}
+
+	if cfg.Brave.APIKey != "brave-api-key-1" {
+		t.Fatalf("brave api key = %q, want %q", cfg.Brave.APIKey, "brave-api-key-1")
 	}
 }
 
@@ -235,6 +253,48 @@ auth:
 
 	if !strings.Contains(err.Error(), "auth.google.callback_url") {
 		t.Fatalf("load() error = %q, want callback_url validation", err.Error())
+	}
+}
+
+func TestLoadDevelopmentConfigAppliesRuntimeSyncDefaults(t *testing.T) {
+	t.Setenv("DEV_HOST", "")
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "dev-config.yaml")
+
+	writeTestConfig(t, configPath, `
+environment: development
+database:
+  dsn: "postgresql://simpleclaw:simpleclaw@simpleclaw-db:5432/simpleclaw?sslmode=disable"
+auth:
+  google:
+    client_id: "google-client-id"
+    client_secret: "google-client-secret"
+`)
+
+	cfg, err := load(configPath)
+	if err != nil {
+		t.Fatalf("load() error = %v", err)
+	}
+
+	if !cfg.Hosting.ContainerManager.RuntimeSync.Enabled {
+		t.Fatal("expected runtime sync to be enabled by default")
+	}
+
+	if cfg.Hosting.ContainerManager.RuntimeSync.Interval <= 0 {
+		t.Fatalf("interval = %s, want positive duration", cfg.Hosting.ContainerManager.RuntimeSync.Interval)
+	}
+
+	if cfg.Hosting.ContainerManager.RuntimeSync.Timeout <= 0 {
+		t.Fatalf("timeout = %s, want positive duration", cfg.Hosting.ContainerManager.RuntimeSync.Timeout)
+	}
+
+	if cfg.Hosting.ContainerManager.RuntimeSync.BatchSize <= 0 {
+		t.Fatalf("batch size = %d, want positive number", cfg.Hosting.ContainerManager.RuntimeSync.BatchSize)
+	}
+
+	if cfg.Hosting.ContainerManager.RuntimeSync.WorkerCount <= 0 {
+		t.Fatalf("worker count = %d, want positive number", cfg.Hosting.ContainerManager.RuntimeSync.WorkerCount)
 	}
 }
 

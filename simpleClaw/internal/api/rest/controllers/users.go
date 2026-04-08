@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"shared/pkg/jwt"
 	"shared/pkg/response"
+	"strings"
 	"time"
 
 	"simpleClaw/config"
@@ -14,6 +15,7 @@ import (
 	"simpleClaw/internal/api/rest/middleware"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/sql"
+	integrationservice "simpleClaw/internal/service/integrations"
 	"simpleClaw/internal/service/user/commands"
 
 	"github.com/go-chi/chi/v5"
@@ -46,21 +48,33 @@ type service interface {
 	) ([]entities.PaymentMethod, error)
 	SetDefaultPaymentMethod(ctx context.Context, cm commands.SetDefaultPaymentMethod) error
 	RemovePaymentMethod(ctx context.Context, methodID, userID uuid.UUID) error
-	Connect(ctx context.Context, cm commands.ConnectCommand) error
 }
 type User struct {
-	env         string
-	service     service
-	frontendURL string
-	j           jwt.JWT
+	env                string
+	service            service
+	integrationService integrationService
+	frontendURL        string
+	j                  jwt.JWT
 }
 
-func NewUser(env string, service service, j jwt.JWT, frontendURL string) *User {
+type integrationService interface {
+	List(ctx context.Context, userID uuid.UUID) ([]entities.AccountIntegration, error)
+	Connect(ctx context.Context, cmd integrationservice.ConnectCommand) (entities.AccountIntegration, error)
+}
+
+func NewUser(
+	env string,
+	service service,
+	integrationService integrationService,
+	j jwt.JWT,
+	frontendURL string,
+) *User {
 	return &User{
-		env:         env,
-		service:     service,
-		j:           j,
-		frontendURL: frontendURL,
+		env:                env,
+		service:            service,
+		integrationService: integrationService,
+		j:                  j,
+		frontendURL:        frontendURL,
 	}
 }
 
@@ -79,8 +93,8 @@ func (u *User) Register(r chi.Router) {
 		r.Get("/payment-method/{id}", u.GetPaymentMethod)
 		r.Patch("/payment-method/{id}", u.SetDefaultPaymentMethod)
 		r.Delete("/payment-method/{id}", u.RemovePaymentMethod)
-		r.Get("/connect/{provider}", u.Connect)
-		r.Get("/connect/{provider}/callback", u.Connect)
+		r.Get("/integrations", u.ListIntegrations)
+		r.Post("/integrations/{provider}/connect", u.ConnectIntegration)
 	})
 }
 
@@ -324,6 +338,118 @@ func (u *User) RemovePaymentMethod(w http.ResponseWriter, r *http.Request) {
 	response.RespondOK(w, map[string]any{"deleted": true})
 }
 
+func (u *User) ListIntegrations(w http.ResponseWriter, r *http.Request) {
+	if u.integrationService == nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusServiceUnavailable,
+			Message: "integration service is not configured",
+		})
+
+		return
+	}
+
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	integrations, err := u.integrationService.List(r.Context(), userID)
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	result := make([]dto.IntegrationResponse, 0, len(integrations))
+	for _, integration := range integrations {
+		result = append(result, dto.IntegrationResponse{
+			ID:                integration.ID.String(),
+			Capability:        string(integration.CapabilityID),
+			Provider:          integration.Provider,
+			ExternalAccountID: integration.ExternalAccountID,
+			DisplayName:       integration.DisplayName,
+			Status:            string(integration.Status),
+			Metadata:          integration.Metadata,
+		})
+	}
+
+	response.RespondOK(w, result)
+}
+
+func (u *User) ConnectIntegration(w http.ResponseWriter, r *http.Request) {
+	if u.integrationService == nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusServiceUnavailable,
+			Message: "integration service is not configured",
+		})
+
+		return
+	}
+
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	var req dto.ConnectIntegrationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid request body",
+		})
+
+		return
+	}
+
+	var integrationID uuid.UUID
+	if raw := strings.TrimSpace(req.ID); raw != "" {
+		integrationID, err = uuid.Parse(raw)
+		if err != nil {
+			response.RespondError(w, response.Error{
+				Code:    http.StatusBadRequest,
+				Message: "invalid integration id",
+			})
+
+			return
+		}
+	}
+
+	integration, err := u.integrationService.Connect(r.Context(), integrationservice.ConnectCommand{
+		UserID:            userID,
+		ID:                integrationID,
+		Provider:          chi.URLParam(r, "provider"),
+		ExternalAccountID: req.ExternalAccountID,
+		DisplayName:       req.DisplayName,
+		SecretPayload:     req.SecretPayload,
+		Metadata:          req.Metadata,
+	})
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	response.RespondOK(w, dto.IntegrationResponse{
+		ID:                integration.ID.String(),
+		Capability:        string(integration.CapabilityID),
+		Provider:          integration.Provider,
+		ExternalAccountID: integration.ExternalAccountID,
+		DisplayName:       integration.DisplayName,
+		Status:            string(integration.Status),
+		Metadata:          integration.Metadata,
+	})
+}
+
 func (u *User) Refresh(w http.ResponseWriter, r *http.Request) {
 	refreshCookie, err := r.Cookie("refresh_token")
 	if err != nil {
@@ -398,40 +524,6 @@ func (u *User) UserInfo(w http.ResponseWriter, r *http.Request) {
 		Role:         user.Role,
 		CreatedAt:    user.CreatedAt,
 	})
-}
-
-func (u *User) Connect(w http.ResponseWriter, r *http.Request) {
-	gothUser, err := gothic.CompleteUserAuth(w, r)
-	if err != nil {
-		gothic.BeginAuthHandler(w, r)
-
-		return
-	}
-
-	userID, err := userIDFromContext(r.Context())
-	if err != nil {
-		response.RespondError(w, response.Error{
-			Code:    http.StatusUnauthorized,
-			Message: "invalid user id",
-		})
-
-		return
-	}
-
-	if err := u.service.Connect(r.Context(), commands.ConnectCommand{
-		Provider:     gothUser.Provider,
-		UserID:       userID,
-		Email:        gothUser.Email,
-		AccessToken:  gothUser.AccessToken,
-		RefreshToken: gothUser.RefreshToken,
-		ExpiresAt:    gothUser.ExpiresAt,
-	}); err != nil {
-		respondServiceError(w, err)
-
-		return
-	}
-
-	http.Redirect(w, r, u.frontendURL, http.StatusFound)
 }
 
 func (u *User) setCookie(w http.ResponseWriter, path, name, value string, expires time.Time) {

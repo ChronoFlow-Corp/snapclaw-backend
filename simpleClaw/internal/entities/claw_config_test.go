@@ -59,13 +59,7 @@ func TestNewDefaultMainAgentConfig_PreservesSubagentsAndTools(t *testing.T) {
 	}
 
 	wantAllow := []string{
-		"group:fs",
-		"group:sessions",
-		"group:web",
-		"group:messaging",
-		"group:automation",
-		"exec",
-		"process",
+		"group:openclaw",
 	}
 
 	if len(agent.Tools.Allow) != len(wantAllow) {
@@ -172,13 +166,7 @@ func TestNewCreateClawConfig_JSONContract(t *testing.T) {
 				},
 				"tools": {
 					"allow": [
-						"group:fs",
-						"group:sessions",
-						"group:web",
-						"group:messaging",
-						"group:automation",
-						"exec",
-						"process"
+						"group:openclaw"
 					],
 					"deny": ["canvas", "browser"]
 				}
@@ -222,5 +210,66 @@ func TestNewCreateClawConfig_JSONContract(t *testing.T) {
 
 	if !reflect.DeepEqual(want, got) {
 		t.Fatalf("unexpected json contract\nwant: %s\ngot:  %s", wantJSON, string(gotJSON))
+	}
+}
+
+func TestClawConfig_MarshalsBravePluginConfig(t *testing.T) {
+	cfg := NewCreateClawConfig(CreateClawConfigInput{
+		PrimaryModel: "openrouter/openai/gpt-4.1-mini",
+	})
+	cfg.Plugins = &PluginsConfig{
+		Entries: map[string]PluginEntry{
+			"brave": {
+				Config: map[string]any{
+					"webSearch": map[string]any{
+						"apiKey": "${BRAVE_API_KEY}",
+						"mode":   "web",
+					},
+				},
+			},
+		},
+	}
+
+	gotJSON, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(gotJSON, &got); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+
+	plugins, ok := got["plugins"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected plugins object, got %#v", got["plugins"])
+	}
+
+	entries, ok := plugins["entries"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected plugins.entries object, got %#v", plugins["entries"])
+	}
+
+	brave, ok := entries["brave"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected brave entry, got %#v", entries["brave"])
+	}
+
+	config, ok := brave["config"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected brave config object, got %#v", brave["config"])
+	}
+
+	webSearch, ok := config["webSearch"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected brave webSearch config, got %#v", config["webSearch"])
+	}
+
+	if webSearch["apiKey"] != "${BRAVE_API_KEY}" {
+		t.Fatalf("apiKey = %#v, want %q", webSearch["apiKey"], "${BRAVE_API_KEY}")
+	}
+
+	if webSearch["mode"] != "web" {
+		t.Fatalf("mode = %#v, want %q", webSearch["mode"], "web")
 	}
 }

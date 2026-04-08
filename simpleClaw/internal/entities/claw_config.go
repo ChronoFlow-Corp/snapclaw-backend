@@ -17,6 +17,7 @@ type ClawConfig struct {
 	Logging  *Logging       `json:"logging,omitempty"`
 	Messages *Messages      `json:"messages,omitempty"`
 	Meta     *ConfigMeta    `json:"meta,omitempty"`
+	Plugins  *PluginsConfig `json:"plugins,omitempty"`
 	Tools    *ToolsConfig   `json:"tools,omitempty"`
 	Session  *SessionConfig `json:"session,omitempty"`
 	Channels *ClawChannels  `json:"channels,omitempty"`
@@ -103,11 +104,12 @@ type MediaModel struct {
 }
 
 type ToolsConfig struct {
-	Allow    []string       `json:"allow,omitempty"`
-	Deny     []string       `json:"deny,omitempty"`
-	Exec     *ToolsExec     `json:"exec,omitempty"`
-	Elevated *ToolsElevated `json:"elevated,omitempty"`
-	Media    MediaTools     `json:"media,omitempty"`
+	Allow    []string        `json:"allow,omitempty"`
+	Deny     []string        `json:"deny,omitempty"`
+	Exec     *ToolsExec      `json:"exec,omitempty"`
+	Elevated *ToolsElevated  `json:"elevated,omitempty"`
+	Web      *WebToolsConfig `json:"web,omitempty"`
+	Media    MediaTools      `json:"media,omitempty"`
 }
 type ToolsExec struct {
 	BackgroundMs int `json:"backgroundMs,omitempty"`

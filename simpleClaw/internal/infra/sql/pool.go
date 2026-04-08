@@ -10,10 +10,12 @@ func Migration(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&models.User{},
 		&models.Session{},
-		&models.GmailToken{},
+		&models.AccountIntegration{},
 		&models.Channel{},
 		&models.Server{},
 		&models.Claw{},
+		&models.ClawCapabilityAttachment{},
+		&models.ClawLifecycleOperation{},
 		&models.Payment{},
 		&models.PaymentMethod{},
 		&models.Plan{},

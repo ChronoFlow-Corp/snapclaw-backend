@@ -5,11 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"shared/consts"
 	"shared/pkg/jwt"
 	"shared/pkg/observability"
-	"strings"
-	"time"
 
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/sql"
@@ -350,100 +347,6 @@ func (s *Service) GetChannels(ctx context.Context, userID uuid.UUID) ([]entities
 	}
 
 	return chs, nil
-}
-
-func (s *Service) Connect(ctx context.Context, cm commands.ConnectCommand) (err error) {
-	const op = "service.Service.Connect"
-
-	ctx, _, finish := observability.StartOperation(
-		ctx,
-		slog.Default(),
-		s.metrics,
-		"service.user",
-		"channel.connect",
-		"channel_connect",
-	)
-
-	defer func() { finish(err) }()
-
-	provider := strings.ToLower(strings.TrimSpace(cm.Provider))
-	if provider != consts.ProviderGmail {
-		return fmt.Errorf("%s: %w", op, ErrProviderUnsupported)
-	}
-
-	if cm.UserID == uuid.Nil {
-		return fmt.Errorf("%s: %w", op, sql.ErrInvalid)
-	}
-
-	if cm.AccessToken == "" {
-		return fmt.Errorf("%s: %w", op, ErrAccessTokenRequired)
-	}
-
-	expiry := ""
-
-	if !cm.ExpiresAt.IsZero() {
-		expiry = cm.ExpiresAt.UTC().Format(time.RFC3339)
-	}
-
-	token := entities.GmailToken{
-		Email:  strings.TrimSpace(cm.Email),
-		Client: "default",
-		Token: entities.Token{
-			AccessToken:  cm.AccessToken,
-			RefreshToken: cm.RefreshToken,
-			TokenType:    "Bearer",
-			Expiry:       expiry,
-		},
-	}
-
-	existing, err := s.uSt.GetGmailToken(ctx, cm.UserID)
-	switch {
-	case err == nil:
-		if token.Email == "" {
-			token.Email = existing.Email
-		}
-
-		if token.Client == "" {
-			token.Client = existing.Client
-		}
-
-		if token.Token.RefreshToken == "" {
-			token.Token.RefreshToken = existing.Token.RefreshToken
-		}
-
-		if token.Token.TokenType == "" {
-			token.Token.TokenType = existing.Token.TokenType
-		}
-
-		if token.Token.Expiry == "" {
-			token.Token.Expiry = existing.Token.Expiry
-		}
-	case err != nil && !errors.Is(err, sql.ErrNotFound):
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	if token.Email == "" {
-		user, err := s.uSt.GetByID(ctx, cm.UserID)
-		if err != nil {
-			return fmt.Errorf("%s: %w", op, err)
-		}
-
-		token.Email = user.Email
-	}
-
-	if token.Client == "" {
-		token.Client = "default"
-	}
-
-	if token.Token.TokenType == "" {
-		token.Token.TokenType = "Bearer"
-	}
-
-	if err := s.uSt.UpsertGmailToken(ctx, cm.UserID, token); err != nil {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-
-	return nil
 }
 
 func (s *Service) GetPaymentMethod(

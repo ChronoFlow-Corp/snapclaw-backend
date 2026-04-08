@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"shared/pkg/observability"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	"simpleClaw/config"
 
+	entitychannels "simpleClaw/internal/entities/channels"
 	"simpleClaw/internal/service/pkg/minor"
 
 	"simpleClaw/internal/entities"
@@ -35,6 +37,7 @@ type Service struct {
 	payments      paymentStorage
 	payInfra      paymentInfra
 	usageAmounts  usageAmountConverter
+	bootstrapClaw bootstrapClawReader
 	metrics       *observability.OperationMetrics
 }
 
@@ -81,6 +84,12 @@ func NewService(
 		usageAmounts:  usageAmounts,
 		metrics:       opMetrics,
 	}
+}
+
+func (s *Service) WithBootstrapClawReader(reader bootstrapClawReader) *Service {
+	s.bootstrapClaw = reader
+
+	return s
 }
 
 func (s *Service) CreatePlan(
@@ -1207,6 +1216,153 @@ func (s *Service) GetBillingSummary(
 	}
 
 	return summary, nil
+}
+
+func (s *Service) GetBootstrap(
+	ctx context.Context,
+	userID uuid.UUID,
+) (bootstrap result.Bootstrap, err error) {
+	const op = "service.billing.GetBootstrap"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.billing",
+		"billing.bootstrap.get",
+		"billing_subscription",
+	)
+
+	defer func() { finish(err) }()
+
+	if s.users == nil || s.subscriptions == nil {
+		return result.Bootstrap{}, fmt.Errorf("%s: %w", op, sql.ErrUnavailable)
+	}
+
+	if userID == uuid.Nil {
+		return result.Bootstrap{}, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	if _, err := s.users.GetByID(ctx, userID); err != nil {
+		return result.Bootstrap{}, fmt.Errorf("%s: load user %s: %w", op, userID, err)
+	}
+
+	subscription, err := s.subscriptions.GetLatestByUserID(ctx, userID)
+	switch {
+	case err == nil:
+		bootstrap.Subscription = bootstrapSubscription(subscription, time.Now().UTC())
+	case errors.Is(err, sql.ErrNotFound):
+	default:
+		return result.Bootstrap{}, fmt.Errorf("%s: load latest subscription user=%s: %w", op, userID, err)
+	}
+
+	bootstrap.DashboardAllowed = bootstrap.Subscription != nil && bootstrap.Subscription.AccessActive
+
+	var claws []entities.Claw
+	if s.bootstrapClaw != nil {
+		claws, err = s.bootstrapClaw.GetByUserID(ctx, userID)
+		if err != nil {
+			return result.Bootstrap{}, fmt.Errorf("%s: load claws user=%s: %w", op, userID, err)
+		}
+	}
+
+	bootstrap.Onboarding = deriveBootstrapOnboarding(bootstrap.DashboardAllowed, selectBootstrapClaw(claws))
+
+	return bootstrap, nil
+}
+
+func bootstrapSubscription(subscription entities.UserSubscription, now time.Time) *result.BootstrapSubscription {
+	currentPeriodEnd := subscription.CurrentPeriodEnd
+
+	return &result.BootstrapSubscription{
+		Status:           subscription.Status,
+		CurrentPeriodEnd: &currentPeriodEnd,
+		AccessActive:     subscriptionAllowsDashboard(subscription, now),
+	}
+}
+
+func subscriptionAllowsDashboard(subscription entities.UserSubscription, now time.Time) bool {
+	switch subscription.Status {
+	case entities.SubscriptionStatusActive:
+		return true
+	case entities.SubscriptionStatusCanceled:
+		if subscription.CurrentPeriodEnd.IsZero() {
+			return false
+		}
+
+		return subscription.CurrentPeriodEnd.After(now)
+	default:
+		return false
+	}
+}
+
+func deriveBootstrapOnboarding(dashboardAllowed bool, cl *entities.Claw) result.BootstrapOnboarding {
+	if !dashboardAllowed || cl == nil {
+		return result.BootstrapOnboarding{
+			Required: true,
+			Step:     result.OnboardingStepSubscriptionRequired,
+		}
+	}
+
+	if cl.OnboardingComplete {
+		return result.BootstrapOnboarding{
+			Required: false,
+			Step:     result.OnboardingStepDashboardReady,
+			ClawID:   &cl.ID,
+		}
+	}
+
+	if requiresTelegramConfirm(cl.Config) {
+		return result.BootstrapOnboarding{
+			Required: true,
+			Step:     result.OnboardingStepTelegramConfirm,
+			ClawID:   &cl.ID,
+		}
+	}
+
+	return result.BootstrapOnboarding{
+		Required: true,
+		Step:     result.OnboardingStepTelegramChoice,
+		ClawID:   &cl.ID,
+	}
+}
+
+func selectBootstrapClaw(claws []entities.Claw) *entities.Claw {
+	candidates := make([]entities.Claw, 0, len(claws))
+	for _, cl := range claws {
+		if cl.DesiredState == entities.ClawDesiredStateDeleted {
+			continue
+		}
+
+		candidates = append(candidates, cl)
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].OnboardingComplete != candidates[j].OnboardingComplete {
+			return !candidates[i].OnboardingComplete
+		}
+		if !candidates[i].UpdatedAt.Equal(candidates[j].UpdatedAt) {
+			return candidates[i].UpdatedAt.After(candidates[j].UpdatedAt)
+		}
+		if !candidates[i].CreatedAt.Equal(candidates[j].CreatedAt) {
+			return candidates[i].CreatedAt.After(candidates[j].CreatedAt)
+		}
+
+		return candidates[i].ID.String() > candidates[j].ID.String()
+	})
+
+	return &candidates[0]
+}
+
+func requiresTelegramConfirm(cfg entities.ClawConfig) bool {
+	return cfg.Channels != nil &&
+		cfg.Channels.Telegram != nil &&
+		cfg.Channels.Telegram.Enabled &&
+		cfg.Channels.Telegram.DmPolicy == entitychannels.DmPairing
 }
 
 func (s *Service) ExpanseAnalyze(

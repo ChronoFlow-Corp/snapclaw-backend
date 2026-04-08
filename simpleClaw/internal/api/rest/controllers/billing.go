@@ -43,6 +43,7 @@ type billingService interface {
 		userID uuid.UUID,
 	) (*billingsvc.SubscriptionSummary, error)
 	GetBillingSummary(ctx context.Context, userID uuid.UUID) (billingsvc.BillingSummary, error)
+	GetBootstrap(ctx context.Context, userID uuid.UUID) (result.Bootstrap, error)
 	EventPayment(ctx context.Context, cm commands.PaymentEvent) (err error)
 	HandleOpenRouterUsageWebhook(ctx context.Context, event commands.OpenRouterUsageEvent) error
 	TopUp(ctx context.Context, cm commands.TopUp) (confirmURL string, err error)
@@ -93,6 +94,7 @@ func (b *Billing) Register(r chi.Router) {
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.AuthJwt(b.j))
+		r.Get("/me/bootstrap", b.GetBootstrap)
 		r.Get("/me/billing", b.GetBilling)
 		r.Get("/me/subscription", b.GetSubscription)
 		r.Get("/me/subscription/{id}/checkout-status", b.GetSubscriptionCheckoutStatus)
@@ -432,6 +434,25 @@ func (b *Billing) GetBilling(w http.ResponseWriter, r *http.Request) {
 	response.RespondOK(w, billingSummaryResponse(summary))
 }
 
+func (b *Billing) GetBootstrap(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(
+			w,
+			response.Error{Code: http.StatusUnauthorized, Message: "invalid user id"},
+		)
+		return
+	}
+
+	bootstrap, err := b.service.GetBootstrap(r.Context(), userID)
+	if err != nil {
+		respondServiceError(w, err)
+		return
+	}
+
+	response.RespondOK(w, bootstrapResponse(bootstrap))
+}
+
 func (b *Billing) GetSubscription(w http.ResponseWriter, r *http.Request) {
 	userID, err := userIDFromContext(r.Context())
 	if err != nil {
@@ -714,6 +735,30 @@ func billingSummaryResponse(summary billingsvc.BillingSummary) dto.BillingSummar
 	}
 
 	return summaryResponse
+}
+
+func bootstrapResponse(bootstrap result.Bootstrap) dto.BootstrapResponse {
+	resp := dto.BootstrapResponse{
+		DashboardAllowed: bootstrap.DashboardAllowed,
+		Onboarding: dto.BootstrapOnboardingResponse{
+			Required: bootstrap.Onboarding.Required,
+			Step:     bootstrap.Onboarding.Step,
+		},
+	}
+
+	if bootstrap.Subscription != nil {
+		resp.Subscription = &dto.BootstrapSubscriptionDTO{
+			Status:           bootstrap.Subscription.Status,
+			CurrentPeriodEnd: bootstrap.Subscription.CurrentPeriodEnd,
+			AccessActive:     bootstrap.Subscription.AccessActive,
+		}
+	}
+
+	if bootstrap.Onboarding.ClawID != nil {
+		resp.Onboarding.ClawID = bootstrap.Onboarding.ClawID.String()
+	}
+
+	return resp
 }
 
 func subscriptionReturnURLBase(frontendURL string) string {
