@@ -119,8 +119,29 @@ func (s *Service) SignIn(
 	return access, refresh, nil
 }
 
-func (s *Service) SignOut() {
-	const op = "service.Service.SignOut"
+func (s *Service) Logout(ctx context.Context, cm commands.Logout) (err error) {
+	const op = "service.Service.Logout"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"auth.logout",
+		"auth",
+	)
+
+	defer func() { finish(err) }()
+
+	err = s.uSt.DeleteSession(ctx, entities.Session{
+		ID:     cm.SessionID,
+		UserID: cm.UserID,
+	})
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
 }
 
 func (s *Service) Refresh(
@@ -142,6 +163,19 @@ func (s *Service) Refresh(
 
 	t, err := s.j.ParseRefresh(rawRefresh)
 	if err != nil {
+		if errors.Is(err, jwt.ErrExpired) {
+			expiredToken, parseErr := s.j.ParseRefreshAllowExpired(rawRefresh)
+			if parseErr == nil {
+				deleteErr := s.uSt.DeleteSession(ctx, entities.Session{
+					ID:     expiredToken.Claims.SessionID,
+					UserID: expiredToken.Claims.UserID,
+				})
+				if deleteErr != nil {
+					return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, deleteErr)
+				}
+			}
+		}
+
 		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
 	}
 

@@ -1,10 +1,12 @@
 package claw
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"shared/pkg/observability"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 )
 
 const (
+	stageArchiveRuntime = "archive_runtime"
 	stageEnsureRuntime = "ensure_runtime"
 	stageStartRuntime  = "start_runtime"
 	stageDeleteRuntime = "delete_runtime"
@@ -24,6 +27,8 @@ const (
 
 	defaultWorkerInterval = 10 * time.Second
 )
+
+var errArchiveRestoreFallback = errors.New("archived runtime config is unavailable")
 
 func (s *Service) RunLifecycleWorker(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
@@ -84,6 +89,8 @@ func (s *Service) ProcessNextOperation(ctx context.Context) error {
 		err = s.processStartOperation(ctx, op)
 	case entities.ClawLifecycleOperationTypeStop:
 		err = s.processStopOperation(ctx, op)
+	case entities.ClawLifecycleOperationTypeRestart:
+		err = s.processRestartOperation(ctx, op)
 	case entities.ClawLifecycleOperationTypeDelete:
 		err = s.processDeleteOperation(ctx, op)
 	default:
@@ -117,6 +124,16 @@ func (s *Service) processStartOperation(
 	}
 
 	if cl.ContainerID == "" {
+		if err := s.restoreArchivedRuntimeConfig(ctx, cl, srv); err != nil {
+			if errors.Is(err, errArchiveRestoreFallback) {
+				if markErr := s.markOnboardingIncomplete(ctx, cl); markErr != nil {
+					return s.retryOperation(ctx, op, cl, markErr)
+				}
+			} else {
+				return s.retryOperation(ctx, op, cl, err)
+			}
+		}
+
 		if err := s.updateOperationStage(ctx, &op, stageEnsureRuntime); err != nil {
 			return err
 		}
@@ -187,6 +204,13 @@ func (s *Service) processStopOperation(
 		return err
 	}
 
+	if err := s.archiveRuntimeConfig(ctx, cl, srv); err != nil {
+		if markErr := s.markOnboardingIncomplete(ctx, cl); markErr != nil {
+			return s.retryOperation(ctx, op, cl, markErr)
+		}
+		return s.retryOperation(ctx, op, cl, err)
+	}
+
 	if err := s.hosting.Delete(ctx, cl, srv, true); err != nil {
 		return s.reconcileDeleteLikeFailure(ctx, op, cl, srv, err, false)
 	}
@@ -196,6 +220,140 @@ func (s *Service) processStopOperation(
 		ObservedState:     entities.ClawObservedStateStopped,
 		LifecycleStatus:   entities.ClawLifecycleStatusIdle,
 		ContainerRecordID: "",
+	})
+}
+
+func (s *Service) processRestartOperation(
+	ctx context.Context,
+	op entities.ClawLifecycleOperation,
+) error {
+	cl, err := s.claws.GetBySystemID(ctx, op.ClawID)
+	if err != nil {
+		return s.retryOperation(ctx, op, entities.Claw{}, err)
+	}
+
+	if cl.ContainerID != "" && cl.ServerID != uuid.Nil {
+		srv, err := s.servers.GetByID(ctx, cl.ServerID)
+		if err != nil {
+			return s.retryOperation(ctx, op, cl, err)
+		}
+
+		if err := s.updateOperationStage(ctx, &op, stageArchiveRuntime); err != nil {
+			return err
+		}
+
+		if err := s.archiveRuntimeConfig(ctx, cl, srv); err != nil {
+			if markErr := s.markOnboardingIncomplete(ctx, cl); markErr != nil {
+				return s.retryOperation(ctx, op, cl, markErr)
+			}
+			return s.retryOperation(ctx, op, cl, err)
+		}
+
+		if err := s.updateOperationStage(ctx, &op, stageDeleteRuntime); err != nil {
+			return err
+		}
+
+		if err := s.hosting.Delete(ctx, cl, srv, true); err != nil {
+			state, stateErr := s.hosting.State(ctx, cl, srv)
+			if !errors.Is(err, hosting.ErrRuntimeNotFound) &&
+				!errors.Is(stateErr, hosting.ErrRuntimeNotFound) &&
+				(stateErr != nil || mapObservedState(state) != entities.ClawObservedStateMissing) {
+				return s.retryOperation(ctx, op, cl, err)
+			}
+		}
+
+		if err := s.claws.UpdateRuntime(ctx, cl.ID, entities.ClawRuntimeUpdate{
+			ServerID:          cl.ServerID,
+			ContainerRecordID: "",
+			DesiredState:      entities.ClawDesiredStateRunning,
+			ObservedState:     entities.ClawObservedStateStopped,
+			LifecycleStatus:   entities.ClawLifecycleStatusRestartPending,
+		}); err != nil {
+			return s.retryOperation(ctx, op, cl, err)
+		}
+	}
+
+	return s.processStartOperation(ctx, op)
+}
+
+func (s *Service) archiveRuntimeConfig(
+	ctx context.Context,
+	cl entities.Claw,
+	srv entities.Server,
+) error {
+	if cl.ContainerID == "" || cl.ServerID == uuid.Nil {
+		return nil
+	}
+
+	if s.hosting == nil {
+		return ErrHostingMissing
+	}
+
+	if s.archives == nil {
+		return fmt.Errorf("archive store is not configured")
+	}
+
+	body, err := s.hosting.ConfigArchive(ctx, cl, srv, false)
+	if err != nil {
+		return err
+	}
+	if body == nil {
+		return fmt.Errorf("config archive body is required")
+	}
+	defer body.Close()
+
+	return s.archives.Save(ctx, cl.UserID, cl.ID, body)
+}
+
+func (s *Service) restoreArchivedRuntimeConfig(
+	ctx context.Context,
+	cl entities.Claw,
+	srv entities.Server,
+) error {
+	if s.hosting == nil || s.archives == nil {
+		return errArchiveRestoreFallback
+	}
+
+	body, err := s.archives.Open(cl.UserID, cl.ID)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return errArchiveRestoreFallback
+	case errors.Is(err, ErrArchiveStoreUnavailable):
+		return errArchiveRestoreFallback
+	case err != nil:
+		return err
+	}
+	defer body.Close()
+
+	var rewritten bytes.Buffer
+	if err := hosting.RewriteConfigArchive(body, cl.ID.String(), cl.Config, &rewritten); err != nil {
+		slog.Default().Warn(
+			"stored archive is unreadable, falling back to ensure",
+			slog.String("claw_id", cl.ID.String()),
+			slog.Any("err", err),
+		)
+		return errArchiveRestoreFallback
+	}
+
+	if err := s.hosting.RestoreConfigArchive(ctx, cl, srv, bytes.NewReader(rewritten.Bytes())); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Service) markOnboardingIncomplete(ctx context.Context, cl entities.Claw) error {
+	if !cl.OnboardingComplete {
+		return nil
+	}
+
+	return s.claws.UpdateLifecycle(ctx, cl.ID, claws.LifecycleUpdate{
+		DesiredState:       cl.DesiredState,
+		ObservedState:      cl.ObservedState,
+		LifecycleStatus:    cl.LifecycleStatus,
+		CurrentOperationID: cl.CurrentOperationID,
+		LastLifecycleError: cl.LastError,
+		OnboardingComplete: boolPtr(false),
 	})
 }
 
@@ -431,6 +589,8 @@ func desiredStateForOperation(
 ) entities.ClawDesiredState {
 	switch opType {
 	case entities.ClawLifecycleOperationTypeStart:
+		return entities.ClawDesiredStateRunning
+	case entities.ClawLifecycleOperationTypeRestart:
 		return entities.ClawDesiredStateRunning
 	case entities.ClawLifecycleOperationTypeStop:
 		return entities.ClawDesiredStateStopped

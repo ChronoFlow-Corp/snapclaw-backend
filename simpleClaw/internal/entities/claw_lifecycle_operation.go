@@ -11,6 +11,7 @@ type ClawLifecycleOperationType string
 const (
 	ClawLifecycleOperationTypeStart     ClawLifecycleOperationType = "start"
 	ClawLifecycleOperationTypeStop      ClawLifecycleOperationType = "stop"
+	ClawLifecycleOperationTypeRestart   ClawLifecycleOperationType = "restart"
 	ClawLifecycleOperationTypeDelete    ClawLifecycleOperationType = "delete"
 	ClawLifecycleOperationTypeReconcile ClawLifecycleOperationType = "reconcile"
 )

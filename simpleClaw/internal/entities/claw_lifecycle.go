@@ -26,6 +26,7 @@ const (
 	ClawLifecycleStatusIdle             ClawLifecycleStatus = "idle"
 	ClawLifecycleStatusStartPending     ClawLifecycleStatus = "start_pending"
 	ClawLifecycleStatusStopPending      ClawLifecycleStatus = "stop_pending"
+	ClawLifecycleStatusRestartPending   ClawLifecycleStatus = "restart_pending"
 	ClawLifecycleStatusDeletePending    ClawLifecycleStatus = "delete_pending"
 	ClawLifecycleStatusReconcilePending ClawLifecycleStatus = "reconcile_pending"
 	ClawLifecycleStatusFailed           ClawLifecycleStatus = "failed"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -121,6 +122,14 @@ func (h *connectTestHosting) Connect(
 	h.provider = provider
 	h.payload = append([]byte(nil), token...)
 
+	return nil
+}
+
+func (h *connectTestHosting) ConfigArchive(context.Context, entities.Claw, entities.Server, bool) (io.ReadCloser, error) {
+	return nil, nil
+}
+
+func (h *connectTestHosting) RestoreConfigArchive(context.Context, entities.Claw, entities.Server, io.Reader) error {
 	return nil
 }
 

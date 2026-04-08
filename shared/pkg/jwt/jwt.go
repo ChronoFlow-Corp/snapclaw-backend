@@ -133,6 +133,21 @@ func (j JWT) ParseRefresh(raw string) (RefreshToken, error) {
 	return RefreshToken{Raw: raw, Claims: cl}, nil
 }
 
+// ParseRefreshAllowExpired parses refresh token claims while still verifying the signature.
+// It intentionally skips claims validation so expired tokens can be mapped back to a stored session.
+func (j JWT) ParseRefreshAllowExpired(raw string) (RefreshToken, error) {
+	var cl refreshClaims
+
+	_, err := jwt.ParseWithClaims(raw, &cl, func(_ *jwt.Token) (any, error) {
+		return j.refreshSecret, nil
+	}, jwt.WithoutClaimsValidation())
+	if err != nil {
+		return RefreshToken{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+
+	return RefreshToken{Raw: raw, Claims: cl}, nil
+}
+
 func (j JWT) newRefresh(userID, sessionID uuid.UUID) (RefreshToken, error) {
 	const op = "jwt.newRefresh"
 

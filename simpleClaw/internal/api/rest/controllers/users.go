@@ -32,6 +32,7 @@ type service interface {
 		ctx context.Context,
 		rawRefresh string,
 	) (access jwt.AccessToken, refresh jwt.RefreshToken, err error)
+	Logout(ctx context.Context, cm commands.Logout) error
 	UserInfo(ctx context.Context, userID uuid.UUID) (entities.User, error)
 
 	AddChannel(
@@ -59,7 +60,10 @@ type User struct {
 
 type integrationService interface {
 	List(ctx context.Context, userID uuid.UUID) ([]entities.AccountIntegration, error)
-	Connect(ctx context.Context, cmd integrationservice.ConnectCommand) (entities.AccountIntegration, error)
+	Connect(
+		ctx context.Context,
+		cmd integrationservice.ConnectCommand,
+	) (entities.AccountIntegration, error)
 }
 
 func NewUser(
@@ -83,12 +87,14 @@ func (u *User) Register(r chi.Router) {
 		r.Get("/connect/{provider}", u.Login)
 		r.Get("/connect/{provider}/callback", u.Callback)
 		r.Post("/refresh", u.Refresh)
+		r.With(middleware.AuthJwt(u.j)).Post("/logout", u.Logout)
 	})
 
 	r.Route("/me", func(r chi.Router) {
 		r.Use(middleware.AuthJwt(u.j))
 		r.Get("/user-info", u.UserInfo)
 		r.Post("/channel", u.AddChannel)
+		r.Post("/logout", u.Logout)
 		r.Get("/payment-method", u.ListPaymentMethods)
 		r.Get("/payment-method/{id}", u.GetPaymentMethod)
 		r.Patch("/payment-method/{id}", u.SetDefaultPaymentMethod)
@@ -478,6 +484,7 @@ func (u *User) Refresh(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, jwt.ErrExpired):
 			message = "Refresh token expired"
+			u.clearAuthCookies(w)
 		case errors.Is(err, jwt.ErrInvalid), errors.Is(err, sql.ErrNotFound):
 			message = "Refresh token invalid"
 		default:
@@ -494,6 +501,41 @@ func (u *User) Refresh(w http.ResponseWriter, r *http.Request) {
 	u.setCookie(w, "/", "refresh_token", refresh.Raw, refresh.Claims.ExpiresAt.Time)
 
 	response.RespondOK(w, map[string]any{"refreshed": true})
+}
+
+func (u *User) Logout(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	sessionID, err := sessionIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid session id",
+		})
+
+		return
+	}
+
+	err = u.service.Logout(r.Context(), commands.Logout{
+		UserID:    userID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	u.clearAuthCookies(w)
+	response.RespondOK(w, map[string]any{"loggedOut": true})
 }
 
 func (u *User) UserInfo(w http.ResponseWriter, r *http.Request) {
@@ -532,6 +574,29 @@ func (u *User) setCookie(w http.ResponseWriter, path, name, value string, expire
 		Value:    value,
 		Path:     path,
 		Expires:  expires,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}
+
+	if u.env == config.EnvProduction {
+		cookie.Secure = true
+	}
+
+	http.SetCookie(w, cookie)
+}
+
+func (u *User) clearAuthCookies(w http.ResponseWriter) {
+	u.clearCookie(w, "/", "access_token")
+	u.clearCookie(w, "/", "refresh_token")
+}
+
+func (u *User) clearCookie(w http.ResponseWriter, path, name string) {
+	cookie := &http.Cookie{
+		Name:     name,
+		Value:    "",
+		Path:     path,
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	}

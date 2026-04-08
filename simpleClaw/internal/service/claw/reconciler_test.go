@@ -154,3 +154,79 @@ func TestProcessNextReconcileDeletesClawWhenRuntimeIsMissing(t *testing.T) {
 		t.Fatalf("operation status = %q, want %q", op.Status, entities.ClawLifecycleOperationStatusSucceeded)
 	}
 }
+
+func TestProcessNextReconcileRecoversRestartOperationToRunning(t *testing.T) {
+	now := time.Now().UTC()
+	clawID := uuid.New()
+	serverID := uuid.New()
+	opID := uuid.New()
+
+	clawStorage := &workerTestClawStorage{claws: map[uuid.UUID]entities.Claw{
+		clawID: {
+			ID:          clawID,
+			UserID:      uuid.New(),
+			ServerID:    serverID,
+			ContainerID: "ctr-2",
+			CreatedAt:   now.Add(-time.Minute),
+			UpdatedAt:   now.Add(-time.Minute),
+			ClawLifecycleState: entities.ClawLifecycleState{
+				DesiredState:       entities.ClawDesiredStateRunning,
+				ObservedState:      entities.ClawObservedStateUnknown,
+				LifecycleStatus:    entities.ClawLifecycleStatusReconcilePending,
+				CurrentOperationID: &opID,
+				LastError:          "restart timeout",
+			},
+		},
+	}}
+	operationStorage := &workerTestOperationStorage{
+		operations: map[uuid.UUID]entities.ClawLifecycleOperation{
+			opID: {
+				ID:        opID,
+				ClawID:    clawID,
+				Type:      entities.ClawLifecycleOperationTypeRestart,
+				Status:    entities.ClawLifecycleOperationStatusRetryScheduled,
+				CreatedAt: now.Add(-time.Minute),
+				UpdatedAt: now.Add(-time.Minute),
+			},
+		},
+	}
+	hostingStub := &workerTestHosting{
+		state: hosting.RuntimeState{
+			RuntimeRecordID: "ctr-2",
+			ObservedState:   "running",
+			RuntimeStatus:   "running",
+		},
+	}
+
+	svc := NewClaw(
+		clawStorage,
+		operationStorage,
+		&workerTestChannelStorage{},
+		&workerTestUserStorage{},
+		&workerTestServerStorage{server: entities.Server{ID: serverID, MaxClaws: 1}},
+		hostingStub,
+		&workerTestKeys{},
+		"",
+		GmailWatchConfig{},
+	)
+
+	if err := svc.ProcessNextReconcile(context.Background()); err != nil {
+		t.Fatalf("ProcessNextReconcile() error = %v", err)
+	}
+
+	cl := clawStorage.claws[clawID]
+	if cl.ObservedState != entities.ClawObservedStateRunning {
+		t.Fatalf("observed state = %q, want %q", cl.ObservedState, entities.ClawObservedStateRunning)
+	}
+	if cl.LifecycleStatus != entities.ClawLifecycleStatusIdle {
+		t.Fatalf("lifecycle status = %q, want %q", cl.LifecycleStatus, entities.ClawLifecycleStatusIdle)
+	}
+	if cl.CurrentOperationID != nil {
+		t.Fatalf("current operation id = %v, want nil", cl.CurrentOperationID)
+	}
+
+	op := operationStorage.operations[opID]
+	if op.Status != entities.ClawLifecycleOperationStatusSucceeded {
+		t.Fatalf("operation status = %q, want %q", op.Status, entities.ClawLifecycleOperationStatusSucceeded)
+	}
+}

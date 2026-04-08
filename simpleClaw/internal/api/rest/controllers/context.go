@@ -10,6 +10,7 @@ import (
 )
 
 var errUserIDNotFound = errors.New("user id not found in context")
+var errSessionIDNotFound = errors.New("session id not found in context")
 
 func userIDFromContext(ctx context.Context) (uuid.UUID, error) {
 	value := ctx.Value(entities.UserIDCtxKey{})
@@ -33,5 +34,30 @@ func userIDFromContext(ctx context.Context) (uuid.UUID, error) {
 		return id, nil
 	default:
 		return uuid.Nil, errUserIDNotFound
+	}
+}
+
+func sessionIDFromContext(ctx context.Context) (uuid.UUID, error) {
+	value := ctx.Value(entities.SessionIDCtxKey{})
+	switch v := value.(type) {
+	case uuid.UUID:
+		if v == uuid.Nil {
+			return uuid.Nil, errSessionIDNotFound
+		}
+
+		return v, nil
+	case string:
+		if v == "" {
+			return uuid.Nil, errSessionIDNotFound
+		}
+
+		id, err := uuid.Parse(v)
+		if err != nil {
+			return uuid.Nil, err
+		}
+
+		return id, nil
+	default:
+		return uuid.Nil, errSessionIDNotFound
 	}
 }

@@ -3,6 +3,7 @@ package claw
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -54,6 +55,14 @@ func (h *approveTestHosting) ApprovePairing(
 }
 
 func (h *approveTestHosting) Connect(context.Context, entities.Claw, entities.Server, string, []byte) error {
+	return nil
+}
+
+func (h *approveTestHosting) ConfigArchive(context.Context, entities.Claw, entities.Server, bool) (io.ReadCloser, error) {
+	return nil, nil
+}
+
+func (h *approveTestHosting) RestoreConfigArchive(context.Context, entities.Claw, entities.Server, io.Reader) error {
 	return nil
 }
 

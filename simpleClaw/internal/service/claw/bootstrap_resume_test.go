@@ -100,6 +100,102 @@ func TestServiceStart_KeepsOnboardingIncompleteWhenTelegramApproveIsRequired(t *
 	}
 }
 
+func TestServiceStart_PreservesOnboardingCompleteForApprovedClaw(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	clawID := uuid.New()
+	storage := &updateTestClawStorage{
+		existing: entities.Claw{
+			ID:                 clawID,
+			UserID:             userID,
+			OnboardingComplete: true,
+			Config: entities.ClawConfig{
+				Channels: &entities.ClawChannels{
+					Telegram: &entitychannels.TelegramConfig{
+						Enabled:  true,
+						DmPolicy: entitychannels.DmPairing,
+					},
+				},
+			},
+			ClawLifecycleState: entities.NewClawLifecycleState(),
+		},
+	}
+	operations := &updateTestOperationStorage{}
+
+	service := NewClaw(
+		storage,
+		operations,
+		&updateTestChannelStorage{},
+		&updateTestUserStorage{},
+		&updateTestServerStorage{},
+		&updateTestHosting{},
+		&updateTestKeys{},
+		"",
+		GmailWatchConfig{},
+	)
+
+	_, err := service.Start(context.Background(), commands.StartClaw{
+		UserID: userID,
+		ClawID: clawID,
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	if storage.lifecycleUpdate.OnboardingComplete == nil || !*storage.lifecycleUpdate.OnboardingComplete {
+		t.Fatalf("OnboardingComplete = %v, want true", storage.lifecycleUpdate.OnboardingComplete)
+	}
+}
+
+func TestServiceRestart_PreservesOnboardingCompleteForApprovedClaw(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	clawID := uuid.New()
+	storage := &updateTestClawStorage{
+		existing: entities.Claw{
+			ID:                 clawID,
+			UserID:             userID,
+			OnboardingComplete: true,
+			Config: entities.ClawConfig{
+				Channels: &entities.ClawChannels{
+					Telegram: &entitychannels.TelegramConfig{
+						Enabled:  true,
+						DmPolicy: entitychannels.DmPairing,
+					},
+				},
+			},
+			ClawLifecycleState: entities.NewClawLifecycleState(),
+		},
+	}
+	operations := &updateTestOperationStorage{}
+
+	service := NewClaw(
+		storage,
+		operations,
+		&updateTestChannelStorage{},
+		&updateTestUserStorage{},
+		&updateTestServerStorage{},
+		&updateTestHosting{},
+		&updateTestKeys{},
+		"",
+		GmailWatchConfig{},
+	)
+
+	_, err := service.Restart(context.Background(), commands.RestartClaw{
+		UserID: userID,
+		ClawID: clawID,
+	})
+	if err != nil {
+		t.Fatalf("Restart() error = %v", err)
+	}
+
+	if storage.lifecycleUpdate.OnboardingComplete == nil || !*storage.lifecycleUpdate.OnboardingComplete {
+		t.Fatalf("OnboardingComplete = %v, want true", storage.lifecycleUpdate.OnboardingComplete)
+	}
+}
+
 func TestServiceApprovePairing_CompletesOnboarding(t *testing.T) {
 	t.Parallel()
 

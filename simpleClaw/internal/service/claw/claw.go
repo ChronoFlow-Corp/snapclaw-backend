@@ -94,6 +94,7 @@ type Service struct {
 	servers            serverStorage
 	hosting            hostingManager
 	keys               apiKeyManager
+	archives           archiveStore
 	archivePath        string
 	watch              GmailWatchConfig
 	braveAPIKey        string
@@ -132,6 +133,7 @@ func NewClaw(
 		servers:     servers,
 		hosting:     hosting,
 		keys:        keys,
+		archives:    newFileArchiveStore(archivePath),
 		archivePath: archivePath,
 		watch: GmailWatchConfig{
 			Topic:  strings.TrimSpace(watch.Topic),
@@ -555,7 +557,7 @@ func (s *Service) Start(
 		entities.ClawLifecycleOperationTypeStart,
 		entities.ClawDesiredStateRunning,
 		entities.ClawLifecycleStatusStartPending,
-		boolPtr(!requiresOnboardingApprove(cl.Config)),
+		queuedOnboardingState(cl),
 	)
 	if err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
@@ -603,6 +605,53 @@ func (s *Service) Stop(
 		entities.ClawDesiredStateStopped,
 		entities.ClawLifecycleStatusStopPending,
 		nil,
+	)
+	if err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return cl, nil
+}
+
+func (s *Service) Restart(
+	ctx context.Context,
+	cm commands.RestartClaw,
+) (entities.Claw, error) {
+	const op = "service.Claw.Restart"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.claw",
+		"claw.restart",
+		"claw_lifecycle",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
+	if cm.UserID == uuid.Nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrUserIDRequired)
+	}
+
+	if cm.ClawID == uuid.Nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrClawIDRequired)
+	}
+
+	cl, err := s.claws.GetByID(ctx, cm.ClawID, cm.UserID)
+	if err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	cl, err = s.enqueueLifecycleIntent(
+		ctx,
+		cl,
+		entities.ClawLifecycleOperationTypeRestart,
+		entities.ClawDesiredStateRunning,
+		entities.ClawLifecycleStatusRestartPending,
+		queuedOnboardingState(cl),
 	)
 	if err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
@@ -954,6 +1003,14 @@ func (s *Service) enqueueLifecycleIntent(
 
 func requiresOnboardingApprove(cfg entities.ClawConfig) bool {
 	return len(listApproveChannels(cfg)) > 0
+}
+
+func queuedOnboardingState(cl entities.Claw) *bool {
+	if cl.OnboardingComplete {
+		return boolPtr(true)
+	}
+
+	return boolPtr(!requiresOnboardingApprove(cl.Config))
 }
 
 func boolPtr(v bool) *bool {

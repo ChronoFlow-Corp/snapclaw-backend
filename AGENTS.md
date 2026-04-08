@@ -131,14 +131,16 @@
 - Пользователь вызывает `POST /claws` или lifecycle endpoints в `simpleClaw`.
 - На `create` `simpleClaw` валидирует owner/model/channel ids, резолвит модель через OpenRouter, собирает `ClawConfig` и сохраняет `Claw` только у себя в БД.
 - На `create` не выбирается execution-server и не создаётся runtime: `server_id` пустой, `container_id` пустой, `desired_state=stopped`, `observed_state=unknown`, `lifecycle_status=idle`.
-- `start`, `stop` и `delete` в `simpleClaw` теперь async-only: HTTP handler только валидирует запрос, создаёт lifecycle operation, обновляет `desired_state`/`lifecycle_status` и возвращает текущее состояние `claw`.
+- `start`, `stop`, `restart` и `delete` в `simpleClaw` async-only: HTTP handler только валидирует запрос, создаёт lifecycle operation, обновляет `desired_state`/`lifecycle_status` и возвращает текущее состояние `claw`.
 - У `claw` есть backend-owned persisted onboarding completion signal: он выставляется, когда onboarding действительно завершён, а не в момент успешной оплаты.
+- `OnboardingComplete` sticky: `start/restart` не должны заново вычислять его только из approve-required config. Флаг сбрасывается в `false` только когда runtime-approved state больше не гарантирован, например archive missing, archive corrupted или archive save failed.
 - Фактическое выполнение идёт в background через lifecycle worker:
-  - `start` делает `select server -> ensure runtime -> start runtime -> sync runtime state`;
-  - `stop` делает `delete runtime` и очищает runtime refs в control plane;
+  - `start` делает `select server -> restore archived runtime config when available -> ensure runtime -> start runtime -> sync runtime state`; если локальный archive отсутствует или битый, worker делает fallback на обычный `ensure` из БД;
+  - `stop` сначала архивирует полный runtime config tar в control plane, затем делает `delete runtime` и очищает runtime refs в control plane;
+  - `restart` сначала архивирует текущий runtime config tar, затем удаляет runtime, после чего идёт через тот же archive-aware `start` path;
   - `delete` сначала добивается удаления runtime, потом удаляет сам `claw` из control plane.
 - Если во время runtime-операции outcome неоднозначен, `simpleClaw` переводит `claw` в `reconcile_pending`, а отдельный reconciler подтягивает truth через `GET /claws/state`.
-- Источник истины для доменного конфига — `openclaw.json` в `simpleClaw` БД; execution-plane runtime state синхронизируется отдельно и не должен подменять control-plane config.
+- Источник истины для доменного конфига — `openclaw.json` в `simpleClaw` БД; runtime archive может содержать остальные runtime files, но `openclaw.json` при restore всегда перезаписывается из БД, а execution-plane runtime state не должен подменять control-plane config.
 
 ### 5. Pairing / Connect
 
@@ -359,7 +361,7 @@
   - Channel-specific config и константы, сейчас practically Telegram-first.
 
 - `simpleClaw/internal/infra/hosting`
-  - HTTP client/manager для вызовов `containerManager`: ensure runtime, start, stop, delete, read runtime state, approve, connect, capacity. Archive/restore helpers всё ещё есть в пакете, но текущий lifecycle control-plane path опирается на `ensure/start/stop/delete/state`.
+  - HTTP client/manager для вызовов `containerManager`: ensure runtime, start, stop, delete, read runtime state, approve, connect, capacity и config archive/restore. Control-plane lifecycle теперь использует archive/restore path для `start/stop/restart`, сохраняя при этом `openclaw.json` как DB-owned source of truth.
 
 - `simpleClaw/internal/infra/openrouter`
   - OpenRouter API key management и model resolution.
@@ -410,7 +412,7 @@
   - Command types для user service.
 
 - `simpleClaw/internal/service/claw`
-  - Business logic lifecycle `claw`: create/update, async enqueue `start/stop/delete`, lifecycle worker, reconciler, approve pairing, connect, Gmail watch config injection.
+  - Business logic lifecycle `claw`: create/update, async enqueue `start/stop/restart/delete`, lifecycle worker, reconciler, local archive store for runtime config tar, approve pairing, connect, Gmail watch config injection.
 
 - `simpleClaw/internal/service/claw/commands`
   - Command types для claw service.
@@ -597,5 +599,6 @@ Compose stack:
 - В control plane больше нет legacy `claw.status`; ориентируйтесь на `desired_state`, `observed_state`, `lifecycle_status`, `current_operation_id` и lifecycle operations.
 - `simpleClaw` lifecycle handlers не должны синхронно знать исход runtime-операции; неопределённые кейсы переводятся в `reconcile_pending`, а truth подтягивается из execution plane.
 - `containerManager` runtime lifecycle должен оставаться идемпотентным: повторные `ensure/start/stop/delete` не должны плодить orphan runtime и не должны ломать reconcile path.
-- Archive/restore остаются execution-level механизмом для runtime files и pairing state, но текущий control-plane lifecycle path не должен предполагать обязательный synchronous archive/restore round-trip.
+- Archive/restore остаются execution-level механизмом для runtime files и pairing state, но control plane теперь сознательно использует их как часть `start/stop/restart` lifecycle: archive целиком сохраняется в `simpleClaw`, а `openclaw.json` при restore всегда должен пересобираться из БД и не браться из сохранённого tar как source of truth.
+- Не привязывайте `OnboardingComplete` напрямую к текущему `openclaw.json`: approve state может жить в runtime files. Если archive runtime state потерян или недостоверен, backend обязан перевести `OnboardingComplete=false` даже если config в БД не менялся.
 - Если вносите изменения в OpenClaw config schema, проверьте и доменную сборку config в `simpleClaw`, и файловую запись/restore path в `containerManager`.

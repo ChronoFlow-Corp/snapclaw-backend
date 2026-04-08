@@ -2,6 +2,7 @@ package claw
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"simpleClaw/internal/entities"
@@ -75,6 +76,8 @@ type apiKeyManager interface {
 
 type hostingManager interface {
 	Create(ctx context.Context, cl entities.Claw, server entities.Server) (hosting.Container, error)
+	ConfigArchive(ctx context.Context, cl entities.Claw, server entities.Server, deleteAfter bool) (io.ReadCloser, error)
+	RestoreConfigArchive(ctx context.Context, cl entities.Claw, server entities.Server, body io.Reader) error
 	Start(ctx context.Context, cl entities.Claw, server entities.Server) error
 	Stop(ctx context.Context, cl entities.Claw, server entities.Server) error
 	Delete(ctx context.Context, cl entities.Claw, server entities.Server, deleteConfig bool) error

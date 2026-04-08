@@ -292,7 +292,108 @@ func TestRemovePaymentMethodDeletesOwnerScopedMethod(t *testing.T) {
 	}
 }
 
+func TestRefreshDeletesSessionWhenRefreshTokenExpired(t *testing.T) {
+	t.Parallel()
+
+	j := newTestJWTWithRefreshExpiry(t, -time.Minute)
+	storage := newFakeUserStorage()
+	service := NewUser(j, storage, fakeChannelStorage{}, newFakePaymentMethodStorage(), nil, nil)
+
+	userID := uuid.New()
+	sessionID := uuid.New()
+	_, refresh, err := j.GeneratePair(userID, sessionID)
+	if err != nil {
+		t.Fatalf("GeneratePair() error = %v", err)
+	}
+
+	storage.sessions[sessionID] = entities.Session{
+		ID:           sessionID,
+		UserID:       userID,
+		RefreshToken: refresh.Raw,
+		CreatedAt:    time.Now(),
+	}
+
+	_, _, err = service.Refresh(context.Background(), refresh.Raw)
+	if !errors.Is(err, jwt.ErrExpired) {
+		t.Fatalf("Refresh() error = %v, want ErrExpired", err)
+	}
+
+	if _, ok := storage.sessions[sessionID]; ok {
+		t.Fatal("expired refresh session must be deleted")
+	}
+}
+
+func TestRefreshRotatesStoredRefreshToken(t *testing.T) {
+	t.Parallel()
+
+	j := newTestJWT(t)
+	storage := newFakeUserStorage()
+	service := NewUser(j, storage, fakeChannelStorage{}, newFakePaymentMethodStorage(), nil, nil)
+
+	userID := uuid.New()
+	sessionID := uuid.New()
+	_, refresh, err := j.GeneratePair(userID, sessionID)
+	if err != nil {
+		t.Fatalf("GeneratePair() error = %v", err)
+	}
+
+	storage.sessions[sessionID] = entities.Session{
+		ID:           sessionID,
+		UserID:       userID,
+		RefreshToken: refresh.Raw,
+		CreatedAt:    time.Now(),
+	}
+
+	_, rotated, err := service.Refresh(context.Background(), refresh.Raw)
+	if err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+
+	stored, err := storage.GetSession(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+
+	if stored.RefreshToken != rotated.Raw {
+		t.Fatalf("stored refresh token = %q, want %q", stored.RefreshToken, rotated.Raw)
+	}
+}
+
+func TestLogoutDeletesSession(t *testing.T) {
+	t.Parallel()
+
+	storage := newFakeUserStorage()
+	service := NewUser(newTestJWT(t), storage, fakeChannelStorage{}, newFakePaymentMethodStorage(), nil, nil)
+
+	userID := uuid.New()
+	sessionID := uuid.New()
+	storage.sessions[sessionID] = entities.Session{
+		ID:           sessionID,
+		UserID:       userID,
+		RefreshToken: "refresh-token",
+		CreatedAt:    time.Now(),
+	}
+
+	err := service.Logout(context.Background(), commands.Logout{
+		UserID:    userID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		t.Fatalf("Logout() error = %v", err)
+	}
+
+	if _, ok := storage.sessions[sessionID]; ok {
+		t.Fatal("session must be deleted on sign out")
+	}
+}
+
 func newTestJWT(t *testing.T) jwt.JWT {
+	t.Helper()
+
+	return newTestJWTWithRefreshExpiry(t, 24*time.Hour)
+}
+
+func newTestJWTWithRefreshExpiry(t *testing.T, refreshExpiry time.Duration) jwt.JWT {
 	t.Helper()
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -309,7 +410,7 @@ func newTestJWT(t *testing.T) jwt.JWT {
 		Bytes: x509.MarshalPKCS1PublicKey(&key.PublicKey),
 	})
 
-	return jwt.New(privatePEM, publicPEM, []byte("test-refresh-secret"), time.Hour, 24*time.Hour)
+	return jwt.New(privatePEM, publicPEM, []byte("test-refresh-secret"), time.Hour, refreshExpiry)
 }
 
 type fakeUserStorage struct {

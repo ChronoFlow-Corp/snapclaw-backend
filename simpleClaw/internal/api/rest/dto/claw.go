@@ -43,6 +43,8 @@ type ApprovePairingRequest struct {
 type ClawResponse struct {
 	ID                 string `json:"id"`
 	Name               string `json:"name"`
+	ModelKey           string `json:"modelKey,omitempty"`
+	ResolvedModel      string `json:"resolvedModel,omitempty"`
 	DesiredState       string `json:"desiredState"`
 	ObservedState      string `json:"observedState"`
 	LifecycleStatus    string `json:"lifecycleStatus"`

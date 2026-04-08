@@ -85,6 +85,72 @@ func TestRoutesIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("POST /api/auth/refresh clears cookies when refresh token expired", func(t *testing.T) {
+		env := newTestEnv(t)
+		env.userService.refreshErr = jwt.ErrExpired
+
+		rr := env.request(
+			t,
+			http.MethodPost,
+			"/api/auth/refresh",
+			nil,
+			refreshCookie(env.refreshToken),
+		)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		accessCookie := findCookie(rr.Result().Cookies(), "access_token")
+		if accessCookie == nil || accessCookie.Value != "" || accessCookie.MaxAge != -1 {
+			t.Fatalf("expected cleared access_token cookie, got %#v", accessCookie)
+		}
+
+		refreshCookie := findCookie(rr.Result().Cookies(), "refresh_token")
+		if refreshCookie == nil || refreshCookie.Value != "" || refreshCookie.MaxAge != -1 {
+			t.Fatalf("expected cleared refresh_token cookie, got %#v", refreshCookie)
+		}
+	})
+
+	t.Run("POST /api/auth/logout", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		rr := env.request(
+			t,
+			http.MethodPost,
+			"/api/auth/logout",
+			nil,
+			accessCookie(env.accessToken),
+		)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		if len(env.userService.logoutCalls) != 1 {
+			t.Fatalf("expected single logout call, got %d", len(env.userService.logoutCalls))
+		}
+
+		call := env.userService.logoutCalls[0]
+		if call.UserID != env.user.ID {
+			t.Fatalf("logout user id = %s, want %s", call.UserID, env.user.ID)
+		}
+
+		if call.SessionID != env.sessionID {
+			t.Fatalf("logout session id = %s, want %s", call.SessionID, env.sessionID)
+		}
+
+		clearedAccessCookie := findCookie(rr.Result().Cookies(), "access_token")
+		if clearedAccessCookie == nil || clearedAccessCookie.Value != "" || clearedAccessCookie.MaxAge != -1 {
+			t.Fatalf("expected cleared access_token cookie, got %#v", clearedAccessCookie)
+		}
+
+		clearedRefreshCookie := findCookie(rr.Result().Cookies(), "refresh_token")
+		if clearedRefreshCookie == nil || clearedRefreshCookie.Value != "" || clearedRefreshCookie.MaxAge != -1 {
+			t.Fatalf("expected cleared refresh_token cookie, got %#v", clearedRefreshCookie)
+		}
+	})
+
 	t.Run("GET /api/me/user-info", func(t *testing.T) {
 		env := newTestEnv(t)
 
@@ -704,6 +770,8 @@ func TestRoutesIntegration(t *testing.T) {
 		var payload []struct {
 			ID              string `json:"id"`
 			Name            string `json:"name"`
+			ModelKey        string `json:"modelKey"`
+			ResolvedModel   string `json:"resolvedModel"`
 			DesiredState    string `json:"desiredState"`
 			ObservedState   string `json:"observedState"`
 			LifecycleStatus string `json:"lifecycleStatus"`
@@ -724,6 +792,14 @@ func TestRoutesIntegration(t *testing.T) {
 
 		if payload[0].LifecycleStatus != string(entities.ClawLifecycleStatusIdle) {
 			t.Fatalf("unexpected lifecycle status: %s", payload[0].LifecycleStatus)
+		}
+
+		if payload[0].ModelKey != "openai-gpt-5-4" {
+			t.Fatalf("unexpected model key: %s", payload[0].ModelKey)
+		}
+
+		if payload[0].ResolvedModel != "openrouter/openai/gpt-5.4" {
+			t.Fatalf("unexpected resolved model: %s", payload[0].ResolvedModel)
 		}
 	})
 
@@ -746,6 +822,8 @@ func TestRoutesIntegration(t *testing.T) {
 		var payload struct {
 			ID              string `json:"id"`
 			Name            string `json:"name"`
+			ModelKey        string `json:"modelKey"`
+			ResolvedModel   string `json:"resolvedModel"`
 			DesiredState    string `json:"desiredState"`
 			ObservedState   string `json:"observedState"`
 			LifecycleStatus string `json:"lifecycleStatus"`
@@ -770,6 +848,14 @@ func TestRoutesIntegration(t *testing.T) {
 
 		if payload.LifecycleStatus != string(entities.ClawLifecycleStatusIdle) {
 			t.Fatalf("unexpected lifecycle status: %s", payload.LifecycleStatus)
+		}
+
+		if payload.ModelKey != "openai-gpt-5-4" {
+			t.Fatalf("unexpected model key: %s", payload.ModelKey)
+		}
+
+		if payload.ResolvedModel != "openrouter/openai/gpt-5.4" {
+			t.Fatalf("unexpected resolved model: %s", payload.ResolvedModel)
 		}
 	})
 
@@ -1003,6 +1089,37 @@ func TestRoutesIntegration(t *testing.T) {
 
 		if updated.ObservedState != entities.ClawObservedStateRunning {
 			t.Fatalf("unexpected observed state after stop: %s", updated.ObservedState)
+		}
+	})
+
+	t.Run("POST /api/claws/{id}/restart", func(t *testing.T) {
+		env := newTestEnv(t)
+		cl := env.clawService.seed(env.user.ID, "to-restart")
+		cl.DesiredState = entities.ClawDesiredStateStopped
+		cl.ObservedState = entities.ClawObservedStateStopped
+		env.clawService.claws[cl.ID] = cl
+
+		rr := env.request(
+			t,
+			http.MethodPost,
+			"/api/claws/"+cl.ID.String()+"/restart",
+			nil,
+			accessCookie(env.accessToken),
+		)
+
+		if rr.Code != http.StatusAccepted {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		var payload dto.ClawResponse
+		decodeJSON(t, rr, &payload)
+
+		if payload.ID != cl.ID.String() {
+			t.Fatalf("unexpected claw id: %s", payload.ID)
+		}
+
+		if payload.LifecycleStatus != string(entities.ClawLifecycleStatusRestartPending) {
+			t.Fatalf("unexpected lifecycle status: %s", payload.LifecycleStatus)
 		}
 	})
 
@@ -1381,6 +1498,16 @@ func hasCookie(cookies []*http.Cookie, name string) bool {
 	return false
 }
 
+func findCookie(cookies []*http.Cookie, name string) *http.Cookie {
+	for _, c := range cookies {
+		if c.Name == name {
+			return c
+		}
+	}
+
+	return nil
+}
+
 type fakeUserService struct {
 	j              jwt.JWT
 	sessionID      uuid.UUID
@@ -1388,6 +1515,8 @@ type fakeUserService struct {
 	channels       map[uuid.UUID]entities.Channel
 	paymentMethods map[uuid.UUID]entities.PaymentMethod
 	lastRefresh    map[uuid.UUID]string
+	refreshErr     error
+	logoutCalls    []usercommands.Logout
 	channelOrder   []uuid.UUID
 }
 
@@ -1420,6 +1549,10 @@ func (s *fakeUserService) Refresh(
 	_ context.Context,
 	rawRefresh string,
 ) (jwt.AccessToken, jwt.RefreshToken, error) {
+	if s.refreshErr != nil {
+		return jwt.AccessToken{}, jwt.RefreshToken{}, s.refreshErr
+	}
+
 	token, err := s.j.ParseRefresh(rawRefresh)
 	if err != nil {
 		return jwt.AccessToken{}, jwt.RefreshToken{}, err
@@ -1438,6 +1571,12 @@ func (s *fakeUserService) Refresh(
 	s.lastRefresh[token.Claims.UserID] = refresh.Raw
 
 	return access, refresh, nil
+}
+
+func (s *fakeUserService) Logout(_ context.Context, cmd usercommands.Logout) error {
+	s.logoutCalls = append(s.logoutCalls, cmd)
+
+	return nil
 }
 
 func (s *fakeUserService) UserInfo(_ context.Context, userID uuid.UUID) (entities.User, error) {
@@ -1669,6 +1808,10 @@ func newFakeClawService() *fakeClawService {
 	}
 }
 
+func fakeClawConfig() entities.ClawConfig {
+	return entities.NewDefaultClawConfig("openrouter/openai/gpt-5.4")
+}
+
 func (s *fakeClawService) seed(userID uuid.UUID, name string) entities.Claw {
 	now := time.Now()
 	cl := entities.Claw{
@@ -1676,6 +1819,7 @@ func (s *fakeClawService) seed(userID uuid.UUID, name string) entities.Claw {
 		Name:               name,
 		UserID:             userID,
 		ClawLifecycleState: entities.NewClawLifecycleState(),
+		Config:             fakeClawConfig(),
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
@@ -1700,6 +1844,7 @@ func (s *fakeClawService) Create(
 		Name:               cm.Name,
 		UserID:             cm.UserID,
 		ClawLifecycleState: entities.NewClawLifecycleState(),
+		Config:             fakeClawConfig(),
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
@@ -1794,6 +1939,28 @@ func (s *fakeClawService) Stop(
 
 	existing.DesiredState = entities.ClawDesiredStateStopped
 	existing.LifecycleStatus = entities.ClawLifecycleStatusStopPending
+	opID := uuid.New()
+	existing.CurrentOperationID = &opID
+	existing.UpdatedAt = time.Now()
+	s.claws[existing.ID] = existing
+
+	return existing, nil
+}
+
+func (s *fakeClawService) Restart(
+	_ context.Context,
+	cm clawcommands.RestartClaw,
+) (entities.Claw, error) {
+	existing, ok := s.claws[cm.ClawID]
+	if !ok || existing.UserID != cm.UserID {
+		return entities.Claw{}, sql.ErrNotFound
+	}
+	if existing.CurrentOperationID != nil {
+		return entities.Claw{}, clawservice.ErrLifecycleOperationInProgress
+	}
+
+	existing.DesiredState = entities.ClawDesiredStateRunning
+	existing.LifecycleStatus = entities.ClawLifecycleStatusRestartPending
 	opID := uuid.New()
 	existing.CurrentOperationID = &opID
 	existing.UpdatedAt = time.Now()

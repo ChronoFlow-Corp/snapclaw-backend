@@ -737,6 +737,158 @@ func TestServiceStart_RejectsWhenActiveOperationExists(t *testing.T) {
 	}
 }
 
+func TestServiceRestart_QueuesOperation(t *testing.T) {
+	userID := uuid.New()
+	clawID := uuid.New()
+
+	cfg := entities.NewDefaultClawConfig("openrouter/openai/gpt-4.1-mini")
+	cfg.Env.Vars[openRouterAPIKeyVar] = "secret"
+
+	storage := &updateTestClawStorage{existing: entities.Claw{
+		ID:                 clawID,
+		UserID:             userID,
+		Name:               "existing-name",
+		ClawLifecycleState: entities.NewClawLifecycleState(),
+		Config:             cfg,
+		CreatedAt:          time.Now(),
+		UpdatedAt:          time.Now(),
+	}}
+
+	operations := &updateTestOperationStorage{}
+
+	svc := NewClaw(
+		storage,
+		operations,
+		&updateTestChannelStorage{},
+		&updateTestUserStorage{},
+		&updateTestServerStorage{},
+		&updateTestHosting{},
+		&updateTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"},
+		t.TempDir(),
+		GmailWatchConfig{},
+	)
+
+	cl, err := svc.Restart(context.Background(), commands.RestartClaw{
+		UserID: userID,
+		ClawID: clawID,
+	})
+	if err != nil {
+		t.Fatalf("restart returned error: %v", err)
+	}
+
+	if operations.create.Type != entities.ClawLifecycleOperationTypeRestart {
+		t.Fatalf("operation type = %q, want %q", operations.create.Type, entities.ClawLifecycleOperationTypeRestart)
+	}
+
+	if storage.lifecycleUpdate.DesiredState != entities.ClawDesiredStateRunning {
+		t.Fatalf("desired state = %q, want %q", storage.lifecycleUpdate.DesiredState, entities.ClawDesiredStateRunning)
+	}
+
+	if storage.lifecycleUpdate.LifecycleStatus != entities.ClawLifecycleStatusRestartPending {
+		t.Fatalf("lifecycle status = %q, want %q", storage.lifecycleUpdate.LifecycleStatus, entities.ClawLifecycleStatusRestartPending)
+	}
+
+	if cl.CurrentOperationID == nil {
+		t.Fatal("expected returned claw current operation id")
+	}
+}
+
+func TestServiceRestart_RejectsWhenActiveOperationExists(t *testing.T) {
+	userID := uuid.New()
+	clawID := uuid.New()
+
+	cfg := entities.NewDefaultClawConfig("openrouter/openai/gpt-4.1-mini")
+	cfg.Env.Vars[openRouterAPIKeyVar] = "secret"
+
+	storage := &updateTestClawStorage{existing: entities.Claw{
+		ID:                 clawID,
+		UserID:             userID,
+		Name:               "existing-name",
+		ClawLifecycleState: entities.NewClawLifecycleState(),
+		Config:             cfg,
+		CreatedAt:          time.Now(),
+		UpdatedAt:          time.Now(),
+	}}
+
+	svc := NewClaw(
+		storage,
+		&updateTestOperationStorage{
+			active: entities.ClawLifecycleOperation{
+				ID:     uuid.New(),
+				ClawID: clawID,
+				Type:   entities.ClawLifecycleOperationTypeStop,
+			},
+		},
+		&updateTestChannelStorage{},
+		&updateTestUserStorage{},
+		&updateTestServerStorage{},
+		&updateTestHosting{},
+		&updateTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"},
+		t.TempDir(),
+		GmailWatchConfig{},
+	)
+
+	_, err := svc.Restart(context.Background(), commands.RestartClaw{
+		UserID: userID,
+		ClawID: clawID,
+	})
+	if !errors.Is(err, ErrLifecycleOperationInProgress) {
+		t.Fatalf("restart error = %v, want ErrLifecycleOperationInProgress", err)
+	}
+}
+
+func TestServiceRestart_StoppedClawTargetsRunning(t *testing.T) {
+	userID := uuid.New()
+	clawID := uuid.New()
+
+	cfg := entities.NewDefaultClawConfig("openrouter/openai/gpt-4.1-mini")
+	cfg.Env.Vars[openRouterAPIKeyVar] = "secret"
+
+	storage := &updateTestClawStorage{existing: entities.Claw{
+		ID:        clawID,
+		UserID:    userID,
+		Name:      "existing-name",
+		Config:    cfg,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		ClawLifecycleState: entities.ClawLifecycleState{
+			DesiredState:    entities.ClawDesiredStateStopped,
+			ObservedState:   entities.ClawObservedStateStopped,
+			LifecycleStatus: entities.ClawLifecycleStatusIdle,
+		},
+	}}
+
+	operations := &updateTestOperationStorage{}
+
+	svc := NewClaw(
+		storage,
+		operations,
+		&updateTestChannelStorage{},
+		&updateTestUserStorage{},
+		&updateTestServerStorage{},
+		&updateTestHosting{},
+		&updateTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"},
+		t.TempDir(),
+		GmailWatchConfig{},
+	)
+
+	cl, err := svc.Restart(context.Background(), commands.RestartClaw{
+		UserID: userID,
+		ClawID: clawID,
+	})
+	if err != nil {
+		t.Fatalf("restart returned error: %v", err)
+	}
+
+	if cl.DesiredState != entities.ClawDesiredStateRunning {
+		t.Fatalf("desired state = %q, want %q", cl.DesiredState, entities.ClawDesiredStateRunning)
+	}
+
+	if storage.lifecycleUpdate.DesiredState != entities.ClawDesiredStateRunning {
+		t.Fatalf("lifecycle desired state = %q, want %q", storage.lifecycleUpdate.DesiredState, entities.ClawDesiredStateRunning)
+	}
+}
+
 func TestServiceDelete_WithoutRuntimeQueuesOperation(t *testing.T) {
 	userID := uuid.New()
 	clawID := uuid.New()

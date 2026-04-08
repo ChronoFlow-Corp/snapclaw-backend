@@ -31,6 +31,8 @@ func classifySimpleClawActionFlow(method, path string) (string, string) {
 		switch {
 		case strings.HasSuffix(path, "/callback"):
 			return "auth.callback", "auth"
+		case method == "POST" && strings.HasSuffix(path, "/logout"):
+			return "auth.logout", "auth"
 		case method == "POST" && strings.HasSuffix(path, "/refresh"):
 			return "auth.refresh", "auth"
 		default:

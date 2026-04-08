@@ -25,6 +25,7 @@ type clawService interface {
 	Update(ctx context.Context, cm commands.UpdateClaw) (entities.Claw, error)
 	Start(ctx context.Context, cm commands.StartClaw) (entities.Claw, error)
 	Stop(ctx context.Context, cm commands.StopClaw) (entities.Claw, error)
+	Restart(ctx context.Context, cm commands.RestartClaw) (entities.Claw, error)
 	Delete(ctx context.Context, cm commands.DeleteClaw) (entities.Claw, error)
 	ApprovePairing(ctx context.Context, cm commands.ApprovePairing) error
 	Connect(ctx context.Context, cm commands.ConnectClaw) error
@@ -58,6 +59,7 @@ func (c *Claw) Register(r chi.Router) {
 		r.Put("/claws/{id}", c.Update)
 		r.Post("/claws/{id}/start", c.Start)
 		r.Post("/claws/{id}/stop", c.Stop)
+		r.Post("/claws/{id}/restart", c.Restart)
 		r.Post("/claws/{id}/approve", c.ApprovePairing)
 		r.Post("/claws/{id}/connect", c.Connect)
 		r.Put("/claws/{id}/capabilities/{capability}", c.AttachCapability)
@@ -406,15 +408,104 @@ func (c *Claw) Stop(w http.ResponseWriter, r *http.Request) {
 	respondAccepted(w, clawResponse(cl))
 }
 
+func (c *Claw) Restart(w http.ResponseWriter, r *http.Request) {
+	rawID := chi.URLParam(r, "id")
+
+	id, err := uuid.Parse(rawID)
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid claw id",
+		})
+
+		return
+	}
+
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	cl, err := c.service.Restart(r.Context(), commands.RestartClaw{
+		UserID: userID,
+		ClawID: id,
+	})
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	respondAccepted(w, clawResponse(cl))
+}
+
 func clawResponse(cl entities.Claw) dto.ClawResponse {
+	resolvedModel := clawPrimaryModel(cl.Config)
+
 	return dto.ClawResponse{
 		ID:                 cl.ID.String(),
 		Name:               cl.Name,
+		ModelKey:           dashboardModelKey(resolvedModel),
+		ResolvedModel:      resolvedModel,
 		DesiredState:       string(cl.DesiredState),
 		ObservedState:      string(cl.ObservedState),
 		LifecycleStatus:    string(cl.LifecycleStatus),
 		CurrentOperationID: stringifyUUID(cl.CurrentOperationID),
 		LastError:          cl.LastError,
+	}
+}
+
+func clawPrimaryModel(cfg entities.ClawConfig) string {
+	for _, agent := range cfg.Agents.List {
+		if agent.Model == nil {
+			continue
+		}
+
+		model := strings.TrimSpace(agent.Model.Primary)
+		if model == "" {
+			continue
+		}
+
+		if agent.Default {
+			return model
+		}
+	}
+
+	for _, agent := range cfg.Agents.List {
+		if agent.Model == nil {
+			continue
+		}
+
+		model := strings.TrimSpace(agent.Model.Primary)
+		if model != "" {
+			return model
+		}
+	}
+
+	return ""
+}
+
+func dashboardModelKey(resolved string) string {
+	switch {
+	case strings.Contains(resolved, "claude-sonnet-4.6"):
+		return "claude-sonnet-4-6"
+	case strings.Contains(resolved, "gpt-5.4"):
+		return "openai-gpt-5-4"
+	case strings.Contains(resolved, "gemini-3-flash"):
+		return "gemini-3-flash"
+	case strings.Contains(resolved, "qwen3.5-flash"):
+		return "qwen-3-5-flash"
+	case strings.Contains(resolved, "kimi-k2.5"):
+		return "kimi-k2-5"
+	case strings.Contains(resolved, "glm-5-turbo"):
+		return "glm-5-turbo"
+	default:
+		return ""
 	}
 }
 

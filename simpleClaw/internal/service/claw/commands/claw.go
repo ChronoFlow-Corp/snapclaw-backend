@@ -50,6 +50,11 @@ type StopClaw struct {
 	ClawID uuid.UUID
 }
 
+type RestartClaw struct {
+	UserID uuid.UUID
+	ClawID uuid.UUID
+}
+
 type DeleteClaw struct {
 	UserID       uuid.UUID
 	ClawID       uuid.UUID
