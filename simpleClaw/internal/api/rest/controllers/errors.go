@@ -10,6 +10,7 @@ import (
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/service/billing"
 	"simpleClaw/internal/service/claw"
+	"simpleClaw/internal/service/integrations/googleoauth"
 	"simpleClaw/internal/service/server"
 	"simpleClaw/internal/service/user"
 )
@@ -85,6 +86,16 @@ var serviceErrorMappings = []serviceErrorMapping{
 		message: "invalid data",
 	},
 	{
+		err:     googleoauth.ErrUnsupportedCapability,
+		code:    http.StatusBadRequest,
+		message: "unsupported capability",
+	},
+	{
+		err:     googleoauth.ErrReturnToInvalid,
+		code:    http.StatusBadRequest,
+		message: "returnTo is invalid",
+	},
+	{
 		err:     billing.ErrPaymentEventTypeInvalid,
 		code:    http.StatusBadRequest,
 		message: "invalid payment event type",
@@ -144,11 +155,6 @@ var serviceErrorMappings = []serviceErrorMapping{
 		err:     claw.ErrWebSearchProviderUnsupported,
 		code:    http.StatusBadRequest,
 		message: "web search provider is not supported",
-	},
-	{
-		err:     claw.ErrCreateCapabilityUnsupported,
-		code:    http.StatusBadRequest,
-		message: "capability is not supported during claw create",
 	},
 	{
 		err:     server.ErrServerIDRequired,

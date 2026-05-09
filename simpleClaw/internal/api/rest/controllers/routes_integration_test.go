@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ import (
 	clawcommands "simpleClaw/internal/service/claw/commands"
 	clawcapabilityservice "simpleClaw/internal/service/clawcapability"
 	integrationservice "simpleClaw/internal/service/integrations"
+	"simpleClaw/internal/service/integrations/googleoauth"
 	servercommands "simpleClaw/internal/service/server/commands"
 	usercommands "simpleClaw/internal/service/user/commands"
 )
@@ -47,6 +49,7 @@ type testEnv struct {
 	userService             *fakeUserService
 	clawService             *fakeClawService
 	integrationService      *fakeIntegrationService
+	googleOAuthService      *fakeGoogleOAuthService
 	clawCapabilityService   *fakeClawCapabilityService
 	serverService           *fakeServerService
 	billingService          *fakeBillingService
@@ -228,6 +231,127 @@ func TestRoutesIntegration(t *testing.T) {
 
 		if len(payload.AllowFrom) != 2 || payload.AllowFrom[0] != "1001" || payload.AllowFrom[1] != "1002" {
 			t.Fatalf("unexpected allowFrom: %#v", payload.AllowFrom)
+		}
+	})
+
+	t.Run("POST /api/me/integrations/google/oauth/start requires auth", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		rr := env.request(
+			t,
+			http.MethodPost,
+			"/api/me/integrations/google/oauth/start",
+			map[string]any{"capabilities": []string{"gmail"}},
+		)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("unexpected status: %d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("POST /api/me/integrations/google/oauth/start returns auth url", func(t *testing.T) {
+		env := newTestEnv(t)
+		env.googleOAuthService.startResult = googleoauth.StartResult{
+			AuthURL:      "https://accounts.google.com/o/oauth2/v2/auth?state=test-state",
+			Capabilities: []string{"gmail", "google_calendar"},
+		}
+
+		rr := env.request(
+			t,
+			http.MethodPost,
+			"/api/me/integrations/google/oauth/start",
+			map[string]any{
+				"capabilities": []string{"gmail", "google_calendar"},
+				"returnTo":     "/onboard/google",
+			},
+			accessCookie(env.accessToken),
+		)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d body=%s", rr.Code, rr.Body.String())
+		}
+
+		var payload struct {
+			AuthURL      string   `json:"authUrl"`
+			Capabilities []string `json:"capabilities"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if payload.AuthURL != env.googleOAuthService.startResult.AuthURL {
+			t.Fatalf("auth url = %q", payload.AuthURL)
+		}
+
+		if !reflect.DeepEqual(payload.Capabilities, env.googleOAuthService.startResult.Capabilities) {
+			t.Fatalf("capabilities = %#v", payload.Capabilities)
+		}
+	})
+
+	t.Run("GET /api/auth/google/integrations/callback rejects bad state", func(t *testing.T) {
+		env := newTestEnv(t)
+		env.googleOAuthService.completeErr = googleoauth.ErrStateInvalid
+
+		rr := env.request(
+			t,
+			http.MethodGet,
+			"/api/auth/google/integrations/callback?state=bad&code=test-code",
+			nil,
+		)
+
+		if rr.Code != http.StatusFound {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		if got := rr.Header().Get("Location"); got != "http://example.com/onboard?integration_oauth=error" {
+			t.Fatalf("location = %q", got)
+		}
+	})
+
+	t.Run("GET /api/auth/google/integrations/callback handles access_denied", func(t *testing.T) {
+		env := newTestEnv(t)
+		env.googleOAuthService.completeErr = errors.New("complete should not be called")
+
+		rr := env.request(
+			t,
+			http.MethodGet,
+			"/api/auth/google/integrations/callback?state=test-state&error=access_denied",
+			nil,
+		)
+
+		if rr.Code != http.StatusFound {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		if env.googleOAuthService.completeCalls != 0 {
+			t.Fatalf("complete calls = %d, want 0", env.googleOAuthService.completeCalls)
+		}
+
+		if got := rr.Header().Get("Location"); got != "http://example.com/onboard?integration_oauth=error" {
+			t.Fatalf("location = %q", got)
+		}
+	})
+
+	t.Run("GET /api/auth/google/integrations/callback redirects success", func(t *testing.T) {
+		env := newTestEnv(t)
+		env.googleOAuthService.completeResult = googleoauth.CompleteResult{
+			ReturnTo: "/onboard/google",
+			Integrations: []entities.AccountIntegration{
+				{ID: uuid.New()},
+			},
+		}
+
+		rr := env.request(
+			t,
+			http.MethodGet,
+			"/api/auth/google/integrations/callback?state=test-state&code=test-code",
+			nil,
+		)
+
+		if rr.Code != http.StatusFound {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		if got := rr.Header().Get("Location"); got != "http://example.com/onboard/google?integration_oauth=success" {
+			t.Fatalf("location = %q", got)
 		}
 	})
 
@@ -1378,13 +1502,14 @@ func newTestEnvWithRole(t *testing.T, role string) *testEnv {
 	uService := newFakeUserService(user, j, sessionID, refresh.Raw)
 	cService := newFakeClawService()
 	iService := newFakeIntegrationService()
+	gOAuthService := newFakeGoogleOAuthService()
 	ccService := newFakeClawCapabilityService()
 	sService := newFakeServerService()
 	bService := newFakeBillingService(user.ID)
 	openRouterWebhookSecret := "test-openrouter-webhook-secret"
 
 	api := chi.NewRouter()
-	controllers.NewUser(config.EnvDevelopment, uService, iService, j, "http://example.com").Register(api)
+	controllers.NewUser(config.EnvDevelopment, uService, iService, gOAuthService, j, "http://example.com").Register(api)
 	controllers.NewClaw(cService, ccService, j).Register(api)
 	controllers.NewServer(sService, uService, j).Register(api)
 	controllers.NewBilling(
@@ -1409,6 +1534,7 @@ func newTestEnvWithRole(t *testing.T, role string) *testEnv {
 		userService:             uService,
 		clawService:             cService,
 		integrationService:      iService,
+		googleOAuthService:      gOAuthService,
 		clawCapabilityService:   ccService,
 		serverService:           sService,
 		billingService:          bService,
@@ -1736,8 +1862,20 @@ type fakeIntegrationService struct {
 	items map[uuid.UUID]entities.AccountIntegration
 }
 
+type fakeGoogleOAuthService struct {
+	startResult    googleoauth.StartResult
+	startErr       error
+	completeResult googleoauth.CompleteResult
+	completeErr    error
+	completeCalls  int
+}
+
 func newFakeIntegrationService() *fakeIntegrationService {
 	return &fakeIntegrationService{items: map[uuid.UUID]entities.AccountIntegration{}}
+}
+
+func newFakeGoogleOAuthService() *fakeGoogleOAuthService {
+	return &fakeGoogleOAuthService{}
 }
 
 func (s *fakeIntegrationService) List(_ context.Context, userID uuid.UUID) ([]entities.AccountIntegration, error) {
@@ -1778,6 +1916,21 @@ func (s *fakeIntegrationService) Connect(
 	s.items[id] = integration
 
 	return integration, nil
+}
+
+func (s *fakeGoogleOAuthService) Start(
+	_ context.Context,
+	_ googleoauth.StartCommand,
+) (googleoauth.StartResult, error) {
+	return s.startResult, s.startErr
+}
+
+func (s *fakeGoogleOAuthService) Complete(
+	_ context.Context,
+	_ googleoauth.CompleteCommand,
+) (googleoauth.CompleteResult, error) {
+	s.completeCalls++
+	return s.completeResult, s.completeErr
 }
 
 type fakeClawCapabilityService struct{}

@@ -137,6 +137,10 @@ type connectTestAttachmentStorage struct {
 	items []entities.ClawCapabilityAttachment
 }
 
+func (s *connectTestAttachmentStorage) Upsert(context.Context, entities.ClawCapabilityAttachment) error {
+	return nil
+}
+
 func (s *connectTestAttachmentStorage) ListByClawID(context.Context, uuid.UUID, uuid.UUID) ([]entities.ClawCapabilityAttachment, error) {
 	return append([]entities.ClawCapabilityAttachment(nil), s.items...), nil
 }

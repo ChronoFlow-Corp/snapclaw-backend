@@ -150,10 +150,37 @@ func mapCreateCapabilities(req *dto.CreateClawCapabilitiesRequest) commands.Crea
 	}
 
 	if req.Gmail != nil {
-		out.Gmail = &commands.ToggleCapabilityInput{Enabled: req.Gmail.Enabled}
+		out.Gmail = mapIntegrationBoundCapability(req.Gmail)
+	}
+
+	if req.GoogleCalendar != nil {
+		out.GoogleCalendar = mapIntegrationBoundCapability(req.GoogleCalendar)
+	}
+
+	if req.Sheets != nil {
+		out.Sheets = mapIntegrationBoundCapability(req.Sheets)
 	}
 
 	return out
+}
+
+func mapIntegrationBoundCapability(req *dto.IntegrationBoundCapabilityRequest) *commands.IntegrationBoundCapabilityInput {
+	if req == nil {
+		return nil
+	}
+
+	var accountIntegrationID *uuid.UUID
+	if raw := strings.TrimSpace(req.AccountIntegrationID); raw != "" {
+		if parsed, err := uuid.Parse(raw); err == nil {
+			accountIntegrationID = &parsed
+		}
+	}
+
+	return &commands.IntegrationBoundCapabilityInput{
+		Enabled:              req.Enabled,
+		Provider:             req.Provider,
+		AccountIntegrationID: accountIntegrationID,
+	}
 }
 
 func (c *Claw) List(w http.ResponseWriter, r *http.Request) {

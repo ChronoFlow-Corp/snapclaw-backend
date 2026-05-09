@@ -20,7 +20,6 @@ func (e CreateValidationError) Error() string {
 const (
 	ErrWebSearchRequired            CreateValidationError = "web search capability is required"
 	ErrWebSearchProviderUnsupported CreateValidationError = "web search provider is not supported"
-	ErrCreateCapabilityUnsupported  CreateValidationError = "capability is not supported during claw create"
 )
 
 func BuildBaseClawConfig(primaryModel string) entities.ClawConfig {
@@ -42,10 +41,6 @@ func ApplyCreateCapabilities(
 		return ErrWebSearchRequired
 	}
 
-	if input.Gmail != nil && input.Gmail.Enabled {
-		return ErrCreateCapabilityUnsupported
-	}
-
 	if err := applyWebSearch(ctx, cfg, input.WebSearch); err != nil {
 		return err
 	}
@@ -56,6 +51,10 @@ func ApplyCreateCapabilities(
 
 	if input.Memory != nil && input.Memory.Enabled {
 		applyMemory(cfg)
+	}
+
+	if input.Gmail != nil && input.Gmail.Enabled {
+		applyGmail(cfg)
 	}
 
 	return nil
@@ -115,6 +114,16 @@ func applyWebSearch(
 func applyFilesImages(_ *entities.ClawConfig) {}
 
 func applyMemory(_ *entities.ClawConfig) {}
+
+func applyGmail(cfg *entities.ClawConfig) {
+	if cfg.Hooks == nil {
+		cfg.Hooks = &entities.HooksConfig{}
+	}
+
+	if cfg.Hooks.Gmail.Serve.Path == "" {
+		cfg.Hooks.Gmail.Serve.Path = "/gmail-pubsub"
+	}
+}
 
 func varRef(name string) string {
 	return "${" + name + "}"

@@ -415,6 +415,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 			lifecycle_status TEXT NOT NULL,
 			last_lifecycle_error TEXT,
 			last_runtime_sync_at DATETIME,
+			onboarding_complete BOOLEAN NOT NULL DEFAULT 0,
 			current_operation_id TEXT NULL,
 			vars TEXT,
 			created_at DATETIME,

@@ -149,7 +149,12 @@
 
 ### 6. Gmail Connect И Pub/Sub
 
-- Пользователь сначала создаёт `AccountIntegration` через `/me/integrations/{provider}/connect`, а затем отдельным запросом attach'ит capability к конкретному `claw`.
+- Для dashboard/manual flows пользователь всё ещё может создать `AccountIntegration` через `/me/integrations/{provider}/connect`, а затем отдельным запросом attach'ить capability к конкретному `claw`.
+- Для onboarding Google-backed skills появился отдельный OAuth flow:
+  - frontend вызывает `POST /me/integrations/google/oauth/start` с выбранными capability (`gmail`, `google_calendar`, `sheets`) и optional `returnTo`;
+  - backend строит union scopes, подписывает state и редиректит пользователя через Google OAuth callback `GET /auth/google/integrations/callback`;
+  - backend создаёт `account_integrations` только для capability, реально покрытых granted scopes;
+  - onboarding должен завершить этот шаг до `POST /claws`, а `createClaw` теперь принимает explicit integration bindings и сразу сохраняет initial capability attachments.
 - Gmail watch state больше не живёт в user storage; `simpleClaw` хранит integration payload и attachment, а runtime-side effects описываются через binding-aware config.
 - Pub/Sub webhook приходит в `simpleClaw /pubsub`.
 - `simpleClaw` делает fan-out на `Server.ProxyURL`.
@@ -209,6 +214,7 @@
 |---|---|---|---|---|
 | `/auth/connect/{provider}` | `GET` | Начать OAuth flow | path `provider` | body нет |
 | `/auth/connect/{provider}/callback` | `GET` | Завершить OAuth flow, выдать cookies | path `provider` | body нет |
+| `/auth/google/integrations/callback` | `GET` | Завершить отдельный Google integration OAuth flow для onboarding/dashboard и вернуть пользователя на frontend onboarding path | query `state` | query `code`, provider `error` |
 | `/auth/refresh` | `POST` | Обновить JWT pair по refresh cookie | cookie `refresh_token` | body нет |
 
 #### Me / User / Integrations
@@ -218,6 +224,7 @@
 | `/me/user-info` | `GET` | Вернуть профиль текущего пользователя | JWT access cookie/header | body нет |
 | `/me/channel` | `POST` | Создать channel config; текущий реальный flow — Telegram | body `name`, `telegramChannel.botToken`, `telegramChannel.dmPolicy` | `telegramChannel.allowFrom` |
 | `/me/integrations` | `GET` | Список user-scoped integrations | JWT | body нет |
+| `/me/integrations/google/oauth/start` | `POST` | Начать отдельный Google OAuth flow для onboarding-selected capability bindings | body `capabilities[]` | body `returnTo` |
 | `/me/integrations/{provider}/connect` | `POST` | Создать или обновить integration payload для capability binding | path `provider` | body `id`, `externalAccountId`, `displayName`, `secretPayload`, `metadata` — provider-specific, все поля опциональны на transport уровне |
 
 #### Payment Methods
@@ -235,7 +242,7 @@
 |---|---|---|---|---|
 | `/claws` | `GET` | Список `claw` текущего пользователя | JWT | body нет |
 | `/claws/{id}` | `GET` | Получить один `claw` | path `id` | body нет |
-| `/claws` | `POST` | Создать control-plane `claw` без немедленного runtime start | body `name`, `model` | `channelIds`, `apiLimits.monthlyBudgetUsd`, `capabilities.webSearch`, `capabilities.filesImages`, `capabilities.memory`, `capabilities.gmail` |
+| `/claws` | `POST` | Создать control-plane `claw` без немедленного runtime start; onboarding-selected Google-backed capability bindings валидируются и сохраняются сразу | body `name`, `model` | `channelIds`, `apiLimits.monthlyBudgetUsd`, `capabilities.webSearch`, `capabilities.filesImages`, `capabilities.memory`, `capabilities.gmail`, `capabilities.googleCalendar`, `capabilities.sheets` |
 | `/claws/{id}` | `PUT` | Частично обновить имя, модель, channel set и api limit | path `id` | body `name`, `model`, `channelIds`, `apiLimits.monthlyBudgetUsd`; все поля optional, но если `channelIds` передан, он заменяет текущий set |
 | `/claws/{id}/start` | `POST` | Поставить async intent на start runtime | path `id` | body нет |
 | `/claws/{id}/stop` | `POST` | Поставить async intent на stop/delete runtime | path `id` | body нет |

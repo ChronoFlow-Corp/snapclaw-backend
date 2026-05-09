@@ -12,10 +12,12 @@ type CreateClaw struct {
 }
 
 type CreateCapabilitySet struct {
-	WebSearch   *WebSearchCapabilityInput
-	FilesImages *ToggleCapabilityInput
-	Memory      *ToggleCapabilityInput
-	Gmail       *ToggleCapabilityInput
+	WebSearch      *WebSearchCapabilityInput
+	FilesImages    *ToggleCapabilityInput
+	Memory         *ToggleCapabilityInput
+	Gmail          *IntegrationBoundCapabilityInput
+	GoogleCalendar *IntegrationBoundCapabilityInput
+	Sheets         *IntegrationBoundCapabilityInput
 }
 
 type WebSearchCapabilityInput struct {
@@ -25,6 +27,12 @@ type WebSearchCapabilityInput struct {
 
 type ToggleCapabilityInput struct {
 	Enabled bool
+}
+
+type IntegrationBoundCapabilityInput struct {
+	Enabled              bool
+	Provider             string
+	AccountIntegrationID *uuid.UUID
 }
 
 type ApiKeyLimits struct {

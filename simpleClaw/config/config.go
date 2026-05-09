@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,29 +23,31 @@ const (
 )
 
 const (
-	defaultHTTPAddr             = ":8080"
-	defaultDevHTTPAddr          = ":1337"
-	defaultBackendPort          = "1337"
-	defaultFrontendPort         = "3000"
-	defaultDevHost              = "localhost"
-	defaultOpenRouterURL        = "https://openrouter.ai"
-	defaultBackupPath           = "/data/simpleclaw/backups"
-	defaultJWTRefreshDev        = "simpleclaw-dev-refresh-secret"
-	defaultJWTPrivateName       = "jwtRS256.key"
-	defaultJWTPublicName        = "jwtRS256.key.pub"
-	defaultGooglePath           = "/auth/connect/google/callback"
-	defaultJWTAccessTTL         = 24 * time.Hour
-	defaultJWTRefreshTTL        = 168 * time.Hour
-	defaultORTTimeout           = 15 * time.Second
-	defaultCMTimeout            = 15 * time.Second
-	defaultProxyTimeout         = 5 * time.Second
-	defaultProxyRetries         = 2
-	defaultProxyBackoff         = 250 * time.Millisecond
-	defaultRuntimeSyncInterval  = 30 * time.Second
-	defaultRuntimeSyncTimeout   = 5 * time.Second
-	defaultRuntimeSyncBatchSize = 100
-	defaultRuntimeSyncWorkers   = 8
-	defaultTracingRatio         = 1.0
+	defaultHTTPAddr              = ":8080"
+	defaultDevHTTPAddr           = ":1337"
+	defaultBackendPort           = "1337"
+	defaultFrontendPort          = "3000"
+	defaultDevHost               = "localhost"
+	defaultOpenRouterURL         = "https://openrouter.ai"
+	defaultBackupPath            = "/data/simpleclaw/backups"
+	defaultJWTRefreshDev         = "simpleclaw-dev-refresh-secret"
+	defaultGoogleStateSecretDev  = "simpleclaw-dev-google-integration-state-secret"
+	defaultJWTPrivateName        = "jwtRS256.key"
+	defaultJWTPublicName         = "jwtRS256.key.pub"
+	defaultGooglePath            = "/auth/connect/google/callback"
+	defaultGoogleIntegrationPath = "/auth/google/integrations/callback"
+	defaultJWTAccessTTL          = 24 * time.Hour
+	defaultJWTRefreshTTL         = 168 * time.Hour
+	defaultORTTimeout            = 15 * time.Second
+	defaultCMTimeout             = 15 * time.Second
+	defaultProxyTimeout          = 5 * time.Second
+	defaultProxyRetries          = 2
+	defaultProxyBackoff          = 250 * time.Millisecond
+	defaultRuntimeSyncInterval   = 30 * time.Second
+	defaultRuntimeSyncTimeout    = 5 * time.Second
+	defaultRuntimeSyncBatchSize  = 100
+	defaultRuntimeSyncWorkers    = 8
+	defaultTracingRatio          = 1.0
 )
 
 type Config struct {
@@ -77,10 +80,12 @@ type auth struct {
 }
 
 type google struct {
-	ClientID     string `mapstructure:"client_id"`
-	ClientSecret string `mapstructure:"client_secret"`
-	CallbackURL  string `mapstructure:"callback_url"`
-	FrontendURL  string `mapstructure:"frontend_url"`
+	ClientID               string `mapstructure:"client_id"`
+	ClientSecret           string `mapstructure:"client_secret"`
+	CallbackURL            string `mapstructure:"callback_url"`
+	FrontendURL            string `mapstructure:"frontend_url"`
+	IntegrationCallbackURL string `mapstructure:"integration_callback_url"`
+	IntegrationStateSecret string `mapstructure:"integration_state_secret"`
 }
 
 type Jwt struct {
@@ -260,6 +265,8 @@ func (c *Config) applyEnvOverrides() error {
 	applyStringEnv(&c.Auth.Google.ClientSecret, "GOOGLE_CLIENT_SECRET")
 	applyStringEnv(&c.Auth.Google.CallbackURL, "GOOGLE_CALLBACK_URL")
 	applyStringEnv(&c.Auth.Google.FrontendURL, "FRONTEND_URL")
+	applyStringEnv(&c.Auth.Google.IntegrationCallbackURL, "GOOGLE_INTEGRATION_CALLBACK_URL")
+	applyStringEnv(&c.Auth.Google.IntegrationStateSecret, "GOOGLE_INTEGRATION_STATE_SECRET")
 	applyStringEnv(&c.Auth.Jwt.RefreshSecret, "AUTH_JWT_REFRESH_SECRET")
 	applyStringEnv(&c.Auth.Jwt.AccessSecretPublic, "AUTH_JWT_ACCESS_SECRET_PUBLIC")
 	applyStringEnv(&c.Auth.Jwt.AccessSecretPrivate, "AUTH_JWT_ACCESS_SECRET_PRIVATE")
@@ -369,6 +376,14 @@ func (c *Config) applyDefaults(configPath string) {
 		c.OpenRouter.BaseURL = defaultOpenRouterURL
 	}
 
+	if strings.TrimSpace(c.Auth.Google.IntegrationCallbackURL) == "" &&
+		strings.TrimSpace(c.Auth.Google.CallbackURL) != "" {
+		c.Auth.Google.IntegrationCallbackURL = deriveURLPath(
+			c.Auth.Google.CallbackURL,
+			defaultGoogleIntegrationPath,
+		)
+	}
+
 	c.applyJWTDefaults(configPath)
 
 	if c.Environment != EnvDevelopment {
@@ -382,8 +397,16 @@ func (c *Config) applyDefaults(configPath string) {
 		c.Auth.Google.CallbackURL = fmt.Sprintf("http://%s:%s%s", host, defaultBackendPort, defaultGooglePath)
 	}
 
+	if strings.TrimSpace(c.Auth.Google.IntegrationCallbackURL) == "" {
+		c.Auth.Google.IntegrationCallbackURL = fmt.Sprintf("http://%s:%s%s", host, defaultBackendPort, defaultGoogleIntegrationPath)
+	}
+
 	if strings.TrimSpace(c.Auth.Google.FrontendURL) == "" {
 		c.Auth.Google.FrontendURL = frontendURL
+	}
+
+	if strings.TrimSpace(c.Auth.Google.IntegrationStateSecret) == "" {
+		c.Auth.Google.IntegrationStateSecret = defaultGoogleStateSecretDev
 	}
 
 	if len(c.Http.Origins) == 0 {
@@ -411,6 +434,20 @@ func applyCSVEnv(target *[]string, envName string) {
 	}
 
 	*target = strings.Split(value, ",")
+}
+
+func deriveURLPath(rawURL, path string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+
+	parsed.Path = path
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+
+	return parsed.String()
 }
 
 func applyDurationEnv(target *time.Duration, envName string) error {
@@ -521,6 +558,14 @@ func (c *Config) validate() error {
 
 	if strings.TrimSpace(c.Auth.Google.FrontendURL) == "" {
 		return fmt.Errorf("auth.google.frontend_url is required")
+	}
+
+	if strings.TrimSpace(c.Auth.Google.IntegrationCallbackURL) == "" {
+		return fmt.Errorf("auth.google.integration_callback_url is required")
+	}
+
+	if strings.TrimSpace(c.Auth.Google.IntegrationStateSecret) == "" {
+		return fmt.Errorf("auth.google.integration_state_secret is required")
 	}
 
 	if strings.TrimSpace(c.Auth.Jwt.RefreshSecret) == "" {

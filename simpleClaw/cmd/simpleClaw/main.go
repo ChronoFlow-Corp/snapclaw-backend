@@ -42,6 +42,7 @@ import (
 	"simpleClaw/internal/service/claw"
 	clawcapabilityservice "simpleClaw/internal/service/clawcapability"
 	integrationservice "simpleClaw/internal/service/integrations"
+	"simpleClaw/internal/service/integrations/googleoauth"
 	serverservice "simpleClaw/internal/service/server"
 	"simpleClaw/internal/service/user"
 
@@ -50,7 +51,9 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
 	"github.com/markbates/goth"
-	"github.com/markbates/goth/providers/google"
+	gothgoogle "github.com/markbates/goth/providers/google"
+	"golang.org/x/oauth2"
+	oauth2google "golang.org/x/oauth2/google"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -103,7 +106,7 @@ func main() {
 		}
 	}()
 
-	gAuth := google.New(
+	gAuth := gothgoogle.New(
 		cfg.Auth.Google.ClientID,
 		cfg.Auth.Google.ClientSecret,
 		cfg.Auth.Google.CallbackURL,
@@ -228,6 +231,27 @@ func main() {
 
 	serverService := serverservice.New(serversStorage, hostingManager, operationMetrics)
 	integrationSvc := integrationservice.NewService(integrationStorage)
+	googleOAuthSvc := googleoauth.NewService(googleoauth.ServiceOptions{
+		Auth: &oauth2.Config{
+			ClientID:     cfg.Auth.Google.ClientID,
+			ClientSecret: cfg.Auth.Google.ClientSecret,
+			RedirectURL:  cfg.Auth.Google.IntegrationCallbackURL,
+			Scopes:       nil,
+			Endpoint:     oauth2google.Endpoint,
+		},
+		Storage: integrationStorage,
+		StateCodec: googleoauth.NewStateCodec(
+			[]byte(cfg.Auth.Google.IntegrationStateSecret),
+			10*time.Minute,
+			time.Now,
+		),
+		Profile: googleoauth.NewHTTPProfileFetcher(&oauth2.Config{
+			ClientID:     cfg.Auth.Google.ClientID,
+			ClientSecret: cfg.Auth.Google.ClientSecret,
+			RedirectURL:  cfg.Auth.Google.IntegrationCallbackURL,
+			Endpoint:     oauth2google.Endpoint,
+		}),
+	})
 	clawCapabilitySvc := clawcapabilityservice.NewService(clawStorage, clawCapabilityStorage, integrationStorage)
 	if err := serverService.SyncCapacities(context.Background()); err != nil {
 		logger.Error("failed to sync server capacities", slog.Any("err", err))
@@ -261,7 +285,14 @@ func main() {
 		)
 	}
 
-	uController := controllers.NewUser(cfg.Environment, uService, integrationSvc, j, cfg.Auth.Google.FrontendURL)
+	uController := controllers.NewUser(
+		cfg.Environment,
+		uService,
+		integrationSvc,
+		googleOAuthSvc,
+		j,
+		cfg.Auth.Google.FrontendURL,
+	)
 	clawController := controllers.NewClaw(clawService, clawCapabilitySvc, j)
 	serverController := controllers.NewServer(serverService, uService, j)
 	billingController := controllers.NewBilling(

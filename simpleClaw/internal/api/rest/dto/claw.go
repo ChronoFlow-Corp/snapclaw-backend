@@ -9,10 +9,12 @@ type CreateClawRequest struct {
 }
 
 type CreateClawCapabilitiesRequest struct {
-	WebSearch   *WebSearchCapabilityRequest `json:"webSearch,omitempty"`
-	FilesImages *ToggleCapabilityRequest    `json:"filesImages,omitempty"`
-	Memory      *ToggleCapabilityRequest    `json:"memory,omitempty"`
-	Gmail       *ToggleCapabilityRequest    `json:"gmail,omitempty"`
+	WebSearch      *WebSearchCapabilityRequest        `json:"webSearch,omitempty"`
+	FilesImages    *ToggleCapabilityRequest           `json:"filesImages,omitempty"`
+	Memory         *ToggleCapabilityRequest           `json:"memory,omitempty"`
+	Gmail          *IntegrationBoundCapabilityRequest `json:"gmail,omitempty"`
+	GoogleCalendar *IntegrationBoundCapabilityRequest `json:"googleCalendar,omitempty"`
+	Sheets         *IntegrationBoundCapabilityRequest `json:"sheets,omitempty"`
 }
 
 type WebSearchCapabilityRequest struct {
@@ -22,6 +24,12 @@ type WebSearchCapabilityRequest struct {
 
 type ToggleCapabilityRequest struct {
 	Enabled bool `json:"enabled"`
+}
+
+type IntegrationBoundCapabilityRequest struct {
+	Enabled              bool   `json:"enabled"`
+	Provider             string `json:"provider,omitempty"`
+	AccountIntegrationID string `json:"accountIntegrationId,omitempty"`
 }
 
 type ApiLimitRequest struct {

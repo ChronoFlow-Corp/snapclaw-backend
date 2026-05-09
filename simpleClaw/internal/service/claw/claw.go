@@ -60,7 +60,6 @@ var (
 	ErrLifecycleOperationInProgress = errors.New("lifecycle operation already in progress")
 	ErrWebSearchRequired            = errors.New("web search capability is required")
 	ErrWebSearchProviderUnsupported = errors.New("web search provider is not supported")
-	ErrCreateCapabilityUnsupported  = errors.New("capability is not supported during claw create")
 )
 
 type UpdateStageError struct {
@@ -253,8 +252,6 @@ func (s *Service) Create(
 			return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrWebSearchRequired)
 		case errors.Is(err, capabilities.ErrWebSearchProviderUnsupported):
 			return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrWebSearchProviderUnsupported)
-		case errors.Is(err, capabilities.ErrCreateCapabilityUnsupported):
-			return entities.Claw{}, fmt.Errorf("%s: %w", op, ErrCreateCapabilityUnsupported)
 		default:
 			return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 		}
@@ -275,11 +272,122 @@ func (s *Service) Create(
 		UpdatedAt:          now,
 	}
 
+	attachments, err := s.buildCreateAttachments(ctx, cl, cm.Capabilities, now)
+	if err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
 	if err = s.claws.Create(ctx, cl, channelIDs); err != nil {
 		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
 	}
 
+	if err = s.persistCreateAttachments(ctx, cl, attachments); err != nil {
+		return entities.Claw{}, fmt.Errorf("%s: %w", op, err)
+	}
+
 	return cl, nil
+}
+
+func (s *Service) buildCreateAttachments(
+	ctx context.Context,
+	cl entities.Claw,
+	input commands.CreateCapabilitySet,
+	now time.Time,
+) ([]entities.ClawCapabilityAttachment, error) {
+	requests := []struct {
+		capabilityID entities.CapabilityID
+		input        *commands.IntegrationBoundCapabilityInput
+	}{
+		{capabilityID: entities.CapabilityGmail, input: input.Gmail},
+		{capabilityID: entities.CapabilityGoogleCalendar, input: input.GoogleCalendar},
+		{capabilityID: entities.CapabilitySheets, input: input.Sheets},
+	}
+
+	enabledCount := 0
+	for _, request := range requests {
+		if request.input != nil && request.input.Enabled {
+			enabledCount++
+		}
+	}
+
+	if enabledCount == 0 {
+		return nil, nil
+	}
+
+	if s.attachments == nil || s.integrations == nil {
+		return nil, sql.ErrUnavailable
+	}
+
+	attachments := make([]entities.ClawCapabilityAttachment, 0, enabledCount)
+	for _, request := range requests {
+		attachment, ok, err := s.buildCreateAttachment(ctx, cl, request.capabilityID, request.input, now)
+		if err != nil {
+			return nil, err
+		}
+
+		if ok {
+			attachments = append(attachments, attachment)
+		}
+	}
+
+	return attachments, nil
+}
+
+func (s *Service) buildCreateAttachment(
+	ctx context.Context,
+	cl entities.Claw,
+	capabilityID entities.CapabilityID,
+	input *commands.IntegrationBoundCapabilityInput,
+	now time.Time,
+) (entities.ClawCapabilityAttachment, bool, error) {
+	if input == nil || !input.Enabled {
+		return entities.ClawCapabilityAttachment{}, false, nil
+	}
+
+	if input.AccountIntegrationID == nil || *input.AccountIntegrationID == uuid.Nil {
+		return entities.ClawCapabilityAttachment{}, false, sql.ErrInvalid
+	}
+
+	integration, err := s.integrations.GetByID(ctx, *input.AccountIntegrationID, cl.UserID)
+	if err != nil {
+		return entities.ClawCapabilityAttachment{}, false, err
+	}
+
+	if integration.CapabilityID != capabilityID {
+		return entities.ClawCapabilityAttachment{}, false, sql.ErrInvalid
+	}
+
+	provider := strings.TrimSpace(input.Provider)
+	if provider != "" && !strings.EqualFold(provider, integration.Provider) {
+		return entities.ClawCapabilityAttachment{}, false, sql.ErrInvalid
+	}
+
+	return entities.ClawCapabilityAttachment{
+		ID:                   uuid.New(),
+		ClawID:               cl.ID,
+		UserID:               cl.UserID,
+		CapabilityID:         capabilityID,
+		Provider:             integration.Provider,
+		AccountIntegrationID: input.AccountIntegrationID,
+		Enabled:              true,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}, true, nil
+}
+
+func (s *Service) persistCreateAttachments(
+	ctx context.Context,
+	cl entities.Claw,
+	attachments []entities.ClawCapabilityAttachment,
+) error {
+	for _, attachment := range attachments {
+		if err := s.attachments.Upsert(ctx, attachment); err != nil {
+			_ = s.claws.Delete(ctx, cl.ID, cl.UserID)
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s *Service) GetByID(

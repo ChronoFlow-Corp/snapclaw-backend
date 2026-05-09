@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"shared/pkg/jwt"
 	"shared/pkg/response"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/sql"
 	integrationservice "simpleClaw/internal/service/integrations"
+	"simpleClaw/internal/service/integrations/googleoauth"
 	"simpleClaw/internal/service/user/commands"
 
 	"github.com/go-chi/chi/v5"
@@ -54,6 +56,7 @@ type User struct {
 	env                string
 	service            service
 	integrationService integrationService
+	googleOAuthService googleOAuthService
 	frontendURL        string
 	j                  jwt.JWT
 }
@@ -66,10 +69,16 @@ type integrationService interface {
 	) (entities.AccountIntegration, error)
 }
 
+type googleOAuthService interface {
+	Start(ctx context.Context, cmd googleoauth.StartCommand) (googleoauth.StartResult, error)
+	Complete(ctx context.Context, cmd googleoauth.CompleteCommand) (googleoauth.CompleteResult, error)
+}
+
 func NewUser(
 	env string,
 	service service,
 	integrationService integrationService,
+	googleOAuthService googleOAuthService,
 	j jwt.JWT,
 	frontendURL string,
 ) *User {
@@ -77,6 +86,7 @@ func NewUser(
 		env:                env,
 		service:            service,
 		integrationService: integrationService,
+		googleOAuthService: googleOAuthService,
 		j:                  j,
 		frontendURL:        frontendURL,
 	}
@@ -86,6 +96,7 @@ func (u *User) Register(r chi.Router) {
 	r.Route("/auth", func(r chi.Router) {
 		r.Get("/connect/{provider}", u.Login)
 		r.Get("/connect/{provider}/callback", u.Callback)
+		r.Get("/google/integrations/callback", u.GoogleIntegrationCallback)
 		r.Post("/refresh", u.Refresh)
 		r.With(middleware.AuthJwt(u.j)).Post("/logout", u.Logout)
 	})
@@ -101,6 +112,7 @@ func (u *User) Register(r chi.Router) {
 		r.Delete("/payment-method/{id}", u.RemovePaymentMethod)
 		r.Get("/integrations", u.ListIntegrations)
 		r.Post("/integrations/{provider}/connect", u.ConnectIntegration)
+		r.Post("/integrations/google/oauth/start", u.StartGoogleIntegrationOAuth)
 	})
 }
 
@@ -454,6 +466,113 @@ func (u *User) ConnectIntegration(w http.ResponseWriter, r *http.Request) {
 		Status:            string(integration.Status),
 		Metadata:          integration.Metadata,
 	})
+}
+
+func (u *User) StartGoogleIntegrationOAuth(w http.ResponseWriter, r *http.Request) {
+	if u.googleOAuthService == nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusServiceUnavailable,
+			Message: "google oauth service is not configured",
+		})
+
+		return
+	}
+
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	var req dto.GoogleIntegrationOAuthStartRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid request body",
+		})
+
+		return
+	}
+
+	result, err := u.googleOAuthService.Start(r.Context(), googleoauth.StartCommand{
+		UserID:       userID,
+		Capabilities: req.Capabilities,
+		ReturnTo:     req.ReturnTo,
+	})
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	response.RespondOK(w, dto.GoogleIntegrationOAuthStartResponse{
+		AuthURL:      result.AuthURL,
+		Capabilities: result.Capabilities,
+	})
+}
+
+func (u *User) GoogleIntegrationCallback(w http.ResponseWriter, r *http.Request) {
+	if u.googleOAuthService == nil {
+		http.Redirect(w, r, u.integrationOAuthRedirectURL("", false), http.StatusFound)
+		return
+	}
+
+	if strings.TrimSpace(r.URL.Query().Get("error")) != "" {
+		http.Redirect(w, r, u.integrationOAuthRedirectURL("", false), http.StatusFound)
+		return
+	}
+
+	result, err := u.googleOAuthService.Complete(r.Context(), googleoauth.CompleteCommand{
+		RawState: r.URL.Query().Get("state"),
+		Code:     r.URL.Query().Get("code"),
+	})
+	if err != nil {
+		http.Redirect(w, r, u.integrationOAuthRedirectURL("", false), http.StatusFound)
+		return
+	}
+
+	http.Redirect(w, r, u.integrationOAuthRedirectURL(result.ReturnTo, true), http.StatusFound)
+}
+
+func (u *User) integrationOAuthRedirectURL(returnTo string, success bool) string {
+	base := strings.TrimRight(strings.TrimSpace(u.frontendURL), "/")
+	path := normalizeFrontendPath(returnTo)
+	if path == "" {
+		path = "/onboard"
+	}
+
+	status := "error"
+	if success {
+		status = "success"
+	}
+
+	target, err := url.Parse(base + path)
+	if err != nil {
+		return base + "/onboard?integration_oauth=error"
+	}
+
+	query := target.Query()
+	query.Set("integration_oauth", status)
+	target.RawQuery = query.Encode()
+
+	return target.String()
+}
+
+func normalizeFrontendPath(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.Contains(raw, "://") {
+		return ""
+	}
+
+	return raw
 }
 
 func (u *User) Refresh(w http.ResponseWriter, r *http.Request) {

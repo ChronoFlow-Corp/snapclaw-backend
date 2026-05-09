@@ -56,6 +56,7 @@ type integrationStorage interface {
 }
 
 type capabilityAttachmentStorage interface {
+	Upsert(ctx context.Context, attachment entities.ClawCapabilityAttachment) error
 	ListByClawID(ctx context.Context, clawID, userID uuid.UUID) ([]entities.ClawCapabilityAttachment, error)
 }
 

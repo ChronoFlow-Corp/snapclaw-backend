@@ -27,6 +27,7 @@ type createTestClawStorage struct {
 	createdChannels  []uuid.UUID
 	runtimeUpdated   createRuntimeUpdateCall
 	occupiedByServer map[uuid.UUID]int
+	deleteCalled     bool
 }
 
 func (s *createTestClawStorage) Create(_ context.Context, cl entities.Claw, channelIDs []uuid.UUID) error {
@@ -77,6 +78,7 @@ func (s *createTestClawStorage) UpdateLifecycle(context.Context, uuid.UUID, claw
 }
 
 func (s *createTestClawStorage) Delete(context.Context, uuid.UUID, uuid.UUID) error {
+	s.deleteCalled = true
 	return nil
 }
 
@@ -127,6 +129,37 @@ func (s *createTestUserStorage) GetByID(context.Context, uuid.UUID) (entities.Us
 
 func (s *createTestUserStorage) UpdateOpenRouterKey(context.Context, uuid.UUID, entities.OpenRouterKey) error {
 	return nil
+}
+
+type createTestIntegrationStorage struct {
+	integrations map[uuid.UUID]entities.AccountIntegration
+}
+
+func (s *createTestIntegrationStorage) GetByID(_ context.Context, id, userID uuid.UUID) (entities.AccountIntegration, error) {
+	integration, ok := s.integrations[id]
+	if !ok || integration.UserID != userID {
+		return entities.AccountIntegration{}, sql.ErrNotFound
+	}
+
+	return integration, nil
+}
+
+type createTestAttachmentStorage struct {
+	items []entities.ClawCapabilityAttachment
+	err   error
+}
+
+func (s *createTestAttachmentStorage) Upsert(_ context.Context, attachment entities.ClawCapabilityAttachment) error {
+	if s.err != nil {
+		return s.err
+	}
+
+	s.items = append(s.items, attachment)
+	return nil
+}
+
+func (s *createTestAttachmentStorage) ListByClawID(context.Context, uuid.UUID, uuid.UUID) ([]entities.ClawCapabilityAttachment, error) {
+	return append([]entities.ClawCapabilityAttachment(nil), s.items...), nil
 }
 
 type createTestServerStorage struct {
@@ -514,8 +547,10 @@ func TestServiceCreate_RejectsMissingRequiredWebSearchCapability(t *testing.T) {
 	}
 }
 
-func TestServiceCreate_RejectsNonOnboardingCapability(t *testing.T) {
+func TestServiceCreate_AttachesEnabledGoogleCapabilities(t *testing.T) {
 	userID := uuid.New()
+	gmailIntegrationID := uuid.New()
+	attachmentStorage := &createTestAttachmentStorage{}
 
 	svc := NewClaw(
 		&createTestClawStorage{},
@@ -532,9 +567,20 @@ func TestServiceCreate_RejectsNonOnboardingCapability(t *testing.T) {
 		&createTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"},
 		"",
 		GmailWatchConfig{},
-	)
+	).WithCapabilityDependencies(
+		attachmentStorage,
+		&createTestIntegrationStorage{integrations: map[uuid.UUID]entities.AccountIntegration{
+			gmailIntegrationID: {
+				ID:                gmailIntegrationID,
+				UserID:            userID,
+				CapabilityID:      entities.CapabilityGmail,
+				Provider:          "gmail",
+				ExternalAccountID: "user@example.com",
+			},
+		}},
+	).WithBraveAPIKey("brave-secret")
 
-	_, err := svc.Create(context.Background(), commands.CreateClaw{
+	cl, err := svc.Create(context.Background(), commands.CreateClaw{
 		UserID: userID,
 		Name:   "demo",
 		Model:  "openai/gpt-4.1-mini",
@@ -543,13 +589,31 @@ func TestServiceCreate_RejectsNonOnboardingCapability(t *testing.T) {
 				Enabled:  true,
 				Provider: "brave",
 			},
-			Gmail: &commands.ToggleCapabilityInput{
-				Enabled: true,
+			Gmail: &commands.IntegrationBoundCapabilityInput{
+				Enabled:              true,
+				Provider:             "gmail",
+				AccountIntegrationID: &gmailIntegrationID,
 			},
 		},
 	})
-	if err == nil {
-		t.Fatal("expected error when non-onboarding capability is passed to create")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if len(attachmentStorage.items) != 1 {
+		t.Fatalf("attachment count = %d, want 1", len(attachmentStorage.items))
+	}
+
+	if attachmentStorage.items[0].CapabilityID != entities.CapabilityGmail {
+		t.Fatalf("capability = %q", attachmentStorage.items[0].CapabilityID)
+	}
+
+	if attachmentStorage.items[0].AccountIntegrationID == nil || *attachmentStorage.items[0].AccountIntegrationID != gmailIntegrationID {
+		t.Fatalf("account integration id = %#v", attachmentStorage.items[0].AccountIntegrationID)
+	}
+
+	if cl.Config.Hooks == nil || cl.Config.Hooks.Gmail.Serve.Path != "/gmail-pubsub" {
+		t.Fatalf("gmail hook path = %#v", cl.Config.Hooks)
 	}
 }
 
@@ -586,5 +650,153 @@ func TestServiceCreate_RejectsBraveWhenBackendKeyMissing(t *testing.T) {
 	})
 	if !errors.Is(err, ErrBraveAPIKeyMissing) {
 		t.Fatalf("Create() error = %v, want ErrBraveAPIKeyMissing", err)
+	}
+}
+
+func TestServiceCreate_RejectsEnabledGoogleCapabilityWithoutIntegrationID(t *testing.T) {
+	userID := uuid.New()
+
+	svc := NewClaw(
+		&createTestClawStorage{},
+		&createTestOperationStorage{},
+		&createTestChannelStorage{},
+		&createTestUserStorage{user: entities.User{
+			ID:               userID,
+			OpenRouterApiKey: "secret",
+			OpenRouterKeyID:  "key-id",
+			CreatedAt:        time.Now(),
+		}},
+		&createTestServerStorage{},
+		&createTestHosting{},
+		&createTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"},
+		"",
+		GmailWatchConfig{},
+	).WithCapabilityDependencies(&createTestAttachmentStorage{}, &createTestIntegrationStorage{}).WithBraveAPIKey("brave-secret")
+
+	_, err := svc.Create(context.Background(), commands.CreateClaw{
+		UserID: userID,
+		Name:   "demo",
+		Model:  "openai/gpt-4.1-mini",
+		Capabilities: commands.CreateCapabilitySet{
+			WebSearch: &commands.WebSearchCapabilityInput{
+				Enabled:  true,
+				Provider: "brave",
+			},
+			Gmail: &commands.IntegrationBoundCapabilityInput{
+				Enabled: true,
+			},
+		},
+	})
+	if !errors.Is(err, sql.ErrInvalid) {
+		t.Fatalf("Create() error = %v, want sql.ErrInvalid", err)
+	}
+}
+
+func TestServiceCreate_RejectsMismatchedGoogleIntegration(t *testing.T) {
+	userID := uuid.New()
+	integrationID := uuid.New()
+
+	svc := NewClaw(
+		&createTestClawStorage{},
+		&createTestOperationStorage{},
+		&createTestChannelStorage{},
+		&createTestUserStorage{user: entities.User{
+			ID:               userID,
+			OpenRouterApiKey: "secret",
+			OpenRouterKeyID:  "key-id",
+			CreatedAt:        time.Now(),
+		}},
+		&createTestServerStorage{},
+		&createTestHosting{},
+		&createTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"},
+		"",
+		GmailWatchConfig{},
+	).WithCapabilityDependencies(
+		&createTestAttachmentStorage{},
+		&createTestIntegrationStorage{integrations: map[uuid.UUID]entities.AccountIntegration{
+			integrationID: {
+				ID:           integrationID,
+				UserID:       userID,
+				CapabilityID: entities.CapabilityGoogleCalendar,
+				Provider:     "google_calendar",
+			},
+		}},
+	).WithBraveAPIKey("brave-secret")
+
+	_, err := svc.Create(context.Background(), commands.CreateClaw{
+		UserID: userID,
+		Name:   "demo",
+		Model:  "openai/gpt-4.1-mini",
+		Capabilities: commands.CreateCapabilitySet{
+			WebSearch: &commands.WebSearchCapabilityInput{
+				Enabled:  true,
+				Provider: "brave",
+			},
+			Gmail: &commands.IntegrationBoundCapabilityInput{
+				Enabled:              true,
+				Provider:             "gmail",
+				AccountIntegrationID: &integrationID,
+			},
+		},
+	})
+	if !errors.Is(err, sql.ErrInvalid) {
+		t.Fatalf("Create() error = %v, want sql.ErrInvalid", err)
+	}
+}
+
+func TestServiceCreate_RollsBackClawWhenAttachmentPersistenceFails(t *testing.T) {
+	userID := uuid.New()
+	gmailIntegrationID := uuid.New()
+	clawStorage := &createTestClawStorage{}
+
+	svc := NewClaw(
+		clawStorage,
+		&createTestOperationStorage{},
+		&createTestChannelStorage{},
+		&createTestUserStorage{user: entities.User{
+			ID:               userID,
+			OpenRouterApiKey: "secret",
+			OpenRouterKeyID:  "key-id",
+			CreatedAt:        time.Now(),
+		}},
+		&createTestServerStorage{},
+		&createTestHosting{},
+		&createTestKeys{resolveModelResult: "openrouter/openai/gpt-4.1-mini"},
+		"",
+		GmailWatchConfig{},
+	).WithCapabilityDependencies(
+		&createTestAttachmentStorage{err: errors.New("persist attachment")},
+		&createTestIntegrationStorage{integrations: map[uuid.UUID]entities.AccountIntegration{
+			gmailIntegrationID: {
+				ID:           gmailIntegrationID,
+				UserID:       userID,
+				CapabilityID: entities.CapabilityGmail,
+				Provider:     "gmail",
+			},
+		}},
+	).WithBraveAPIKey("brave-secret")
+
+	_, err := svc.Create(context.Background(), commands.CreateClaw{
+		UserID: userID,
+		Name:   "demo",
+		Model:  "openai/gpt-4.1-mini",
+		Capabilities: commands.CreateCapabilitySet{
+			WebSearch: &commands.WebSearchCapabilityInput{
+				Enabled:  true,
+				Provider: "brave",
+			},
+			Gmail: &commands.IntegrationBoundCapabilityInput{
+				Enabled:              true,
+				Provider:             "gmail",
+				AccountIntegrationID: &gmailIntegrationID,
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("Create() error = nil, want non-nil")
+	}
+
+	if !clawStorage.deleteCalled {
+		t.Fatal("expected claw rollback delete to be called")
 	}
 }
