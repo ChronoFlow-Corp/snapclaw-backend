@@ -59,9 +59,19 @@ type BootstrapSubscriptionDTO struct {
 }
 
 type BootstrapOnboardingResponse struct {
-	Required bool   `json:"required"`
-	Step     string `json:"step"`
-	ClawID   string `json:"claw_id,omitempty"`
+	Required        bool                         `json:"required"`
+	Step            string                       `json:"step"`
+	ClawID          string                       `json:"claw_id,omitempty"`
+	TelegramManager *BootstrapTelegramManagerDTO `json:"telegram_manager,omitempty"`
+}
+
+type BootstrapTelegramManagerDTO struct {
+	ID            string     `json:"id"`
+	Status        string     `json:"status"`
+	DeepLinkURL   string     `json:"deep_link_url,omitempty"`
+	LinkExpiresAt *time.Time `json:"link_expires_at,omitempty"`
+	ChannelID     string     `json:"channel_id,omitempty"`
+	LastError     string     `json:"last_error,omitempty"`
 }
 
 type TopUpRequest struct {

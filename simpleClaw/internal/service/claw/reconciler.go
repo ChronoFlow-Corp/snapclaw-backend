@@ -49,6 +49,41 @@ func (s *Service) RunReconciler(ctx context.Context, interval time.Duration) {
 func (s *Service) ProcessNextReconcile(ctx context.Context) error {
 	const opName = "service.Claw.ProcessNextReconcile"
 
+	if s.operations == nil {
+		_, _, finish := observability.StartOperation(
+			ctx,
+			slog.Default(),
+			s.metrics,
+			"service.claw",
+			"claw.reconcile",
+			"claw_lifecycle",
+		)
+		err := fmt.Errorf("%s: %w", opName, ErrOperationStorageRequired)
+		finish(err)
+
+		return err
+	}
+
+	cl, err := s.claws.GetNextReconcilePending(ctx)
+	if err != nil {
+		if errors.Is(err, sql.ErrNotFound) {
+			return err
+		}
+
+		_, _, finish := observability.StartOperation(
+			ctx,
+			slog.Default(),
+			s.metrics,
+			"service.claw",
+			"claw.reconcile",
+			"claw_lifecycle",
+		)
+		err = fmt.Errorf("%s: %w", opName, err)
+		finish(err)
+
+		return err
+	}
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -57,18 +92,7 @@ func (s *Service) ProcessNextReconcile(ctx context.Context) error {
 		"claw.reconcile",
 		"claw_lifecycle",
 	)
-
-	var err error
 	defer func() { finish(err) }()
-
-	if s.operations == nil {
-		return fmt.Errorf("%s: %w", opName, ErrOperationStorageRequired)
-	}
-
-	cl, err := s.claws.GetNextReconcilePending(ctx)
-	if err != nil {
-		return fmt.Errorf("%s: %w", opName, err)
-	}
 
 	active, err := s.operations.GetActiveByClawID(ctx, cl.ID)
 	if err != nil {

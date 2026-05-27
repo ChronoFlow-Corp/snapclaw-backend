@@ -118,6 +118,12 @@
 
 - Пользователь вызывает `POST /me/channel`.
 - Сейчас сервис реально создаёт Telegram channel config.
+- Для Telegram Managed Bots появился альтернативный control-plane flow:
+  - frontend вызывает `POST /me/telegram/manager/link` с `claw_id`;
+  - backend создаёт или переиспользует claw-scoped managed-bot resume record и возвращает resumable deep link на platform manager bot;
+  - delivery mode manager bot updates configurable: `webhook` через `/telegram/manager/webhook` или `polling` через Telegram `getUpdates`;
+  - в `polling` mode `simpleClaw` перед long polling path делает `deleteWebhook`, чтобы Telegram update delivery не была смешанной;
+  - `simpleClaw` получает managed bot token через Telegram Bot API и materialize'ит его как обычный user-owned `Channel`.
 - Структуры под Discord / WhatsApp / Slack есть в config schema, но user flow сейчас ориентирован на Telegram.
 
 ### 3. Payment Method Management
@@ -165,8 +171,10 @@
 - Админ управляет тарифами через `/plans`.
 - Пользователь запрашивает текущее billing summary через `/me/billing`.
 - Пользовательский bootstrap/readiness state читается через `GET /me/bootstrap`; backend сам вычисляет `dashboard_allowed`, onboarding `step`, `required` и resume `claw_id`.
+- Для managed Telegram bot onboarding `GET /me/bootstrap` также возвращает backend-owned `onboarding.telegram_manager` snapshot: `id`, `status`, `deep_link_url`, `link_expires_at`, `channel_id`, `last_error`.
 - Dashboard access принадлежит backend-у: доступ разрешён для `active` и для `canceled` пока не истёк `current_period_end`; `pending`, `past_due`, отсутствующая подписка и истёкший `canceled` период доступа не дают.
 - После успешной оплаты backend активирует подписку, но не стартует `claw` автоматически; frontend должен отдельно вызывать `POST /claws/{id}/start`, а bootstrap возвращает следующий onboarding step из persisted state.
+- Реальные onboarding step для bootstrap сейчас включают `subscription_required`, `telegram_choice`, `telegram_manager_link`, `telegram_manager_provisioning`, `telegram_manual_connect`, `telegram_confirm`, `dashboard_ready`.
 - Подписка создаётся, меняется и отменяется через `/me/subscription`.
 - Для оплаты используются YooKassa payment flows и webhook `POST /billing/webhook/yookassa`.
 
@@ -223,6 +231,8 @@
 |---|---|---|---|---|
 | `/me/user-info` | `GET` | Вернуть профиль текущего пользователя | JWT access cookie/header | body нет |
 | `/me/channel` | `POST` | Создать channel config; текущий реальный flow — Telegram | body `name`, `telegramChannel.botToken`, `telegramChannel.dmPolicy` | `telegramChannel.allowFrom` |
+| `/me/telegram/manager/link` | `POST` | Инициировать claw-scoped Telegram Managed Bot flow и вернуть или переиспользовать deep link на manager bot | JWT, body `claw_id` | нет |
+| `/me/telegram/manager/link/{id}` | `GET` | Прочитать provisioning status managed bot request | path `id`, JWT | body нет |
 | `/me/integrations` | `GET` | Список user-scoped integrations | JWT | body нет |
 | `/me/integrations/google/oauth/start` | `POST` | Начать отдельный Google OAuth flow для onboarding-selected capability bindings | body `capabilities[]` | body `returnTo` |
 | `/me/integrations/{provider}/connect` | `POST` | Создать или обновить integration payload для capability binding | path `provider` | body `id`, `externalAccountId`, `displayName`, `secretPayload`, `metadata` — provider-specific, все поля опциональны на transport уровне |
@@ -281,6 +291,7 @@
 - `subscription.status` и `subscription.current_period_end` — raw billing state.
 - `subscription.access_active` — derived flag, который фронт не должен пересчитывать.
 - `onboarding.required`, `onboarding.step`, `onboarding.claw_id` — backend-owned resume contract.
+- `onboarding.telegram_manager` присутствует только для claw-scoped managed-bot resume и содержит `id`, `status`, `deep_link_url`, `link_expires_at`, `channel_id`, `last_error`.
 
 #### Admin / Registry
 
@@ -303,6 +314,7 @@
 |---|---|---|---|---|
 | `/health` | `GET` | Liveness probe для proxy/controller process | нет | body нет |
 | `/pubsub` | `POST` | Ingress webhook для Gmail Pub/Sub fan-out на execution hosts | JSON body, ingress auth token в `Authorization` | нет |
+| `/telegram/manager/webhook` | `POST` | Ingress webhook для Telegram manager bot: `/start <code>` linking и `managed_bot` updates | header `X-Telegram-Bot-Api-Secret-Token`, Telegram update JSON | нет |
 
 ### `containerManager` execution-plane API
 
@@ -376,11 +388,14 @@
 - `simpleClaw/internal/infra/payment`
   - YooKassa integration и mapping provider objects ↔ domain payment model.
 
+- `simpleClaw/internal/infra/telegram`
+  - Минимальный Telegram Bot API client для manager bot flow: `getMe`, `getManagedBotToken`, `replaceManagedBotToken`, webhook DTO и `sendMessage`.
+
 - `simpleClaw/internal/infra/sql`
   - GORM bootstrap, migration helpers, DB-level common errors.
 
 - `simpleClaw/internal/infra/sql/models`
-  - GORM models для users, claws, servers, billing, payments, subscriptions и related tables.
+  - GORM models для users, claws, servers, billing, payments, subscriptions и related tables, включая `telegram_account_links`, `telegram_webhook_updates` и `telegram_managed_bots`.
 
 - `simpleClaw/internal/infra/storages/channels`
   - Persistence для `Channel`.
@@ -409,6 +424,9 @@
 - `simpleClaw/internal/infra/storages/balanceentries`
   - Persistence для balance ledger entries.
 
+- `simpleClaw/internal/infra/storages/telegrammanager`
+  - Persistence для Telegram account link records, webhook update idempotency и managed bot provisioning state.
+
 - `simpleClaw/internal/pkg/slctx`
   - Request-scoped `slog` logger helper.
 
@@ -435,6 +453,9 @@
 
 - `simpleClaw/internal/service/billing/commands`
   - Command types для billing service.
+
+- `simpleClaw/internal/service/telegrammanager`
+  - Control-plane orchestration для Telegram Managed Bots: deep-link creation, `/start` account linking, `managed_bot` webhook handling и materialization managed bot -> обычный Telegram `Channel`.
 
 ### `containerManager`
 

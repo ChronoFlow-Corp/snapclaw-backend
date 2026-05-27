@@ -1,19 +1,19 @@
 environment: development
 
 postgres:
-  url: "postgresql://containermanager:containermanager@containermanager-db:5432/containermanager?sslmode=disable"
+    url: "postgresql://containermanager:containermanager@containermanager-db:5432/containermanager?sslmode=disable"
 
 http:
-  addr: ":8080"
-  api_key: testKey
+    addr: ":8080"
+    api_key: testKey
 
 image:
-  base_path: "/claw-configs"
-  owner_uid: 1000
-  owner_gid: 1000
-  build_context:
-    - "/workspace/containerManager/images"
-  dockerfile: ./openclaw/Dockerfile
+    base_path: "/claw-configs"
+    owner_uid: 1000
+    owner_gid: 1000
+    build_context:
+        - "/workspace/containerManager/images"
+    dockerfile: images/openclaw/Dockerfile
 
 gog:
-  keyring_password: "dev-only-change-me"
+    keyring_password: "dev-only-change-me"

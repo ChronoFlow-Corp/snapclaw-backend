@@ -357,6 +357,165 @@ auth:
 	}
 }
 
+func TestLoadDevelopmentConfigLoadsTelegramManagerSettings(t *testing.T) {
+	t.Setenv("DEV_HOST", "")
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "dev-config.yaml")
+
+	writeTestConfig(t, configPath, `
+environment: development
+database:
+  dsn: "postgresql://simpleclaw:simpleclaw@simpleclaw-db:5432/simpleclaw?sslmode=disable"
+auth:
+  google:
+    client_id: "google-client-id"
+    client_secret: "google-client-secret"
+telegram_manager:
+  enabled: true
+  bot_token: "manager-token"
+  webhook_secret: "telegram-webhook-secret"
+  public_webhook_url: "https://simpleclaw.example/api/telegram/manager/webhook"
+  manager_username: "simpleclaw_manager_bot"
+`)
+
+	cfg, err := load(configPath)
+	if err != nil {
+		t.Fatalf("load() error = %v", err)
+	}
+
+	if !cfg.TelegramManager.Enabled {
+		t.Fatal("expected telegram manager to be enabled")
+	}
+
+	if cfg.TelegramManager.BotToken != "manager-token" {
+		t.Fatalf("bot token = %q", cfg.TelegramManager.BotToken)
+	}
+
+	if cfg.TelegramManager.WebhookSecret != "telegram-webhook-secret" {
+		t.Fatalf("webhook secret = %q", cfg.TelegramManager.WebhookSecret)
+	}
+
+	if cfg.TelegramManager.PublicWebhookURL != "https://simpleclaw.example/api/telegram/manager/webhook" {
+		t.Fatalf("public webhook url = %q", cfg.TelegramManager.PublicWebhookURL)
+	}
+
+	if cfg.TelegramManager.ManagerUsername != "simpleclaw_manager_bot" {
+		t.Fatalf("manager username = %q", cfg.TelegramManager.ManagerUsername)
+	}
+}
+
+func TestLoadProductionConfigRequiresTelegramManagerSecretsWhenEnabled(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "prod-config.yaml")
+
+	writeTestConfig(t, configPath, `
+environment: production
+database:
+  dsn: "postgresql://simpleclaw:simpleclaw@simpleclaw-db:5432/simpleclaw?sslmode=disable"
+auth:
+  google:
+    client_id: "google-client-id"
+    client_secret: "google-client-secret"
+    callback_url: "https://simpleclaw.example/auth/connect/google/callback"
+    frontend_url: "https://simpleclaw.example"
+    integration_callback_url: "https://simpleclaw.example/auth/google/integrations/callback"
+    integration_state_secret: "integration-state-secret"
+  jwt:
+    refresh_secret: "refresh-secret"
+    access_secret_private: "`+filepath.ToSlash(filepath.Join(dir, "keys", "jwtRS256.key"))+`"
+    access_secret_public: "`+filepath.ToSlash(filepath.Join(dir, "keys", "jwtRS256.key.pub"))+`"
+openrouter:
+  api_token: "file-openrouter-token"
+payment:
+  yookassa:
+    store_id: "store-id"
+    secret_key: "secret-key"
+telegram_manager:
+  enabled: true
+`)
+
+	if err := os.MkdirAll(filepath.Join(dir, "keys"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll() error = %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "keys", "jwtRS256.key"), []byte("test-private"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() private key error = %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "keys", "jwtRS256.key.pub"), []byte("test-public"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() public key error = %v", err)
+	}
+
+	_, err := load(configPath)
+	if err == nil {
+		t.Fatal("load() error = nil, want non-nil")
+	}
+
+	if !strings.Contains(err.Error(), "telegram_manager.bot_token") {
+		t.Fatalf("load() error = %q, want telegram manager validation", err.Error())
+	}
+}
+
+func TestLoadProductionConfigAllowsTelegramManagerPollingWithoutWebhookConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "prod-config.yaml")
+
+	writeTestConfig(t, configPath, `
+environment: production
+database:
+  dsn: "postgresql://simpleclaw:simpleclaw@simpleclaw-db:5432/simpleclaw?sslmode=disable"
+auth:
+  google:
+    client_id: "google-client-id"
+    client_secret: "google-client-secret"
+    callback_url: "https://simpleclaw.example/auth/connect/google/callback"
+    frontend_url: "https://simpleclaw.example"
+    integration_callback_url: "https://simpleclaw.example/auth/google/integrations/callback"
+    integration_state_secret: "integration-state-secret"
+  jwt:
+    refresh_secret: "refresh-secret"
+    access_secret_private: "`+filepath.ToSlash(filepath.Join(dir, "keys", "jwtRS256.key"))+`"
+    access_secret_public: "`+filepath.ToSlash(filepath.Join(dir, "keys", "jwtRS256.key.pub"))+`"
+openrouter:
+  api_token: "file-openrouter-token"
+payment:
+  yookassa:
+    store_id: "store-id"
+    secret_key: "secret-key"
+telegram_manager:
+  enabled: true
+  mode: " polling "
+  bot_token: "manager-token"
+  manager_username: "@simpleclaw_manager_bot"
+`)
+
+	if err := os.MkdirAll(filepath.Join(dir, "keys"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll() error = %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "keys", "jwtRS256.key"), []byte("test-private"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() private key error = %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "keys", "jwtRS256.key.pub"), []byte("test-public"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() public key error = %v", err)
+	}
+
+	cfg, err := load(configPath)
+	if err != nil {
+		t.Fatalf("load() error = %v", err)
+	}
+
+	if cfg.TelegramManager.Mode != "polling" {
+		t.Fatalf("mode = %q", cfg.TelegramManager.Mode)
+	}
+
+	if cfg.TelegramManager.ManagerUsername != "simpleclaw_manager_bot" {
+		t.Fatalf("manager username = %q", cfg.TelegramManager.ManagerUsername)
+	}
+}
+
 func writeTestConfig(t *testing.T, path, body string) {
 	t.Helper()
 

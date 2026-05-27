@@ -43,6 +43,8 @@ const (
 	defaultProxyTimeout          = 5 * time.Second
 	defaultProxyRetries          = 2
 	defaultProxyBackoff          = 250 * time.Millisecond
+	defaultTelegramAPIBaseURL    = "https://api.telegram.org"
+	defaultTelegramManagerMode   = "webhook"
 	defaultRuntimeSyncInterval   = 30 * time.Second
 	defaultRuntimeSyncTimeout    = 5 * time.Second
 	defaultRuntimeSyncBatchSize  = 100
@@ -51,17 +53,18 @@ const (
 )
 
 type Config struct {
-	Environment   string        `mapstructure:"environment"`
-	Http          http          `mapstructure:"http"`
-	Database      database      `mapstructure:"database"`
-	Auth          auth          `mapstructure:"auth"`
-	Brave         brave         `mapstructure:"brave"`
-	OpenRouter    openrouter    `mapstructure:"openrouter"`
-	Hosting       hosting       `mapstructure:"hosting"`
-	Connect       connect       `mapstructure:"connect"`
-	Proxy         proxy         `mapstructure:"proxy"`
-	Observability observability `mapstructure:"observability"`
-	Payment       payment       `mapstructure:"payment"`
+	Environment     string          `mapstructure:"environment"`
+	Http            http            `mapstructure:"http"`
+	Database        database        `mapstructure:"database"`
+	Auth            auth            `mapstructure:"auth"`
+	Brave           brave           `mapstructure:"brave"`
+	OpenRouter      openrouter      `mapstructure:"openrouter"`
+	Hosting         hosting         `mapstructure:"hosting"`
+	Connect         connect         `mapstructure:"connect"`
+	Proxy           proxy           `mapstructure:"proxy"`
+	TelegramManager telegramManager `mapstructure:"telegram_manager"`
+	Observability   observability   `mapstructure:"observability"`
+	Payment         payment         `mapstructure:"payment"`
 }
 
 type http struct {
@@ -133,6 +136,17 @@ type proxy struct {
 	ForwardTimeout time.Duration `mapstructure:"forward_timeout"`
 	RetryCount     int           `mapstructure:"retry_count"`
 	RetryBackoff   time.Duration `mapstructure:"retry_backoff"`
+}
+
+type telegramManager struct {
+	Enabled          bool          `mapstructure:"enabled"`
+	Mode             string        `mapstructure:"mode"`
+	BaseURL          string        `mapstructure:"base_url"`
+	BotToken         string        `mapstructure:"bot_token"`
+	WebhookSecret    string        `mapstructure:"webhook_secret"`
+	PublicWebhookURL string        `mapstructure:"public_webhook_url"`
+	ManagerUsername  string        `mapstructure:"manager_username"`
+	Timeout          time.Duration `mapstructure:"timeout"`
 }
 
 type gmailConnect struct {
@@ -326,6 +340,21 @@ func (c *Config) applyEnvOverrides() error {
 		return err
 	}
 
+	if err := applyBoolEnv(&c.TelegramManager.Enabled, "TELEGRAM_MANAGER_ENABLED"); err != nil {
+		return err
+	}
+
+	applyStringEnv(&c.TelegramManager.Mode, "TELEGRAM_MANAGER_MODE")
+	applyStringEnv(&c.TelegramManager.BaseURL, "TELEGRAM_MANAGER_BASE_URL")
+	applyStringEnv(&c.TelegramManager.BotToken, "TELEGRAM_MANAGER_BOT_TOKEN")
+	applyStringEnv(&c.TelegramManager.WebhookSecret, "TELEGRAM_MANAGER_WEBHOOK_SECRET")
+	applyStringEnv(&c.TelegramManager.PublicWebhookURL, "TELEGRAM_MANAGER_PUBLIC_WEBHOOK_URL")
+	applyStringEnv(&c.TelegramManager.ManagerUsername, "TELEGRAM_MANAGER_USERNAME")
+
+	if err := applyDurationEnv(&c.TelegramManager.Timeout, "TELEGRAM_MANAGER_TIMEOUT"); err != nil {
+		return err
+	}
+
 	applyStringEnv(&c.Connect.Gmail.Watch.Topic, "CONNECT_GMAIL_WATCH_TOPIC")
 	applyCSVEnv(&c.Connect.Gmail.Watch.Labels, "CONNECT_GMAIL_WATCH_LABELS")
 
@@ -382,6 +411,14 @@ func (c *Config) applyDefaults(configPath string) {
 			c.Auth.Google.CallbackURL,
 			defaultGoogleIntegrationPath,
 		)
+	}
+
+	if strings.TrimSpace(c.TelegramManager.BaseURL) == "" {
+		c.TelegramManager.BaseURL = defaultTelegramAPIBaseURL
+	}
+
+	if strings.TrimSpace(c.TelegramManager.Mode) == "" {
+		c.TelegramManager.Mode = defaultTelegramManagerMode
 	}
 
 	c.applyJWTDefaults(configPath)
@@ -592,6 +629,30 @@ func (c *Config) validate() error {
 		return fmt.Errorf("payment.yookassa.secret_key is required")
 	}
 
+	if c.TelegramManager.Enabled {
+		if c.TelegramManager.Mode != "webhook" && c.TelegramManager.Mode != "polling" {
+			return fmt.Errorf("telegram_manager.mode is invalid")
+		}
+
+		if strings.TrimSpace(c.TelegramManager.BotToken) == "" {
+			return fmt.Errorf("telegram_manager.bot_token is required")
+		}
+
+		if c.TelegramManager.Mode == "webhook" {
+			if strings.TrimSpace(c.TelegramManager.WebhookSecret) == "" {
+				return fmt.Errorf("telegram_manager.webhook_secret is required")
+			}
+
+			if strings.TrimSpace(c.TelegramManager.PublicWebhookURL) == "" {
+				return fmt.Errorf("telegram_manager.public_webhook_url is required")
+			}
+		}
+
+		if strings.TrimSpace(c.TelegramManager.ManagerUsername) == "" {
+			return fmt.Errorf("telegram_manager.manager_username is required")
+		}
+	}
+
 	return nil
 }
 
@@ -649,6 +710,12 @@ func (c *Config) normalize() {
 	c.Auth.Admins = normalizeEmails(c.Auth.Admins)
 	c.Http.Origins = normalizeList(c.Http.Origins)
 	c.Connect.Gmail.Watch.Labels = normalizeList(c.Connect.Gmail.Watch.Labels)
+	c.TelegramManager.Mode = strings.ToLower(strings.TrimSpace(c.TelegramManager.Mode))
+	c.TelegramManager.BaseURL = strings.TrimRight(strings.TrimSpace(c.TelegramManager.BaseURL), "/")
+	c.TelegramManager.BotToken = strings.TrimSpace(c.TelegramManager.BotToken)
+	c.TelegramManager.WebhookSecret = strings.TrimSpace(c.TelegramManager.WebhookSecret)
+	c.TelegramManager.PublicWebhookURL = strings.TrimSpace(c.TelegramManager.PublicWebhookURL)
+	c.TelegramManager.ManagerUsername = strings.TrimSpace(strings.TrimPrefix(c.TelegramManager.ManagerUsername, "@"))
 	c.Observability.Metrics.Path = normalizeMetricsPath(c.Observability.Metrics.Path)
 }
 

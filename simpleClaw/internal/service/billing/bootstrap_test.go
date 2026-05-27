@@ -9,6 +9,7 @@ import (
 
 	"simpleClaw/internal/entities"
 	entitychannels "simpleClaw/internal/entities/channels"
+	"simpleClaw/internal/infra/sql"
 	billingresult "simpleClaw/internal/service/billing/result"
 )
 
@@ -18,6 +19,23 @@ type fakeBootstrapClawReader struct {
 
 func (r *fakeBootstrapClawReader) GetByUserID(_ context.Context, userID uuid.UUID) ([]entities.Claw, error) {
 	return append([]entities.Claw(nil), r.clawsByUser[userID]...), nil
+}
+
+type fakeBootstrapManagedBotReader struct {
+	botsByClaw map[uuid.UUID]entities.TelegramManagedBot
+}
+
+func (r *fakeBootstrapManagedBotReader) GetLatestManagedBotByClawID(
+	_ context.Context,
+	_ uuid.UUID,
+	clawID uuid.UUID,
+) (entities.TelegramManagedBot, error) {
+	bot, ok := r.botsByClaw[clawID]
+	if !ok {
+		return entities.TelegramManagedBot{}, sql.ErrNotFound
+	}
+
+	return bot, nil
 }
 
 func TestGetBootstrap_DashboardAllowedBySubscriptionStatus(t *testing.T) {
@@ -150,16 +168,7 @@ func TestGetBootstrap_MapsOnboardingResumeState(t *testing.T) {
 	now := time.Now().UTC()
 	userID := uuid.New()
 	plan := newActivePlan()
-	subscription := entities.UserSubscription{
-		ID:                 uuid.New(),
-		UserID:             userID,
-		PlanID:             plan.ID,
-		Status:             entities.SubscriptionStatusActive,
-		CurrentPeriodStart: now.Add(-24 * time.Hour),
-		CurrentPeriodEnd:   now.Add(24 * time.Hour),
-	}
-
-	baseService := func(claws []entities.Claw) *Service {
+	baseService := func(subscription entities.UserSubscription, claws []entities.Claw) *Service {
 		subscriptions := newFakeSubscriptionStorage()
 		subscriptions.byID[subscription.ID] = subscription
 		subscriptions.byUser[userID] = subscription
@@ -175,11 +184,20 @@ func TestGetBootstrap_MapsOnboardingResumeState(t *testing.T) {
 			nil,
 		).WithBootstrapClawReader(&fakeBootstrapClawReader{
 			clawsByUser: map[uuid.UUID][]entities.Claw{userID: claws},
-		})
+		}).WithBootstrapManagedBotReader(&fakeBootstrapManagedBotReader{})
+	}
+
+	activeSubscription := entities.UserSubscription{
+		ID:                 uuid.New(),
+		UserID:             userID,
+		PlanID:             plan.ID,
+		Status:             entities.SubscriptionStatusActive,
+		CurrentPeriodStart: now.Add(-24 * time.Hour),
+		CurrentPeriodEnd:   now.Add(24 * time.Hour),
 	}
 
 	t.Run("no claw resets onboarding", func(t *testing.T) {
-		bootstrap, err := baseService(nil).GetBootstrap(context.Background(), userID)
+		bootstrap, err := baseService(activeSubscription, nil).GetBootstrap(context.Background(), userID)
 		if err != nil {
 			t.Fatalf("GetBootstrap() error = %v", err)
 		}
@@ -194,7 +212,7 @@ func TestGetBootstrap_MapsOnboardingResumeState(t *testing.T) {
 
 	t.Run("claw without telegram binding resumes at telegram choice", func(t *testing.T) {
 		clawID := uuid.New()
-		bootstrap, err := baseService([]entities.Claw{{
+		bootstrap, err := baseService(activeSubscription, []entities.Claw{{
 			ID:                 clawID,
 			UserID:             userID,
 			CreatedAt:          now.Add(-time.Hour),
@@ -213,8 +231,74 @@ func TestGetBootstrap_MapsOnboardingResumeState(t *testing.T) {
 		}
 	})
 
+	t.Run("canceled subscription with remaining access resumes at telegram choice", func(t *testing.T) {
+		clawID := uuid.New()
+		subscription := entities.UserSubscription{
+			ID:                 uuid.New(),
+			UserID:             userID,
+			PlanID:             plan.ID,
+			Status:             entities.SubscriptionStatusCanceled,
+			CurrentPeriodStart: now.Add(-48 * time.Hour),
+			CurrentPeriodEnd:   now.Add(24 * time.Hour),
+		}
+
+		bootstrap, err := baseService(subscription, []entities.Claw{{
+			ID:                 clawID,
+			UserID:             userID,
+			CreatedAt:          now.Add(-time.Hour),
+			UpdatedAt:          now,
+			OnboardingComplete: false,
+		}}).GetBootstrap(context.Background(), userID)
+		if err != nil {
+			t.Fatalf("GetBootstrap() error = %v", err)
+		}
+
+		if !bootstrap.DashboardAllowed {
+			t.Fatalf("DashboardAllowed = false, want true")
+		}
+		if bootstrap.Onboarding.Step != billingresult.OnboardingStepTelegramChoice {
+			t.Fatalf("Onboarding.Step = %q, want %q", bootstrap.Onboarding.Step, billingresult.OnboardingStepTelegramChoice)
+		}
+		if bootstrap.Onboarding.ClawID == nil || *bootstrap.Onboarding.ClawID != clawID {
+			t.Fatalf("Onboarding.ClawID = %v, want %s", bootstrap.Onboarding.ClawID, clawID)
+		}
+	})
+
+	t.Run("expired canceled subscription returns to subscription required", func(t *testing.T) {
+		clawID := uuid.New()
+		subscription := entities.UserSubscription{
+			ID:                 uuid.New(),
+			UserID:             userID,
+			PlanID:             plan.ID,
+			Status:             entities.SubscriptionStatusCanceled,
+			CurrentPeriodStart: now.Add(-72 * time.Hour),
+			CurrentPeriodEnd:   now,
+		}
+
+		bootstrap, err := baseService(subscription, []entities.Claw{{
+			ID:                 clawID,
+			UserID:             userID,
+			CreatedAt:          now.Add(-time.Hour),
+			UpdatedAt:          now,
+			OnboardingComplete: false,
+		}}).GetBootstrap(context.Background(), userID)
+		if err != nil {
+			t.Fatalf("GetBootstrap() error = %v", err)
+		}
+
+		if bootstrap.DashboardAllowed {
+			t.Fatalf("DashboardAllowed = true, want false")
+		}
+		if bootstrap.Onboarding.Step != billingresult.OnboardingStepSubscriptionRequired {
+			t.Fatalf("Onboarding.Step = %q, want %q", bootstrap.Onboarding.Step, billingresult.OnboardingStepSubscriptionRequired)
+		}
+		if bootstrap.Onboarding.ClawID == nil || *bootstrap.Onboarding.ClawID != clawID {
+			t.Fatalf("Onboarding.ClawID = %v, want %s", bootstrap.Onboarding.ClawID, clawID)
+		}
+	})
+
 	t.Run("claw waiting for telegram approval resumes at confirm step", func(t *testing.T) {
-		bootstrap, err := baseService([]entities.Claw{{
+		bootstrap, err := baseService(activeSubscription, []entities.Claw{{
 			ID:     uuid.New(),
 			UserID: userID,
 			Config: entities.ClawConfig{
@@ -238,7 +322,7 @@ func TestGetBootstrap_MapsOnboardingResumeState(t *testing.T) {
 	})
 
 	t.Run("completed onboarding returns dashboard ready", func(t *testing.T) {
-		bootstrap, err := baseService([]entities.Claw{{
+		bootstrap, err := baseService(activeSubscription, []entities.Claw{{
 			ID:                 uuid.New(),
 			UserID:             userID,
 			OnboardingComplete: true,
@@ -252,6 +336,142 @@ func TestGetBootstrap_MapsOnboardingResumeState(t *testing.T) {
 		if bootstrap.Onboarding.Required {
 			t.Fatalf("Onboarding.Required = true, want false")
 		}
+		if bootstrap.Onboarding.Step != billingresult.OnboardingStepDashboardReady {
+			t.Fatalf("Onboarding.Step = %q, want %q", bootstrap.Onboarding.Step, billingresult.OnboardingStepDashboardReady)
+		}
+	})
+
+	t.Run("managed bot pending link resumes at manager link step", func(t *testing.T) {
+		clawID := uuid.New()
+		managedBotID := uuid.New()
+		service := baseService(activeSubscription, []entities.Claw{{
+			ID:        clawID,
+			UserID:    userID,
+			CreatedAt: now.Add(-time.Hour),
+			UpdatedAt: now,
+		}}).WithBootstrapManagedBotReader(&fakeBootstrapManagedBotReader{
+			botsByClaw: map[uuid.UUID]entities.TelegramManagedBot{
+				clawID: {
+					ID:            managedBotID,
+					UserID:        userID,
+					ClawID:        clawID,
+					Status:        entities.TelegramManagedBotStatusPendingLink,
+					DeepLinkURL:   "https://t.me/simpleclaw_manager_bot?start=resume-code",
+					LinkExpiresAt: now.Add(10 * time.Minute),
+				},
+			},
+		})
+
+		bootstrap, err := service.GetBootstrap(context.Background(), userID)
+		if err != nil {
+			t.Fatalf("GetBootstrap() error = %v", err)
+		}
+
+		if bootstrap.Onboarding.Step != billingresult.OnboardingStepTelegramManagerLink {
+			t.Fatalf("Onboarding.Step = %q, want %q", bootstrap.Onboarding.Step, billingresult.OnboardingStepTelegramManagerLink)
+		}
+
+		if bootstrap.Onboarding.TelegramManager == nil || bootstrap.Onboarding.TelegramManager.ID != managedBotID {
+			t.Fatalf("Onboarding.TelegramManager = %#v", bootstrap.Onboarding.TelegramManager)
+		}
+	})
+
+	t.Run("managed bot provisioning resumes while linked or waiting creation", func(t *testing.T) {
+		for _, status := range []entities.TelegramManagedBotStatus{
+			entities.TelegramManagedBotStatusLinked,
+			entities.TelegramManagedBotStatusWaitingCreation,
+		} {
+			status := status
+			t.Run(string(status), func(t *testing.T) {
+				clawID := uuid.New()
+				service := baseService(activeSubscription, []entities.Claw{{
+					ID:        clawID,
+					UserID:    userID,
+					CreatedAt: now.Add(-time.Hour),
+					UpdatedAt: now,
+				}}).WithBootstrapManagedBotReader(&fakeBootstrapManagedBotReader{
+					botsByClaw: map[uuid.UUID]entities.TelegramManagedBot{
+						clawID: {
+							ID:     uuid.New(),
+							UserID: userID,
+							ClawID: clawID,
+							Status: status,
+						},
+					},
+				})
+
+				bootstrap, err := service.GetBootstrap(context.Background(), userID)
+				if err != nil {
+					t.Fatalf("GetBootstrap() error = %v", err)
+				}
+
+				if bootstrap.Onboarding.Step != billingresult.OnboardingStepTelegramManagerProvisioning {
+					t.Fatalf("Onboarding.Step = %q, want %q", bootstrap.Onboarding.Step, billingresult.OnboardingStepTelegramManagerProvisioning)
+				}
+			})
+		}
+	})
+
+	t.Run("managed bot failure falls back to manual connect", func(t *testing.T) {
+		clawID := uuid.New()
+		service := baseService(activeSubscription, []entities.Claw{{
+			ID:        clawID,
+			UserID:    userID,
+			CreatedAt: now.Add(-time.Hour),
+			UpdatedAt: now,
+		}}).WithBootstrapManagedBotReader(&fakeBootstrapManagedBotReader{
+			botsByClaw: map[uuid.UUID]entities.TelegramManagedBot{
+				clawID: {
+					ID:        uuid.New(),
+					UserID:    userID,
+					ClawID:    clawID,
+					Status:    entities.TelegramManagedBotStatusFailed,
+					LastError: "telegram bot provisioning failed",
+				},
+			},
+		})
+
+		bootstrap, err := service.GetBootstrap(context.Background(), userID)
+		if err != nil {
+			t.Fatalf("GetBootstrap() error = %v", err)
+		}
+
+		if bootstrap.Onboarding.Step != billingresult.OnboardingStepTelegramManualConnect {
+			t.Fatalf("Onboarding.Step = %q, want %q", bootstrap.Onboarding.Step, billingresult.OnboardingStepTelegramManualConnect)
+		}
+
+		if bootstrap.Onboarding.TelegramManager == nil || bootstrap.Onboarding.TelegramManager.LastError != "telegram bot provisioning failed" {
+			t.Fatalf("Onboarding.TelegramManager = %#v", bootstrap.Onboarding.TelegramManager)
+		}
+	})
+
+	t.Run("managed bot ready unlocks dashboard", func(t *testing.T) {
+		clawID := uuid.New()
+		service := baseService(activeSubscription, []entities.Claw{{
+			ID:        clawID,
+			UserID:    userID,
+			CreatedAt: now.Add(-time.Hour),
+			UpdatedAt: now,
+		}}).WithBootstrapManagedBotReader(&fakeBootstrapManagedBotReader{
+			botsByClaw: map[uuid.UUID]entities.TelegramManagedBot{
+				clawID: {
+					ID:     uuid.New(),
+					UserID: userID,
+					ClawID: clawID,
+					Status: entities.TelegramManagedBotStatusReady,
+				},
+			},
+		})
+
+		bootstrap, err := service.GetBootstrap(context.Background(), userID)
+		if err != nil {
+			t.Fatalf("GetBootstrap() error = %v", err)
+		}
+
+		if bootstrap.Onboarding.Required {
+			t.Fatalf("Onboarding.Required = true, want false")
+		}
+
 		if bootstrap.Onboarding.Step != billingresult.OnboardingStepDashboardReady {
 			t.Fatalf("Onboarding.Step = %q, want %q", bootstrap.Onboarding.Step, billingresult.OnboardingStepDashboardReady)
 		}

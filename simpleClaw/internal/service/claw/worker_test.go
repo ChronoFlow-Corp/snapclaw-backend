@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +20,18 @@ import (
 	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/infra/storages/claws"
 )
+
+func captureDefaultLogger(t *testing.T) (*bytes.Buffer, func()) {
+	t.Helper()
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+
+	return &buf, func() {
+		slog.SetDefault(prev)
+	}
+}
 
 type workerTestClawStorage struct {
 	claws map[uuid.UUID]entities.Claw
@@ -248,6 +262,34 @@ func (h *workerTestHosting) Create(context.Context, entities.Claw, entities.Serv
 	}
 
 	return h.createContainer, nil
+}
+
+func TestProcessNextOperationWhenQueueIsEmptyDoesNotLogIdlePoll(t *testing.T) {
+	logBuf, restore := captureDefaultLogger(t)
+	defer restore()
+
+	svc := NewClaw(
+		&workerTestClawStorage{claws: map[uuid.UUID]entities.Claw{}},
+		&workerTestOperationStorage{
+			operations: map[uuid.UUID]entities.ClawLifecycleOperation{},
+		},
+		&workerTestChannelStorage{},
+		&workerTestUserStorage{},
+		&workerTestServerStorage{},
+		&workerTestHosting{},
+		&workerTestKeys{},
+		"",
+		GmailWatchConfig{},
+	)
+
+	err := svc.ProcessNextOperation(context.Background())
+	if !errors.Is(err, sql.ErrNotFound) {
+		t.Fatalf("ProcessNextOperation() error = %v, want ErrNotFound", err)
+	}
+
+	if strings.TrimSpace(logBuf.String()) != "" {
+		t.Fatalf("expected no idle poll logs, got %q", logBuf.String())
+	}
 }
 
 func (h *workerTestHosting) Start(context.Context, entities.Claw, entities.Server) error {

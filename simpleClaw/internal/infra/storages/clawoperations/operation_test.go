@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +17,18 @@ import (
 	infraSQL "simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/infra/sql/models"
 )
+
+func captureOperationStorageLogger(t *testing.T) (*strings.Builder, func()) {
+	t.Helper()
+
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+
+	return &buf, func() {
+		slog.SetDefault(prev)
+	}
+}
 
 func TestStorageCreateAndGetActiveByClawID(t *testing.T) {
 	t.Parallel()
@@ -212,6 +226,22 @@ func TestStorageUpdateRemovesSucceededOperationFromActiveSet(t *testing.T) {
 	_, err = store.GetActiveByClawID(context.Background(), clawID)
 	if !errors.Is(err, infraSQL.ErrNotFound) {
 		t.Fatalf("GetActiveByClawID() after succeeded error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStorageLockNextRunnableWhenEmptyDoesNotLogIdlePoll(t *testing.T) {
+	db := newTestDB(t)
+	store := NewStorage(db)
+	logBuf, restore := captureOperationStorageLogger(t)
+	defer restore()
+
+	_, err := store.LockNextRunnable(context.Background(), time.Now().UTC())
+	if !errors.Is(err, infraSQL.ErrNotFound) {
+		t.Fatalf("LockNextRunnable() error = %v, want ErrNotFound", err)
+	}
+
+	if strings.TrimSpace(logBuf.String()) != "" {
+		t.Fatalf("expected no idle poll logs, got %q", logBuf.String())
 	}
 }
 

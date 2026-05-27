@@ -61,6 +61,41 @@ func (s *Service) RunLifecycleWorker(ctx context.Context, interval time.Duration
 func (s *Service) ProcessNextOperation(ctx context.Context) error {
 	const opName = "service.Claw.ProcessNextOperation"
 
+	if s.operations == nil {
+		_, _, finish := observability.StartOperation(
+			ctx,
+			slog.Default(),
+			s.metrics,
+			"service.claw",
+			"claw.process_operation",
+			"claw_lifecycle",
+		)
+		err := fmt.Errorf("%s: %w", opName, ErrOperationStorageRequired)
+		finish(err)
+
+		return err
+	}
+
+	op, err := s.operations.LockNextRunnable(ctx, time.Now().UTC())
+	if err != nil {
+		if errors.Is(err, sql.ErrNotFound) {
+			return err
+		}
+
+		_, _, finish := observability.StartOperation(
+			ctx,
+			slog.Default(),
+			s.metrics,
+			"service.claw",
+			"claw.process_operation",
+			"claw_lifecycle",
+		)
+		err = fmt.Errorf("%s: %w", opName, err)
+		finish(err)
+
+		return err
+	}
+
 	ctx, _, finish := observability.StartOperation(
 		ctx,
 		slog.Default(),
@@ -69,18 +104,7 @@ func (s *Service) ProcessNextOperation(ctx context.Context) error {
 		"claw.process_operation",
 		"claw_lifecycle",
 	)
-
-	var err error
 	defer func() { finish(err) }()
-
-	if s.operations == nil {
-		return fmt.Errorf("%s: %w", opName, ErrOperationStorageRequired)
-	}
-
-	op, err := s.operations.LockNextRunnable(ctx, time.Now().UTC())
-	if err != nil {
-		return fmt.Errorf("%s: %w", opName, err)
-	}
 
 	s.logLifecycleEvent("picked_operation", op, slog.String("status", string(op.Status)))
 

@@ -41,6 +41,20 @@ func TestClassifyActionFlow(t *testing.T) {
 			wantFlow:   "billing_usage",
 		},
 		{
+			name:       "telegram manager link route",
+			method:     "POST",
+			path:       "/api/me/telegram/manager/link",
+			wantAction: "telegram.manager.link.create",
+			wantFlow:   "telegram_manager",
+		},
+		{
+			name:       "telegram manager webhook route",
+			method:     "POST",
+			path:       "/api/telegram/manager/webhook",
+			wantAction: "telegram.manager.webhook.receive",
+			wantFlow:   "telegram_manager",
+		},
+		{
 			name:       "unknown route",
 			method:     "GET",
 			path:       "/unknown",

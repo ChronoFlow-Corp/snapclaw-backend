@@ -3,7 +3,10 @@ package claws
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,8 +15,21 @@ import (
 	"gorm.io/gorm"
 
 	"simpleClaw/internal/entities"
+	infraSQL "simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/infra/sql/models"
 )
+
+func captureStorageLogger(t *testing.T) (*strings.Builder, func()) {
+	t.Helper()
+
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+
+	return &buf, func() {
+		slog.SetDefault(prev)
+	}
+}
 
 func TestStorageCreate_AllowsNilServerID(t *testing.T) {
 	t.Parallel()
@@ -234,6 +250,22 @@ func TestStorageUpdateRuntimePersistsLifecycleFields(t *testing.T) {
 
 	if got.LastError != "" {
 		t.Fatalf("LastError = %q, want empty string", got.LastError)
+	}
+}
+
+func TestStorageGetNextReconcilePendingWhenEmptyDoesNotLogIdlePoll(t *testing.T) {
+	db := newTestDB(t)
+	store := NewStorage(db)
+	logBuf, restore := captureStorageLogger(t)
+	defer restore()
+
+	_, err := store.GetNextReconcilePending(context.Background())
+	if !errors.Is(err, infraSQL.ErrNotFound) {
+		t.Fatalf("GetNextReconcilePending() error = %v, want ErrNotFound", err)
+	}
+
+	if strings.TrimSpace(logBuf.String()) != "" {
+		t.Fatalf("expected no idle poll logs, got %q", logBuf.String())
 	}
 }
 

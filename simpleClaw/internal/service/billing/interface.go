@@ -31,6 +31,10 @@ type bootstrapClawReader interface {
 	GetByUserID(ctx context.Context, userID uuid.UUID) ([]entities.Claw, error)
 }
 
+type bootstrapManagedBotReader interface {
+	GetLatestManagedBotByClawID(ctx context.Context, userID, clawID uuid.UUID) (entities.TelegramManagedBot, error)
+}
+
 type balanceEntryStorage interface {
 	ListByUserID(
 		ctx context.Context,

@@ -25,6 +25,10 @@ func classifySimpleClawActionFlow(method, path string) (string, string) {
 		if method == "POST" {
 			return "usage.webhook.receive", "billing_usage"
 		}
+	case "/api/telegram/manager/webhook":
+		if method == "POST" {
+			return "telegram.manager.webhook.receive", "telegram_manager"
+		}
 	}
 
 	if strings.HasPrefix(path, "/api/auth/") {
@@ -46,6 +50,15 @@ func classifySimpleClawActionFlow(method, path string) (string, string) {
 			return "integration.list", "account_integration"
 		case "POST":
 			return "integration.connect", "account_integration"
+		}
+	}
+
+	if strings.HasPrefix(path, "/api/me/telegram/manager/") || path == "/api/me/telegram/manager/link" {
+		switch method {
+		case "POST":
+			return "telegram.manager.link.create", "telegram_manager"
+		case "GET":
+			return "telegram.manager.link.get", "telegram_manager"
 		}
 	}
 

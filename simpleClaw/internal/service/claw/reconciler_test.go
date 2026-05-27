@@ -2,12 +2,14 @@ package claw
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/infra/hosting"
+	"simpleClaw/internal/infra/sql"
 )
 
 func TestProcessNextReconcileMarksRunningRuntimeAsRecovered(t *testing.T) {
@@ -228,5 +230,33 @@ func TestProcessNextReconcileRecoversRestartOperationToRunning(t *testing.T) {
 	op := operationStorage.operations[opID]
 	if op.Status != entities.ClawLifecycleOperationStatusSucceeded {
 		t.Fatalf("operation status = %q, want %q", op.Status, entities.ClawLifecycleOperationStatusSucceeded)
+	}
+}
+
+func TestProcessNextReconcileWhenQueueIsEmptyDoesNotLogIdlePoll(t *testing.T) {
+	logBuf, restore := captureDefaultLogger(t)
+	defer restore()
+
+	svc := NewClaw(
+		&workerTestClawStorage{claws: map[uuid.UUID]entities.Claw{}},
+		&workerTestOperationStorage{
+			operations: map[uuid.UUID]entities.ClawLifecycleOperation{},
+		},
+		&workerTestChannelStorage{},
+		&workerTestUserStorage{},
+		&workerTestServerStorage{},
+		&workerTestHosting{},
+		&workerTestKeys{},
+		"",
+		GmailWatchConfig{},
+	)
+
+	err := svc.ProcessNextReconcile(context.Background())
+	if !errors.Is(err, sql.ErrNotFound) {
+		t.Fatalf("ProcessNextReconcile() error = %v, want ErrNotFound", err)
+	}
+
+	if got := logBuf.String(); got != "" {
+		t.Fatalf("expected no idle poll logs, got %q", got)
 	}
 }

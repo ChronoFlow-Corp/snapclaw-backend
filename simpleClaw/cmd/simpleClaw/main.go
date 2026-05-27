@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -37,13 +36,16 @@ import (
 	"simpleClaw/internal/infra/storages/claws"
 	"simpleClaw/internal/infra/storages/integrations"
 	"simpleClaw/internal/infra/storages/servers"
+	telegrammanagerstorage "simpleClaw/internal/infra/storages/telegrammanager"
 	"simpleClaw/internal/infra/storages/users"
+	telegraminfra "simpleClaw/internal/infra/telegram"
 	billingservice "simpleClaw/internal/service/billing"
 	"simpleClaw/internal/service/claw"
 	clawcapabilityservice "simpleClaw/internal/service/clawcapability"
 	integrationservice "simpleClaw/internal/service/integrations"
 	"simpleClaw/internal/service/integrations/googleoauth"
 	serverservice "simpleClaw/internal/service/server"
+	telegrammanagerservice "simpleClaw/internal/service/telegrammanager"
 	"simpleClaw/internal/service/user"
 
 	"github.com/go-chi/chi/v5"
@@ -82,7 +84,6 @@ func main() {
 
 	cfg := config.New()
 	logger := setupLogger(cfg.Environment)
-	fmt.Println(cfg.OpenRouter.APIToken)
 
 	shutdownTracing, err := observability.SetupTracing(
 		rootCtx,
@@ -121,7 +122,10 @@ func main() {
 
 	db, err := gorm.Open(
 		postgres.Open(cfg.Database.Dsn),
-		&gorm.Config{TranslateError: true},
+		&gorm.Config{
+			TranslateError: true,
+			Logger:         sql.NewGormLogger(os.Stdout),
+		},
 	)
 	if err != nil {
 		panic(err)
@@ -161,6 +165,7 @@ func main() {
 	plansStorage := plans.NewStorage(db)
 	subscriptionsStorage := subscriptions.NewStorage(db)
 	balanceEntriesStorage := balanceentries.NewStorage(db)
+	telegramManagerStorage := telegrammanagerstorage.NewStorage(db)
 
 	j := jwt.New(
 		[]byte(cfg.Auth.Jwt.AccessSecretPrivate),
@@ -193,9 +198,10 @@ func main() {
 		logger.Warn("openrouter is disabled; google oauth works, claw creation requires OPENROUTER_API_TOKEN")
 	}
 
-	hostingManager := hosting.NewManager(operationMetrics).WithRuntimeSecrets(hosting.RuntimeSecrets{
-		BraveAPIKey: cfg.Brave.APIKey,
-	})
+	hostingManager := hosting.NewManager(operationMetrics).
+		WithRuntimeSecrets(hosting.RuntimeSecrets{
+			BraveAPIKey: cfg.Brave.APIKey,
+		})
 	paymentManager := payment.NewYooKassa(
 		cfg.Environment,
 		cfg.Payment.Yookassa.StoreID,
@@ -252,7 +258,11 @@ func main() {
 			Endpoint:     oauth2google.Endpoint,
 		}),
 	})
-	clawCapabilitySvc := clawcapabilityservice.NewService(clawStorage, clawCapabilityStorage, integrationStorage)
+	clawCapabilitySvc := clawcapabilityservice.NewService(
+		clawStorage,
+		clawCapabilityStorage,
+		integrationStorage,
+	)
 	if err := serverService.SyncCapacities(context.Background()); err != nil {
 		logger.Error("failed to sync server capacities", slog.Any("err", err))
 	}
@@ -273,6 +283,7 @@ func main() {
 		operationMetrics,
 	).WithBraveAPIKey(cfg.Brave.APIKey).WithCapabilityDependencies(clawCapabilityStorage, integrationStorage)
 	billingSvc.WithBootstrapClawReader(clawService)
+	billingSvc.WithBootstrapManagedBotReader(telegramManagerStorage)
 	go clawService.RunLifecycleWorker(rootCtx, 0)
 	go clawService.RunReconciler(rootCtx, 0)
 	if cfg.Hosting.ContainerManager.RuntimeSync.Enabled {
@@ -295,6 +306,41 @@ func main() {
 	)
 	clawController := controllers.NewClaw(clawService, clawCapabilitySvc, j)
 	serverController := controllers.NewServer(serverService, uService, j)
+	var telegramManagerController *controllers.TelegramManager
+	var telegramManagerSvc *telegrammanagerservice.Service
+	if cfg.TelegramManager.Enabled {
+		telegramClient := telegraminfra.New(
+			cfg.TelegramManager.BaseURL,
+			cfg.TelegramManager.BotToken,
+			cfg.TelegramManager.Timeout,
+		)
+		telegramManagerSvc = telegrammanagerservice.New(
+			telegramManagerStorage,
+			channelsStorage,
+			telegramClient,
+			telegrammanagerservice.Options{
+				ManagerUsername: cfg.TelegramManager.ManagerUsername,
+				LinkTTL:         10 * time.Minute,
+			},
+		)
+		telegramManagerController = controllers.NewTelegramManager(
+			telegramManagerSvc,
+			j,
+			cfg.TelegramManager.WebhookSecret,
+		)
+
+		if cfg.TelegramManager.Mode == "polling" {
+			go func() {
+				err := telegramManagerSvc.RunPolling(rootCtx, telegrammanagerservice.PollingOptions{
+					TimeoutSeconds: 30,
+					AllowedUpdates: []string{"message", "managed_bot"},
+				})
+				if err != nil && err != context.Canceled {
+					logger.Error("telegram manager polling stopped", slog.Any("err", err))
+				}
+			}()
+		}
+	}
 	billingController := controllers.NewBilling(
 		billingSvc,
 		uService,
@@ -325,6 +371,9 @@ func main() {
 	uController.Register(r)
 	clawController.Register(r)
 	serverController.Register(r)
+	if telegramManagerController != nil {
+		telegramManagerController.Register(r)
+	}
 	billingController.Register(r)
 	proxyController.Register(r)
 

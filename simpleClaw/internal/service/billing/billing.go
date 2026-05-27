@@ -38,6 +38,7 @@ type Service struct {
 	payInfra      paymentInfra
 	usageAmounts  usageAmountConverter
 	bootstrapClaw bootstrapClawReader
+	bootstrapBot  bootstrapManagedBotReader
 	metrics       *observability.OperationMetrics
 }
 
@@ -88,6 +89,12 @@ func NewService(
 
 func (s *Service) WithBootstrapClawReader(reader bootstrapClawReader) *Service {
 	s.bootstrapClaw = reader
+
+	return s
+}
+
+func (s *Service) WithBootstrapManagedBotReader(reader bootstrapManagedBotReader) *Service {
+	s.bootstrapBot = reader
 
 	return s
 }
@@ -1266,7 +1273,27 @@ func (s *Service) GetBootstrap(
 		}
 	}
 
-	bootstrap.Onboarding = deriveBootstrapOnboarding(bootstrap.DashboardAllowed, selectBootstrapClaw(claws))
+	selectedClaw := selectBootstrapClaw(claws)
+
+	var managedBot *entities.TelegramManagedBot
+	if selectedClaw != nil && s.bootstrapBot != nil {
+		bot, botErr := s.bootstrapBot.GetLatestManagedBotByClawID(ctx, userID, selectedClaw.ID)
+		switch {
+		case botErr == nil:
+			managedBot = &bot
+		case errors.Is(botErr, sql.ErrNotFound):
+		default:
+			return result.Bootstrap{}, fmt.Errorf(
+				"%s: load managed bot user=%s claw=%s: %w",
+				op,
+				userID,
+				selectedClaw.ID,
+				botErr,
+			)
+		}
+	}
+
+	bootstrap.Onboarding = deriveBootstrapOnboarding(bootstrap.DashboardAllowed, selectedClaw, managedBot)
 
 	return bootstrap, nil
 }
@@ -1296,11 +1323,23 @@ func subscriptionAllowsDashboard(subscription entities.UserSubscription, now tim
 	}
 }
 
-func deriveBootstrapOnboarding(dashboardAllowed bool, cl *entities.Claw) result.BootstrapOnboarding {
-	if !dashboardAllowed || cl == nil {
+func deriveBootstrapOnboarding(
+	dashboardAllowed bool,
+	cl *entities.Claw,
+	managedBot *entities.TelegramManagedBot,
+) result.BootstrapOnboarding {
+	if cl == nil {
 		return result.BootstrapOnboarding{
 			Required: true,
 			Step:     result.OnboardingStepSubscriptionRequired,
+		}
+	}
+
+	if !dashboardAllowed {
+		return result.BootstrapOnboarding{
+			Required: true,
+			Step:     result.OnboardingStepSubscriptionRequired,
+			ClawID:   &cl.ID,
 		}
 	}
 
@@ -1309,6 +1348,41 @@ func deriveBootstrapOnboarding(dashboardAllowed bool, cl *entities.Claw) result.
 			Required: false,
 			Step:     result.OnboardingStepDashboardReady,
 			ClawID:   &cl.ID,
+		}
+	}
+
+	if managedBot != nil {
+		payload := bootstrapTelegramManager(managedBot)
+
+		switch managedBot.Status {
+		case entities.TelegramManagedBotStatusPendingLink:
+			return result.BootstrapOnboarding{
+				Required:        true,
+				Step:            result.OnboardingStepTelegramManagerLink,
+				ClawID:          &cl.ID,
+				TelegramManager: payload,
+			}
+		case entities.TelegramManagedBotStatusLinked, entities.TelegramManagedBotStatusWaitingCreation:
+			return result.BootstrapOnboarding{
+				Required:        true,
+				Step:            result.OnboardingStepTelegramManagerProvisioning,
+				ClawID:          &cl.ID,
+				TelegramManager: payload,
+			}
+		case entities.TelegramManagedBotStatusFailed:
+			return result.BootstrapOnboarding{
+				Required:        true,
+				Step:            result.OnboardingStepTelegramManualConnect,
+				ClawID:          &cl.ID,
+				TelegramManager: payload,
+			}
+		case entities.TelegramManagedBotStatusReady:
+			return result.BootstrapOnboarding{
+				Required:        false,
+				Step:            result.OnboardingStepDashboardReady,
+				ClawID:          &cl.ID,
+				TelegramManager: payload,
+			}
 		}
 	}
 
@@ -1325,6 +1399,29 @@ func deriveBootstrapOnboarding(dashboardAllowed bool, cl *entities.Claw) result.
 		Step:     result.OnboardingStepTelegramChoice,
 		ClawID:   &cl.ID,
 	}
+}
+
+func bootstrapTelegramManager(managedBot *entities.TelegramManagedBot) *result.BootstrapTelegramManager {
+	if managedBot == nil {
+		return nil
+	}
+
+	payload := &result.BootstrapTelegramManager{
+		ID:          managedBot.ID,
+		Status:      string(managedBot.Status),
+		DeepLinkURL: managedBot.DeepLinkURL,
+		LastError:   managedBot.LastError,
+	}
+	if !managedBot.LinkExpiresAt.IsZero() {
+		linkExpiresAt := managedBot.LinkExpiresAt
+		payload.LinkExpiresAt = &linkExpiresAt
+	}
+	if managedBot.ChannelID != uuid.Nil {
+		channelID := managedBot.ChannelID
+		payload.ChannelID = &channelID
+	}
+
+	return payload
 }
 
 func selectBootstrapClaw(claws []entities.Claw) *entities.Claw {

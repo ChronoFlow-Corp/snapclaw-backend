@@ -3,8 +3,11 @@ package user
 import (
 	"strings"
 
+	"simpleClaw/internal/entities"
 	"simpleClaw/internal/entities/channels"
 	"simpleClaw/internal/service/user/commands"
+
+	"github.com/google/uuid"
 )
 
 func addTgCfg(cm commands.TelegramChannel) channels.TelegramConfig {
@@ -69,4 +72,15 @@ func containsAllowAll(values []string) bool {
 	}
 
 	return false
+}
+
+func NewTelegramChannel(name string, cm commands.TelegramChannel, userID uuid.UUID) entities.Channel {
+	cfg := addTgCfg(cm)
+
+	return entities.NewChannel(
+		entities.ChannelTelegramType,
+		name,
+		entities.ClawChannels{Telegram: &cfg},
+		userID,
+	)
 }

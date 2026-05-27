@@ -290,18 +290,6 @@ func (s *Storage) GetBySystemID(ctx context.Context, id uuid.UUID) (entities.Cla
 func (s *Storage) GetNextReconcilePending(ctx context.Context) (entities.Claw, error) {
 	const op = "storages.Claws.GetNextReconcilePending"
 
-	ctx, _, finish := observability.StartOperation(
-		ctx,
-		slog.Default(),
-		s.metrics,
-		"storage.claws",
-		"storage.claw.get_next_reconcile_pending",
-		"claw_lifecycle",
-	)
-
-	var err error
-	defer func() { finish(err) }()
-
 	clDB, err := gorm.G[models.Claw](s.db).
 		Where("lifecycle_status = ?", entities.ClawLifecycleStatusReconcilePending).
 		Order("updated_at ASC").

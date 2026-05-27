@@ -27,6 +27,7 @@ import (
 	"simpleClaw/internal/entities"
 	entitychannels "simpleClaw/internal/entities/channels"
 	"simpleClaw/internal/infra/sql"
+	telegraminfra "simpleClaw/internal/infra/telegram"
 	billingservice "simpleClaw/internal/service/billing"
 	billingcommands "simpleClaw/internal/service/billing/commands"
 	billingresult "simpleClaw/internal/service/billing/result"
@@ -36,6 +37,7 @@ import (
 	integrationservice "simpleClaw/internal/service/integrations"
 	"simpleClaw/internal/service/integrations/googleoauth"
 	servercommands "simpleClaw/internal/service/server/commands"
+	telegrammanagerservice "simpleClaw/internal/service/telegrammanager"
 	usercommands "simpleClaw/internal/service/user/commands"
 )
 
@@ -53,6 +55,8 @@ type testEnv struct {
 	clawCapabilityService   *fakeClawCapabilityService
 	serverService           *fakeServerService
 	billingService          *fakeBillingService
+	telegramManagerService  *fakeTelegramManagerService
+	telegramWebhookSecret   string
 }
 
 func TestRoutesIntegration(t *testing.T) {
@@ -352,6 +356,177 @@ func TestRoutesIntegration(t *testing.T) {
 
 		if got := rr.Header().Get("Location"); got != "http://example.com/onboard/google?integration_oauth=success" {
 			t.Fatalf("location = %q", got)
+		}
+	})
+
+	t.Run("POST /api/me/telegram/manager/link", func(t *testing.T) {
+		env := newTestEnv(t)
+		clawID := uuid.New()
+
+		rr := env.request(t, http.MethodPost, "/api/me/telegram/manager/link", map[string]any{
+			"claw_id": clawID.String(),
+		}, accessCookie(env.accessToken))
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+
+		var payload struct {
+			ID          string `json:"id"`
+			Status      string `json:"status"`
+			DeepLinkURL string `json:"deepLinkUrl"`
+		}
+		decodeJSON(t, rr, &payload)
+
+		if payload.ID == "" {
+			t.Fatal("expected non-empty id")
+		}
+
+		if payload.Status != "pending_link" {
+			t.Fatalf("status = %q", payload.Status)
+		}
+
+		if !strings.Contains(payload.DeepLinkURL, "https://t.me/") {
+			t.Fatalf("deep link = %q", payload.DeepLinkURL)
+		}
+
+		item := env.telegramManagerService.items[uuid.MustParse(payload.ID)]
+		if item.ClawID != clawID {
+			t.Fatalf("claw id = %s, want %s", item.ClawID, clawID)
+		}
+	})
+
+	t.Run("POST /api/me/telegram/manager/link rejects invalid claw id", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		rr := env.request(t, http.MethodPost, "/api/me/telegram/manager/link", map[string]any{
+			"claw_id": "invalid",
+		}, accessCookie(env.accessToken))
+
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+	})
+
+	t.Run("POST /api/telegram/manager/webhook rejects invalid secret", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		rr := env.requestWithHeaders(
+			t,
+			http.MethodPost,
+			"/api/telegram/manager/webhook",
+			map[string]any{"update_id": 1},
+			map[string]string{"X-Telegram-Bot-Api-Secret-Token": "wrong-secret"},
+		)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("unexpected status: %d", rr.Code)
+		}
+	})
+
+	t.Run("telegram manager webhook flow updates status to ready", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		createRR := env.request(t, http.MethodPost, "/api/me/telegram/manager/link", map[string]any{
+			"claw_id": uuid.New().String(),
+		}, accessCookie(env.accessToken))
+		if createRR.Code != http.StatusOK {
+			t.Fatalf("create status = %d", createRR.Code)
+		}
+
+		var createPayload struct {
+			ID string `json:"id"`
+		}
+		decodeJSON(t, createRR, &createPayload)
+
+		startRR := env.requestWithHeaders(
+			t,
+			http.MethodPost,
+			"/api/telegram/manager/webhook",
+			map[string]any{
+				"update_id": 1,
+				"message": map[string]any{
+					"text": "/start code-1",
+					"chat": map[string]any{"id": 2002},
+					"from": map[string]any{"id": 1001, "username": "snapclaw_user"},
+				},
+			},
+			map[string]string{"X-Telegram-Bot-Api-Secret-Token": env.telegramWebhookSecret},
+		)
+		if startRR.Code != http.StatusOK {
+			t.Fatalf("start webhook status = %d", startRR.Code)
+		}
+
+		linkedRR := env.request(
+			t,
+			http.MethodGet,
+			"/api/me/telegram/manager/link/"+createPayload.ID,
+			nil,
+			accessCookie(env.accessToken),
+		)
+		if linkedRR.Code != http.StatusOK {
+			t.Fatalf("linked status route code = %d", linkedRR.Code)
+		}
+
+		var linkedPayload struct {
+			Status string `json:"status"`
+		}
+		decodeJSON(t, linkedRR, &linkedPayload)
+
+		if linkedPayload.Status != "linked" {
+			t.Fatalf("linked status = %q", linkedPayload.Status)
+		}
+
+		managedRR := env.requestWithHeaders(
+			t,
+			http.MethodPost,
+			"/api/telegram/manager/webhook",
+			map[string]any{
+				"update_id": 2,
+				"managed_bot": map[string]any{
+					"user": map[string]any{"id": 1001, "username": "snapclaw_user"},
+					"bot": map[string]any{
+						"id":         3003,
+						"is_bot":     true,
+						"username":   "snapclaw_helper_bot",
+						"first_name": "Snapclaw Helper",
+					},
+				},
+			},
+			map[string]string{"X-Telegram-Bot-Api-Secret-Token": env.telegramWebhookSecret},
+		)
+		if managedRR.Code != http.StatusOK {
+			t.Fatalf("managed webhook status = %d", managedRR.Code)
+		}
+
+		statusRR := env.request(
+			t,
+			http.MethodGet,
+			"/api/me/telegram/manager/link/"+createPayload.ID,
+			nil,
+			accessCookie(env.accessToken),
+		)
+		if statusRR.Code != http.StatusOK {
+			t.Fatalf("status route code = %d", statusRR.Code)
+		}
+
+		var statusPayload struct {
+			ID        string `json:"id"`
+			Status    string `json:"status"`
+			ChannelID string `json:"channelId"`
+		}
+		decodeJSON(t, statusRR, &statusPayload)
+
+		if statusPayload.ID != createPayload.ID {
+			t.Fatalf("id = %q, want %q", statusPayload.ID, createPayload.ID)
+		}
+
+		if statusPayload.Status != "ready" {
+			t.Fatalf("status = %q", statusPayload.Status)
+		}
+
+		if statusPayload.ChannelID == "" {
+			t.Fatal("expected non-empty channel id")
 		}
 	})
 
@@ -1506,12 +1681,15 @@ func newTestEnvWithRole(t *testing.T, role string) *testEnv {
 	ccService := newFakeClawCapabilityService()
 	sService := newFakeServerService()
 	bService := newFakeBillingService(user.ID)
+	tmService := newFakeTelegramManagerService()
 	openRouterWebhookSecret := "test-openrouter-webhook-secret"
+	telegramWebhookSecret := "test-telegram-webhook-secret"
 
 	api := chi.NewRouter()
 	controllers.NewUser(config.EnvDevelopment, uService, iService, gOAuthService, j, "http://example.com").Register(api)
 	controllers.NewClaw(cService, ccService, j).Register(api)
 	controllers.NewServer(sService, uService, j).Register(api)
+	controllers.NewTelegramManager(tmService, j, telegramWebhookSecret).Register(api)
 	controllers.NewBilling(
 		bService,
 		uService,
@@ -1538,6 +1716,8 @@ func newTestEnvWithRole(t *testing.T, role string) *testEnv {
 		clawCapabilityService:   ccService,
 		serverService:           sService,
 		billingService:          bService,
+		telegramManagerService:  tmService,
+		telegramWebhookSecret:   telegramWebhookSecret,
 	}
 }
 
@@ -1567,6 +1747,16 @@ func (e *testEnv) request(
 	body any,
 	cookies ...*http.Cookie,
 ) *httptest.ResponseRecorder {
+	return e.requestWithHeaders(t, method, path, body, nil, cookies...)
+}
+
+func (e *testEnv) requestWithHeaders(
+	t *testing.T,
+	method, path string,
+	body any,
+	headers map[string]string,
+	cookies ...*http.Cookie,
+) *httptest.ResponseRecorder {
 	t.Helper()
 
 	var (
@@ -1585,6 +1775,10 @@ func (e *testEnv) request(
 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+
+	for key, value := range headers {
+		req.Header.Set(key, value)
 	}
 
 	for _, c := range cookies {
@@ -1644,6 +1838,66 @@ type fakeUserService struct {
 	refreshErr     error
 	logoutCalls    []usercommands.Logout
 	channelOrder   []uuid.UUID
+}
+
+type fakeTelegramManagerService struct {
+	items map[uuid.UUID]entities.TelegramManagedBot
+}
+
+func newFakeTelegramManagerService() *fakeTelegramManagerService {
+	return &fakeTelegramManagerService{
+		items: map[uuid.UUID]entities.TelegramManagedBot{},
+	}
+}
+
+func (s *fakeTelegramManagerService) CreateLink(
+	_ context.Context,
+	cmd telegrammanagerservice.CreateLinkCommand,
+) (telegrammanagerservice.CreateLinkResult, error) {
+	id := uuid.New()
+	item := entities.TelegramManagedBot{
+		ID:        id,
+		UserID:    cmd.UserID,
+		ClawID:    cmd.ClawID,
+		Status:    entities.TelegramManagedBotStatusPendingLink,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	s.items[id] = item
+
+	return telegrammanagerservice.CreateLinkResult{
+		ManagedBot:  item,
+		DeepLinkURL: "https://t.me/simpleclaw_manager_bot?start=code-1",
+	}, nil
+}
+
+func (s *fakeTelegramManagerService) GetManagedBot(
+	_ context.Context,
+	id uuid.UUID,
+	userID uuid.UUID,
+) (entities.TelegramManagedBot, error) {
+	item, ok := s.items[id]
+	if !ok || item.UserID != userID {
+		return entities.TelegramManagedBot{}, sql.ErrNotFound
+	}
+
+	return item, nil
+}
+
+func (s *fakeTelegramManagerService) HandleUpdate(_ context.Context, update telegraminfra.Update) error {
+	for id, item := range s.items {
+		switch {
+		case update.Message != nil:
+			item.Status = entities.TelegramManagedBotStatusLinked
+		case update.ManagedBot != nil:
+			item.Status = entities.TelegramManagedBotStatusReady
+			item.ChannelID = uuid.New()
+		}
+		item.UpdatedAt = time.Now().UTC()
+		s.items[id] = item
+	}
+
+	return nil
 }
 
 func newFakeUserService(

@@ -758,6 +758,19 @@ func bootstrapResponse(bootstrap result.Bootstrap) dto.BootstrapResponse {
 		resp.Onboarding.ClawID = bootstrap.Onboarding.ClawID.String()
 	}
 
+	if bootstrap.Onboarding.TelegramManager != nil {
+		resp.Onboarding.TelegramManager = &dto.BootstrapTelegramManagerDTO{
+			ID:            bootstrap.Onboarding.TelegramManager.ID.String(),
+			Status:        bootstrap.Onboarding.TelegramManager.Status,
+			DeepLinkURL:   bootstrap.Onboarding.TelegramManager.DeepLinkURL,
+			LinkExpiresAt: bootstrap.Onboarding.TelegramManager.LinkExpiresAt,
+			LastError:     bootstrap.Onboarding.TelegramManager.LastError,
+		}
+		if bootstrap.Onboarding.TelegramManager.ChannelID != nil {
+			resp.Onboarding.TelegramManager.ChannelID = bootstrap.Onboarding.TelegramManager.ChannelID.String()
+		}
+	}
+
 	return resp
 }
 

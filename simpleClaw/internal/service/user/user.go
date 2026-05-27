@@ -252,13 +252,7 @@ func (s *Service) AddChannel(
 
 	switch {
 	case cm.Telegram != nil:
-		cfg := addTgCfg(*cm.Telegram)
-		ch = entities.NewChannel(
-			entities.ChannelTelegramType,
-			cm.Name,
-			entities.ClawChannels{Telegram: &cfg},
-			cm.UserID,
-		)
+		ch = NewTelegramChannel(cm.Name, *cm.Telegram, cm.UserID)
 	default:
 		return entities.Channel{}, ErrChannelUnsupported
 	}
@@ -311,13 +305,7 @@ func (s *Service) UpdateChannel(ctx context.Context, cm commands.UpdateChannel) 
 
 	switch {
 	case cm.Telegram != nil:
-		cfg := addTgCfg(*cm.Telegram)
-		ch = entities.NewChannel(
-			entities.ChannelTelegramType,
-			cm.Name,
-			entities.ClawChannels{Telegram: &cfg},
-			cm.UserID,
-		)
+		ch = NewTelegramChannel(cm.Name, *cm.Telegram, cm.UserID)
 	default:
 		return ErrChannelUnsupported
 	}

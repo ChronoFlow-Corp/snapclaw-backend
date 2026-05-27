@@ -61,21 +61,9 @@ func (s *Storage) Create(ctx context.Context, op entities.ClawLifecycleOperation
 func (s *Storage) LockNextRunnable(ctx context.Context, now time.Time) (entities.ClawLifecycleOperation, error) {
 	const operation = "storages.ClawOperations.LockNextRunnable"
 
-	ctx, _, finish := observability.StartOperation(
-		ctx,
-		slog.Default(),
-		s.metrics,
-		"storage.claw_operations",
-		"storage.claw_operation.lock_next_runnable",
-		"claw_lifecycle",
-	)
-
-	var err error
-	defer func() { finish(err) }()
-
 	var model models.ClawLifecycleOperation
 
-	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		query := tx.Model(&models.ClawLifecycleOperation{}).
 			Where(
 				"status = ? OR (status = ? AND next_retry_at IS NOT NULL AND next_retry_at <= ?)",
