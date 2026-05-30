@@ -107,7 +107,7 @@ func subscriptionReturnURL(base string, subscriptionID uuid.UUID) (string, error
 	}
 
 	query := parsed.Query()
-	query.Set("subscription_id", subscriptionID.String())
+	query.Set("checkout", subscriptionID.String())
 	parsed.RawQuery = query.Encode()
 
 	return parsed.String(), nil
