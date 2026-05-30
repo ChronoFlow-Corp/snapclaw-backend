@@ -772,7 +772,7 @@ func TestRoutesIntegration(t *testing.T) {
 		if payload.ConfirmationURL == "" {
 			t.Fatal("expected confirmation_url")
 		}
-		if !strings.Contains(payload.ReturnURL, "subscription_id="+payload.SubscriptionID) {
+		if !strings.Contains(payload.ReturnURL, "checkout="+payload.SubscriptionID) {
 			t.Fatalf("unexpected return_url: %s", payload.ReturnURL)
 		}
 		if location := rr.Header().Get("Location"); location != "" {
@@ -2568,7 +2568,7 @@ func (s *fakeBillingService) Subscribe(
 		PaymentID:       "pay_" + subscription.ID.String(),
 		Status:          subscription.Status,
 		ConfirmationURL: "http://example.com/checkout/" + subscription.ID.String(),
-		ReturnURL:       cm.ReturnURL + "?subscription_id=" + subscription.ID.String(),
+		ReturnURL:       cm.ReturnURL + "?checkout=" + subscription.ID.String(),
 	}, nil
 }
 

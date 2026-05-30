@@ -785,7 +785,7 @@ func subscriptionReturnURLBase(frontendURL string) string {
 		return ""
 	}
 
-	parsed.Path = path.Join(parsed.Path, "onboard", "payment-result")
+	parsed.Path = path.Join(parsed.Path, "onboard")
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 

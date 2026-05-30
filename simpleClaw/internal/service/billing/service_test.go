@@ -123,8 +123,8 @@ func TestSubscribeCreatesPendingSubscription(t *testing.T) {
 		t.Fatal("Subscribe() subscriptionID = nil, want non-nil")
 	}
 
-	if !strings.Contains(checkout.ReturnURL, "subscription_id="+checkout.SubscriptionID.String()) {
-		t.Fatalf("Subscribe() returnURL = %q, want subscription_id query", checkout.ReturnURL)
+	if !strings.Contains(checkout.ReturnURL, "checkout="+checkout.SubscriptionID.String()) {
+		t.Fatalf("Subscribe() returnURL = %q, want checkout query", checkout.ReturnURL)
 	}
 
 	if paymentInfra.lastCreatePaymentReturnURL != checkout.ReturnURL {
