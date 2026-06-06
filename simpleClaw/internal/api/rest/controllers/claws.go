@@ -11,6 +11,7 @@ import (
 	"simpleClaw/internal/api/rest/dto"
 	"simpleClaw/internal/api/rest/middleware"
 	"simpleClaw/internal/entities"
+	entitychannels "simpleClaw/internal/entities/channels"
 	"simpleClaw/internal/service/claw/commands"
 	clawcapabilityservice "simpleClaw/internal/service/clawcapability"
 
@@ -484,6 +485,28 @@ func clawResponse(cl entities.Claw) dto.ClawResponse {
 		LifecycleStatus:    string(cl.LifecycleStatus),
 		CurrentOperationID: stringifyUUID(cl.CurrentOperationID),
 		LastError:          cl.LastError,
+		Telegram:           clawTelegramResponse(cl.Config),
+	}
+}
+
+func clawTelegramResponse(cfg entities.ClawConfig) dto.ClawTelegramResponse {
+	if cfg.Channels == nil || cfg.Channels.Telegram == nil || !cfg.Channels.Telegram.Enabled {
+		return dto.ClawTelegramResponse{
+			Connected: false,
+			Status:    "not_connected",
+		}
+	}
+
+	if cfg.Channels.Telegram.DmPolicy == entitychannels.DmPairing {
+		return dto.ClawTelegramResponse{
+			Connected: false,
+			Status:    "pending_confirmation",
+		}
+	}
+
+	return dto.ClawTelegramResponse{
+		Connected: true,
+		Status:    "connected",
 	}
 }
 

@@ -1057,14 +1057,36 @@ func TestRoutesIntegration(t *testing.T) {
 
 	t.Run("GET /api/claws", func(t *testing.T) {
 		env := newTestEnv(t)
-		env.clawService.seed(env.user.ID, "first")
-		env.clawService.seed(env.user.ID, "second")
+		first := env.clawService.seed(env.user.ID, "first")
+		second := env.clawService.seed(env.user.ID, "second")
+		third := env.clawService.seed(env.user.ID, "third")
+
+		first.Config.Channels = &entities.ClawChannels{
+			Telegram: &entitychannels.TelegramConfig{
+				Enabled:  true,
+				DmPolicy: entitychannels.DmPairing,
+				BotToken: "pairing-secret",
+			},
+		}
+		second.Config.Channels = &entities.ClawChannels{
+			Telegram: &entitychannels.TelegramConfig{
+				Enabled:   true,
+				DmPolicy:  entitychannels.DmAllowList,
+				BotToken:  "connected-secret",
+				AllowFrom: []string{"1001"},
+			},
+		}
+		env.clawService.claws[first.ID] = first
+		env.clawService.claws[second.ID] = second
+		env.clawService.claws[third.ID] = third
 
 		rr := env.request(t, http.MethodGet, "/api/claws", nil, accessCookie(env.accessToken))
 
 		if rr.Code != http.StatusOK {
 			t.Fatalf("unexpected status: %d", rr.Code)
 		}
+
+		rawBody := append([]byte(nil), rr.Body.Bytes()...)
 
 		var payload []struct {
 			ID              string `json:"id"`
@@ -1074,11 +1096,15 @@ func TestRoutesIntegration(t *testing.T) {
 			DesiredState    string `json:"desiredState"`
 			ObservedState   string `json:"observedState"`
 			LifecycleStatus string `json:"lifecycleStatus"`
+			Telegram        struct {
+				Connected bool   `json:"connected"`
+				Status    string `json:"status"`
+			} `json:"telegram"`
 		}
 		decodeJSON(t, rr, &payload)
 
-		if len(payload) != 2 {
-			t.Fatalf("expected 2 claws, got %d", len(payload))
+		if len(payload) != 3 {
+			t.Fatalf("expected 3 claws, got %d", len(payload))
 		}
 
 		if payload[0].DesiredState != string(entities.ClawDesiredStateStopped) {
@@ -1100,11 +1126,50 @@ func TestRoutesIntegration(t *testing.T) {
 		if payload[0].ResolvedModel != "openrouter/openai/gpt-5.4" {
 			t.Fatalf("unexpected resolved model: %s", payload[0].ResolvedModel)
 		}
+
+		expectedTelegram := map[string]struct {
+			Connected bool
+			Status    string
+		}{
+			"first": {
+				Connected: false,
+				Status:    "pending_confirmation",
+			},
+			"second": {
+				Connected: true,
+				Status:    "connected",
+			},
+			"third": {
+				Connected: false,
+				Status:    "not_connected",
+			},
+		}
+
+		for _, item := range payload {
+			want, ok := expectedTelegram[item.Name]
+			if !ok {
+				t.Fatalf("unexpected claw in payload: %s", item.Name)
+			}
+
+			if item.Telegram.Connected != want.Connected || item.Telegram.Status != want.Status {
+				t.Fatalf("telegram for %s = %+v, want %+v", item.Name, item.Telegram, want)
+			}
+		}
+
+		assertClawPayloadSanitized(t, rawBody)
 	})
 
 	t.Run("GET /api/claws/{id}", func(t *testing.T) {
 		env := newTestEnv(t)
 		cl := env.clawService.seed(env.user.ID, "single")
+		cl.Config.Channels = &entities.ClawChannels{
+			Telegram: &entitychannels.TelegramConfig{
+				Enabled:  true,
+				DmPolicy: entitychannels.DmPairing,
+				BotToken: "single-secret",
+			},
+		}
+		env.clawService.claws[cl.ID] = cl
 
 		rr := env.request(
 			t,
@@ -1118,6 +1183,8 @@ func TestRoutesIntegration(t *testing.T) {
 			t.Fatalf("unexpected status: %d", rr.Code)
 		}
 
+		rawBody := append([]byte(nil), rr.Body.Bytes()...)
+
 		var payload struct {
 			ID              string `json:"id"`
 			Name            string `json:"name"`
@@ -1126,6 +1193,10 @@ func TestRoutesIntegration(t *testing.T) {
 			DesiredState    string `json:"desiredState"`
 			ObservedState   string `json:"observedState"`
 			LifecycleStatus string `json:"lifecycleStatus"`
+			Telegram        struct {
+				Connected bool   `json:"connected"`
+				Status    string `json:"status"`
+			} `json:"telegram"`
 		}
 		decodeJSON(t, rr, &payload)
 
@@ -1156,6 +1227,16 @@ func TestRoutesIntegration(t *testing.T) {
 		if payload.ResolvedModel != "openrouter/openai/gpt-5.4" {
 			t.Fatalf("unexpected resolved model: %s", payload.ResolvedModel)
 		}
+
+		if payload.Telegram.Connected {
+			t.Fatalf("telegram connected = %v, want false", payload.Telegram.Connected)
+		}
+
+		if payload.Telegram.Status != "pending_confirmation" {
+			t.Fatalf("telegram status = %q, want %q", payload.Telegram.Status, "pending_confirmation")
+		}
+
+		assertClawPayloadSanitized(t, rawBody)
 	})
 
 	t.Run("POST /api/claws", func(t *testing.T) {
@@ -1797,6 +1878,77 @@ func decodeJSON(t *testing.T, rr *httptest.ResponseRecorder, dst any) {
 	err := json.NewDecoder(rr.Body).Decode(dst)
 	if err != nil {
 		t.Fatalf("decode response: %v; body=%s", err, rr.Body.String())
+	}
+}
+
+func assertClawPayloadSanitized(t *testing.T, body []byte) {
+	t.Helper()
+
+	forbidden := []string{
+		"botToken",
+		"token",
+		"secret",
+		"secretKey",
+		"config",
+		"allowFrom",
+	}
+
+	var payload any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal claw payload: %v", err)
+	}
+
+	assertNoForbiddenKeys(t, payload, forbidden)
+	assertTelegramShape(t, payload)
+}
+
+func assertNoForbiddenKeys(t *testing.T, value any, forbidden []string) {
+	t.Helper()
+
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, nested := range typed {
+			for _, blocked := range forbidden {
+				if key == blocked {
+					t.Fatalf("forbidden key %q present in payload", key)
+				}
+			}
+			assertNoForbiddenKeys(t, nested, forbidden)
+		}
+	case []any:
+		for _, item := range typed {
+			assertNoForbiddenKeys(t, item, forbidden)
+		}
+	}
+}
+
+func assertTelegramShape(t *testing.T, value any) {
+	t.Helper()
+
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, nested := range typed {
+			if key == "telegram" {
+				telegram, ok := nested.(map[string]any)
+				if !ok {
+					t.Fatalf("telegram payload has unexpected type %T", nested)
+				}
+				if len(telegram) != 2 {
+					t.Fatalf("telegram payload has %d keys, want 2", len(telegram))
+				}
+				if _, ok := telegram["connected"]; !ok {
+					t.Fatal("telegram.connected missing")
+				}
+				if _, ok := telegram["status"]; !ok {
+					t.Fatal("telegram.status missing")
+				}
+			}
+			assertTelegramShape(t, nested)
+		}
+	case []any:
+		for _, item := range typed {
+			assertTelegramShape(t, item)
+		}
 	}
 }
 

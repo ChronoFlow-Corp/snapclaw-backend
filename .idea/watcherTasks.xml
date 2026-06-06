@@ -65,7 +65,7 @@
       <option name="workingDir" value="" />
       <envs />
     </TaskOptions>
-    <TaskOptions isEnabled="true">
+    <TaskOptions isEnabled="false">
       <option name="arguments" value="-w $FilePath$" />
       <option name="checkSyntaxErrors" value="true" />
       <option name="description" />

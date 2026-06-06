@@ -49,15 +49,21 @@ type ApprovePairingRequest struct {
 }
 
 type ClawResponse struct {
-	ID                 string `json:"id"`
-	Name               string `json:"name"`
-	ModelKey           string `json:"modelKey,omitempty"`
-	ResolvedModel      string `json:"resolvedModel,omitempty"`
-	DesiredState       string `json:"desiredState"`
-	ObservedState      string `json:"observedState"`
-	LifecycleStatus    string `json:"lifecycleStatus"`
-	CurrentOperationID string `json:"currentOperationId,omitempty"`
-	LastError          string `json:"lastError,omitempty"`
+	ID                 string               `json:"id"`
+	Name               string               `json:"name"`
+	ModelKey           string               `json:"modelKey,omitempty"`
+	ResolvedModel      string               `json:"resolvedModel,omitempty"`
+	DesiredState       string               `json:"desiredState"`
+	ObservedState      string               `json:"observedState"`
+	LifecycleStatus    string               `json:"lifecycleStatus"`
+	CurrentOperationID string               `json:"currentOperationId,omitempty"`
+	LastError          string               `json:"lastError,omitempty"`
+	Telegram           ClawTelegramResponse `json:"telegram"`
+}
+
+type ClawTelegramResponse struct {
+	Connected bool   `json:"connected"`
+	Status    string `json:"status"`
 }
 
 type CreateClawResponse = ClawResponse

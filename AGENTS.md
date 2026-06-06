@@ -267,6 +267,7 @@
 - Успешная оплата не стартует `claw` автоматически.
 - Backend сам вычисляет bootstrap state через `/me/bootstrap`.
 - `start`, `stop`, `delete` — async endpoints; не ждите финального runtime outcome в HTTP handler.
+- `GET /claws` и `GET /claws/{id}` возвращают только sanitised dashboard-facing Telegram status в поле `telegram` (`connected`, `status`) и не должны раскрывать `Config`, bot tokens, allow-lists или другие secret-bearing channel fields.
 
 #### Billing / Plans
 
