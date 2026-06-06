@@ -292,7 +292,7 @@ func (s *Service) succeededBalance(ctx context.Context, p entities.Payment) erro
 		}
 		_, err = s.balance.ApplyCredit(ctx, entities.UserBalanceEntry{
 			ID:             uuid.New(),
-			UserID:         uuid.New(),
+			UserID:         p.UserID,
 			Type:           entryType,
 			AmountMinor:    amount,
 			PaymentID:      &p.ID,
