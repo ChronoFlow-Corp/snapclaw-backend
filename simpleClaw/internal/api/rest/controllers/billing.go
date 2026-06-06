@@ -573,7 +573,7 @@ func (b *Billing) TopUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, u, http.StatusSeeOther)
+	response.RespondOK(w, dto.TopUpResponse{ConfirmationURL: u})
 }
 
 func (b *Billing) GetSubscriptionCheckoutStatus(w http.ResponseWriter, r *http.Request) {

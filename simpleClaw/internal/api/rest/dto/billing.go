@@ -79,6 +79,10 @@ type TopUpRequest struct {
 	PaymentMethodID *uuid.UUID `json:"payment_method_id,omitempty"`
 }
 
+type TopUpResponse struct {
+	ConfirmationURL string `json:"confirmation_url"`
+}
+
 type ExpanseAnalyzeResponse struct {
 	Today   string `json:"today"`
 	Weekly  string `json:"weekly"`
