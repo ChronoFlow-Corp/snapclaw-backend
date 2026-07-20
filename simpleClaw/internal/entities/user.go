@@ -26,6 +26,7 @@ type User struct {
 	OpenRouterApiKey string
 	BalanceMinor     int64
 	Role             string
+	MarketingOptOut  bool
 	CreatedAt        time.Time
 }
 

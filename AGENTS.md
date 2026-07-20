@@ -5,7 +5,7 @@
 `snapclaw-backend` — backend-платформа для multi-tenant управления пользовательскими `claw`-инстансами OpenClaw.
 Репозиторий разделён на control plane, execution plane и общий контракт между ними:
 
-- `simpleClaw/` — внешний API и control plane. Здесь живут OAuth/JWT, пользователи, каналы, реестр execution-серверов, создание и async lifecycle `claw`, OpenRouter, billing, payment webhooks и Pub/Sub fan-out.
+- `simpleClaw/` — внешний API и control plane. Здесь живут OAuth/JWT, пользователи, каналы, реестр execution-серверов, создание и async lifecycle `claw`, OpenRouter, billing, payment webhooks, Pub/Sub fan-out и транзакционные/маркетинговые email.
 - `containerManager/` — execution plane. Этот сервис пишет runtime-конфиги, собирает Docker image OpenClaw, идемпотентно `ensure/start/stop/delete` runtime, держит runtime-state, делает approve/connect/archive/restore и принимает Gmail Pub/Sub fan-out.
 - `shared/` — общий контракт и инфраструктурные пакеты, которые используют оба сервиса: hosting API, JWT, observability, HTTP response helpers.
 
@@ -18,7 +18,8 @@
 - при `start` `simpleClaw` принимает lifecycle intent, ставит `claw` в `start_pending`, а background worker добирает `ensure/start` на `containerManager`;
 - пользователь оформляет подписку или пополняет баланс;
 - OpenRouter usage webhook списывает стоимость usage в user balance;
-- Gmail Pub/Sub webhook приходит в `simpleClaw`, а дальше fan-out'ится на execution-сервера.
+- Gmail Pub/Sub webhook приходит в `simpleClaw`, а дальше fan-out'ится на execution-сервера;
+- ключевые события аккаунта (welcome, активация Premium, пополнение баланса) уходят пользователю транзакционным письмом через durable email outbox.
 
 ## Как Читать Workspace
 
@@ -53,6 +54,7 @@
 - auth tokens: `shared/pkg/jwt`
 - external model/provider integration: OpenRouter
 - payment provider: YooKassa
+- email provider: Resend (опционально, gated `EMAIL_ENABLED`)
 - container runtime: Docker SDK
 - metrics/tracing: Prometheus-style metrics + tracing wrappers из `shared/pkg/observability`
 
@@ -76,7 +78,7 @@
 
 ### В `simpleClaw/internal/entities`
 
-- `User` — владелец claw, каналов, баланса, подписки и OpenRouter key linkage.
+- `User` — владелец claw, каналов, баланса, подписки, OpenRouter key linkage и marketing opt-out flag (`MarketingOptOut`).
 - `Session` — серверная refresh-session для JWT пары.
 - `Channel` — пользовательский канал интеграции. Активный user-facing сценарий сейчас Telegram.
 - `Claw` — верхнеуровневая доменная сущность пользовательского инстанса с owner, server binding, runtime record id, lifecycle state (`desired_state`, `observed_state`, `lifecycle_status`, `current_operation_id`, `last_error`), persisted onboarding completion flag и config.
@@ -91,6 +93,7 @@
 - `UserBalanceEntry` — ledger записи начислений/списаний баланса.
 - `Payment` — доменная модель YooKassa платежа и webhook payload.
 - `OpenRouterUsageEvent` — нормализованный usage event, из которого списывается стоимость в balance.
+- `OutboxEmail` — durable запись транзакционного/маркетингового письма в email outbox: recipient, subject, отрендеренные HTML/text, headers, category, delivery status, attempts и next-attempt schedule.
 
 ### В `containerManager/internal/entities`
 
@@ -191,6 +194,18 @@
 - `simpleClaw` хранит host URL, `proxy_url`, `secret_key`, статус и `max_claws`.
 - Capacity подтягивается из `containerManager /capacity`.
 - При выборе сервера для `start` worker учитывает статус и capacity.
+
+### 10. Транзакционные И Маркетинговые Email
+
+- Email — опциональная подсистема, целиком выключенная по умолчанию. Она поднимается только когда `EMAIL_ENABLED=true`; иначе `simpleClaw` логирует, что email отключён, и не регистрирует ни dispatcher, ни `/email/unsubscribe`.
+- Провайдер доставки — Resend через тонкий HTTP client `simpleClaw/internal/infra/email`.
+- Отправка идёт через durable outbox, а не inline: сервисы кладут письмо в таблицу `email_outbox` (`entities.OutboxEmail`), а background dispatcher (`service/email.RunDispatcher`) периодически забирает due-письма, шлёт их и помечает `sent`/`failed` с backoff-ретраями до `MaxAttempts`.
+- Idempotency: на каждое письмо в Resend уходит `Idempotency-Key` = outbox row id, чтобы ретрай после успешной отправки, но неудачного `MarkSent`, не задваивал доставку.
+- Enqueue сейчас best-effort и происходит после коммита бизнес-события: ошибка постановки в очередь только логируется и не роняет sign-in/оплату. Это осознанный trade-off, а не полноценный transactional outbox.
+- Категории писем: `welcome` (первый sign-in), `premium_granted` (переход подписки pending -> active), `top_up` (успешное пополнение), `support_reply` и `announcement` (маркетинг). `welcome`/`premium`/`top_up` подключаются к существующим user/billing flow через `WithNotifier` и не должны блокировать основной flow при ошибке.
+- Маркетинговые письма (`announcement`) уважают `User.MarketingOptOut` и несут RFC 8058 one-click unsubscribe headers, когда задан `EMAIL_PUBLIC_BASE_URL`.
+- Unsubscribe: `GET /email/unsubscribe` рендерит подтверждающую страницу (side-effect-free, чтобы mail-сканеры и prefetch'еры не отписывали пользователя), а `POST /email/unsubscribe` пишет opt-out и обслуживает как confirm-форму, так и RFC 8058 one-click. Токен — HMAC-SHA256 над user id, подписанный `EMAIL_UNSUBSCRIBE_SECRET`.
+- Dispatcher также throttled-prune'ит терминальные (`sent`/`failed`) строки старше retention, чтобы outbox не рос безгранично; pending-строки не трогаются.
 
 ## Важные Контракты И Ограничения
 
@@ -316,6 +331,8 @@
 | `/health` | `GET` | Liveness probe для proxy/controller process | нет | body нет |
 | `/pubsub` | `POST` | Ingress webhook для Gmail Pub/Sub fan-out на execution hosts | JSON body, ingress auth token в `Authorization` | нет |
 | `/telegram/manager/webhook` | `POST` | Ingress webhook для Telegram manager bot: `/start <code>` linking и `managed_bot` updates | header `X-Telegram-Bot-Api-Secret-Token`, Telegram update JSON | нет |
+| `/email/unsubscribe` | `GET` | Отрендерить confirm-страницу отписки от маркетинговых писем (side-effect-free); регистрируется только при `EMAIL_ENABLED=true` | query `token` | нет |
+| `/email/unsubscribe` | `POST` | Выполнить marketing opt-out; обслуживает confirm-форму и RFC 8058 one-click | `token` в query или form body | нет |
 
 ### `containerManager` execution-plane API
 
@@ -360,13 +377,13 @@
   - Composition root: config, DB, OAuth providers, observability, storages, services, controllers.
 
 - `simpleClaw/config`
-  - Runtime config `simpleClaw`: HTTP, DB, auth, OpenRouter, hosting, Gmail watch defaults, proxy, observability, payment.
+  - Runtime config `simpleClaw`: HTTP, DB, auth, OpenRouter, hosting, Gmail watch defaults, proxy, observability, payment, email.
 
 - `simpleClaw/internal/api/rest`
   - HTTP server lifecycle wrapper.
 
 - `simpleClaw/internal/api/rest/controllers`
-  - Transport layer для auth, me, claws, servers, billing, payment webhooks, OpenRouter webhook, pubsub proxy.
+  - Transport layer для auth, me, claws, servers, billing, payment webhooks, OpenRouter webhook, pubsub proxy и email unsubscribe.
 
 - `simpleClaw/internal/api/rest/dto`
   - Request/response DTO для claws, users, billing, payment methods, servers и webhook payloads.
@@ -389,6 +406,9 @@
 - `simpleClaw/internal/infra/payment`
   - YooKassa integration и mapping provider objects ↔ domain payment model.
 
+- `simpleClaw/internal/infra/email`
+  - Тонкий HTTP client Resend REST API: отправка одного письма (`Send`) с idempotency key и провайдерским message id.
+
 - `simpleClaw/internal/infra/telegram`
   - Минимальный Telegram Bot API client для manager bot flow: `getMe`, `getManagedBotToken`, `replaceManagedBotToken`, webhook DTO и `sendMessage`.
 
@@ -396,7 +416,7 @@
   - GORM bootstrap, migration helpers, DB-level common errors.
 
 - `simpleClaw/internal/infra/sql/models`
-  - GORM models для users, claws, servers, billing, payments, subscriptions и related tables, включая `telegram_account_links`, `telegram_webhook_updates` и `telegram_managed_bots`.
+  - GORM models для users, claws, servers, billing, payments, subscriptions и related tables, включая `telegram_account_links`, `telegram_webhook_updates`, `telegram_managed_bots` и `email_outbox`.
 
 - `simpleClaw/internal/infra/storages/channels`
   - Persistence для `Channel`.
@@ -428,6 +448,9 @@
 - `simpleClaw/internal/infra/storages/telegrammanager`
   - Persistence для Telegram account link records, webhook update idempotency и managed bot provisioning state.
 
+- `simpleClaw/internal/infra/storages/emailoutbox`
+  - Persistence для email outbox: enqueue, claim-due, mark sent/failed, prune терминальных строк.
+
 - `simpleClaw/internal/pkg/slctx`
   - Request-scoped `slog` logger helper.
 
@@ -457,6 +480,9 @@
 
 - `simpleClaw/internal/service/telegrammanager`
   - Control-plane orchestration для Telegram Managed Bots: deep-link creation, `/start` account linking, `managed_bot` webhook handling и materialization managed bot -> обычный Telegram `Channel`.
+
+- `simpleClaw/internal/service/email`
+  - Email domain: рендер шаблонов (welcome/premium/top-up/support/announcement), enqueue в outbox, background dispatcher с backoff-ретраями и prune, HMAC unsubscribe token sign/verify.
 
 ### `containerManager`
 
@@ -579,6 +605,13 @@
 - `simpleClaw/internal/infra/storages/servers`
 - `containerManager/internal/interface/rest/controllers/claws.go`
 
+Если задача про транзакционные/маркетинговые email:
+
+- `simpleClaw/internal/service/email`
+- `simpleClaw/internal/infra/storages/emailoutbox`
+- `simpleClaw/internal/infra/email`
+- `simpleClaw/internal/api/rest/controllers/email.go`
+
 ## Общие Правила Для Агентов
 
 - Всегда передавайте `context.Context` первым аргументом во всех IO/DB/network операциях.
@@ -590,6 +623,7 @@
 - Если меняете shared hosting contract, одновременно проверяйте оба сервиса.
 - Если меняете billing flow, проверяйте не только service/storage, но и webhook DTO, controllers и entity mapping.
 - Если меняете Gmail/PubSub flow, учитывайте ingress auth token, fan-out retry/backoff, dedup и downstream payload normalization.
+- Если добавляете новое письмо, идите через outbox (`entities.OutboxEmail` + `service/email`), не шлите inline: enqueue должен оставаться best-effort и не ронять основной business flow, а маркетинговые письма обязаны уважать `MarketingOptOut` и unsubscribe headers.
 
 ## Команды И Проверка
 
@@ -631,3 +665,4 @@ Compose stack:
 - Archive/restore остаются execution-level механизмом для runtime files и pairing state, но control plane теперь сознательно использует их как часть `start/stop/restart` lifecycle: archive целиком сохраняется в `simpleClaw`, а `openclaw.json` при restore всегда должен пересобираться из БД и не браться из сохранённого tar как source of truth.
 - Не привязывайте `OnboardingComplete` напрямую к текущему `openclaw.json`: approve state может жить в runtime files. Если archive runtime state потерян или недостоверен, backend обязан перевести `OnboardingComplete=false` даже если config в БД не менялся.
 - Если вносите изменения в OpenClaw config schema, проверьте и доменную сборку config в `simpleClaw`, и файловую запись/restore path в `containerManager`.
+- Email-подсистема опциональна и по умолчанию выключена (`EMAIL_ENABLED=false`). При включении `config.validate` требует минимум `RESEND_API_KEY`, `EMAIL_FROM_ADDRESS` и `EMAIL_UNSUBSCRIBE_SECRET`; dispatcher поднимается отдельной goroutine из composition root, а `email_outbox` создаётся GORM auto-migration, как и остальные `simpleClaw` таблицы.

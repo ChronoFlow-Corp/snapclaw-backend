@@ -20,8 +20,9 @@
 ### Dev defaults
 
 - `simpleClaw` derives local callback URLs from `DEV_HOST` and defaults it to `localhost`.
-- JWT RSA keys are generated automatically on first start into [`deploy/simpleClaw/keys`](/Users/kodokuus/work/go/snapclaw-backend/deploy/simpleClaw/keys).
+- JWT RSA keys are generated automatically on first start into [`deploy/simpleClaw/keys`](deploy/simpleClaw/keys).
 - OpenRouter is optional for local boot. Google OAuth works without it, but creating a `claw` still requires `OPENROUTER_API_TOKEN`.
+- Email notifications are disabled by default (`EMAIL_ENABLED=false`). To enable them, set `EMAIL_ENABLED=true` plus at least `RESEND_API_KEY`, `EMAIL_FROM_ADDRESS`, and `EMAIL_UNSUBSCRIBE_SECRET`; see `.env.example` for the full set.
 
 ### Observability
 

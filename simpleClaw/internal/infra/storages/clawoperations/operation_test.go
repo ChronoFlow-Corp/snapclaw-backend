@@ -312,6 +312,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 			open_router_key_id TEXT,
 			open_router_api_key TEXT,
 			balance_minor INTEGER NOT NULL DEFAULT 0,
+			marketing_opt_out INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME,
 			updated_at DATETIME
 		)`,

@@ -26,6 +26,11 @@ import (
 
 const defaultOpenRouterCostCurrency = "USD"
 
+type Notifier interface {
+	EnqueuePremiumGranted(ctx context.Context, userID uuid.UUID) error
+	EnqueueTopUpConfirmation(ctx context.Context, userID uuid.UUID, amountValue, amountCurrency string) error
+}
+
 type Service struct {
 	env           string
 	plans         planStorage
@@ -39,6 +44,7 @@ type Service struct {
 	usageAmounts  usageAmountConverter
 	bootstrapClaw bootstrapClawReader
 	bootstrapBot  bootstrapManagedBotReader
+	notifier      Notifier
 	metrics       *observability.OperationMetrics
 }
 
@@ -95,6 +101,14 @@ func (s *Service) WithBootstrapClawReader(reader bootstrapClawReader) *Service {
 
 func (s *Service) WithBootstrapManagedBotReader(reader bootstrapManagedBotReader) *Service {
 	s.bootstrapBot = reader
+
+	return s
+}
+
+// WithNotifier attaches an optional outbound-notification sink (e.g. email).
+// A nil notifier leaves notifications disabled.
+func (s *Service) WithNotifier(n Notifier) *Service {
+	s.notifier = n
 
 	return s
 }
@@ -777,7 +791,44 @@ func (s *Service) ApplySuccessfulTopUp(ctx context.Context, payment entities.Pay
 		)
 	}
 
+	s.notifyTopUp(ctx, payment)
+
 	return nil
+}
+
+func (s *Service) notifyTopUp(ctx context.Context, payment entities.Payment) {
+	if s.notifier == nil {
+		return
+	}
+
+	if err := s.notifier.EnqueueTopUpConfirmation(
+		ctx,
+		payment.UserID,
+		payment.Amount.Value,
+		payment.Amount.Currency,
+	); err != nil {
+		slog.Default().Warn(
+			"enqueue top-up email failed",
+			slog.String("payment_id", payment.ID),
+			slog.String("user_id", payment.UserID.String()),
+			slog.Any("err", err),
+		)
+	}
+}
+
+func (s *Service) notifyPremiumGranted(ctx context.Context, payment entities.Payment) {
+	if s.notifier == nil {
+		return
+	}
+
+	if err := s.notifier.EnqueuePremiumGranted(ctx, payment.UserID); err != nil {
+		slog.Default().Warn(
+			"enqueue premium email failed",
+			slog.String("payment_id", payment.ID),
+			slog.String("user_id", payment.UserID.String()),
+			slog.Any("err", err),
+		)
+	}
 }
 
 func (s *Service) ApplySuccessfulSubscriptionPayment(
@@ -963,6 +1014,11 @@ func (s *Service) ApplySuccessfulSubscriptionPayment(
 			err,
 		)
 	}
+
+	// Fires only here, on the pending -> active transition (first activation).
+	// A renewal on an already-active subscription takes the branch above and
+	// never reaches this line, so users are not re-emailed each billing cycle.
+	s.notifyPremiumGranted(ctx, payment)
 
 	return nil
 }
