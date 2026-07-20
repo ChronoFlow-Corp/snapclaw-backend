@@ -1015,6 +1015,9 @@ func (s *Service) ApplySuccessfulSubscriptionPayment(
 		)
 	}
 
+	// Fires only here, on the pending -> active transition (first activation).
+	// A renewal on an already-active subscription takes the branch above and
+	// never reaches this line, so users are not re-emailed each billing cycle.
 	s.notifyPremiumGranted(ctx, payment)
 
 	return nil

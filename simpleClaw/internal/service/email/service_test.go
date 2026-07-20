@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 )
 
 type fakeOutbox struct {
+	mu     sync.Mutex
 	items  map[uuid.UUID]*entities.OutboxEmail
 	sent   []uuid.UUID
 	failed []uuid.UUID
@@ -24,12 +26,18 @@ func newFakeOutbox() *fakeOutbox {
 }
 
 func (f *fakeOutbox) Enqueue(_ context.Context, m entities.OutboxEmail) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	cp := m
 	f.items[m.ID] = &cp
 	return nil
 }
 
 func (f *fakeOutbox) ClaimDue(_ context.Context, now time.Time, limit int) ([]entities.OutboxEmail, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	out := make([]entities.OutboxEmail, 0)
 	for _, m := range f.items {
 		if m.Status == entities.EmailStatusPending && !m.NextAttemptAt.After(now) {
@@ -43,6 +51,9 @@ func (f *fakeOutbox) ClaimDue(_ context.Context, now time.Time, limit int) ([]en
 }
 
 func (f *fakeOutbox) MarkSent(_ context.Context, id uuid.UUID, providerMessageID string, sentAt time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	m, ok := f.items[id]
 	if !ok {
 		return errors.New("not found")
@@ -55,6 +66,9 @@ func (f *fakeOutbox) MarkSent(_ context.Context, id uuid.UUID, providerMessageID
 }
 
 func (f *fakeOutbox) MarkFailed(_ context.Context, id uuid.UUID, attempts int, lastErr string, nextAttemptAt time.Time, status entities.EmailStatus) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	m, ok := f.items[id]
 	if !ok {
 		return errors.New("not found")
@@ -67,12 +81,31 @@ func (f *fakeOutbox) MarkFailed(_ context.Context, id uuid.UUID, attempts int, l
 	return nil
 }
 
+func (f *fakeOutbox) DeleteExpired(_ context.Context, before time.Time) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	var deleted int64
+	for id, m := range f.items {
+		terminal := m.Status == entities.EmailStatusSent || m.Status == entities.EmailStatusFailed
+		if terminal && m.UpdatedAt.Before(before) {
+			delete(f.items, id)
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
 type fakeSender struct {
+	mu       sync.Mutex
 	messages []infraemail.Message
 	err      error
 }
 
 func (f *fakeSender) Send(_ context.Context, msg infraemail.Message) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	f.messages = append(f.messages, msg)
 	if f.err != nil {
 		return "", f.err
@@ -135,7 +168,10 @@ func TestEnqueueAndDispatchWelcome(t *testing.T) {
 	if msg.ReplyTo != "support@snapclaw.ru" {
 		t.Errorf("unexpected ReplyTo: %q", msg.ReplyTo)
 	}
-	if !strings.Contains(msg.HTML, "Welcome to SnapClaw") {
+	if msg.IdempotencyKey == "" {
+		t.Error("expected an idempotency key on the outgoing message")
+	}
+	if !strings.Contains(msg.HTML, "Добро пожаловать в SnapClaw") {
 		t.Errorf("HTML missing welcome heading: %q", msg.HTML)
 	}
 	if !strings.Contains(msg.Text, "Ada") {
@@ -174,6 +210,61 @@ func TestDispatchRetriesOnSendError(t *testing.T) {
 	}
 	if !only.NextAttemptAt.After(time.Now()) {
 		t.Errorf("expected next attempt in the future for backoff")
+	}
+}
+
+func TestDispatchMarksFailedAtMaxAttempts(t *testing.T) {
+	outbox := newFakeOutbox()
+	sender := &fakeSender{err: errors.New("resend down")}
+	svc := newTestService(outbox, sender, &fakeUsers{})
+
+	id := uuid.New()
+	_ = outbox.Enqueue(context.Background(), entities.OutboxEmail{
+		ID:            id,
+		ToAddress:     "ada@example.com",
+		Status:        entities.EmailStatusPending,
+		MaxAttempts:   1,
+		NextAttemptAt: time.Now().Add(-time.Minute),
+	})
+
+	svc.dispatchBatch(context.Background())
+
+	got := outbox.items[id]
+	if got.Status != entities.EmailStatusFailed {
+		t.Errorf("expected status failed at max attempts, got %q", got.Status)
+	}
+	if got.Attempts != 1 {
+		t.Errorf("expected attempts=1, got %d", got.Attempts)
+	}
+	if len(sender.messages) != 1 {
+		t.Errorf("expected one send attempt, got %d", len(sender.messages))
+	}
+}
+
+func TestPruneDeletesOldTerminalRows(t *testing.T) {
+	outbox := newFakeOutbox()
+	svc := newTestService(outbox, &fakeSender{}, &fakeUsers{})
+
+	old := uuid.New()
+	_ = outbox.Enqueue(context.Background(), entities.OutboxEmail{
+		ID:        old,
+		Status:    entities.EmailStatusSent,
+		UpdatedAt: time.Now().Add(-90 * 24 * time.Hour),
+	})
+	fresh := uuid.New()
+	_ = outbox.Enqueue(context.Background(), entities.OutboxEmail{
+		ID:        fresh,
+		Status:    entities.EmailStatusPending,
+		UpdatedAt: time.Now(),
+	})
+
+	svc.prune(context.Background(), time.Now())
+
+	if _, ok := outbox.items[old]; ok {
+		t.Error("expected old terminal row to be pruned")
+	}
+	if _, ok := outbox.items[fresh]; !ok {
+		t.Error("expected pending row to be kept")
 	}
 }
 

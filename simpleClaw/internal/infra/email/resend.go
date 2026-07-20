@@ -26,6 +26,11 @@ type Message struct {
 	Text    string
 	ReplyTo string
 	Headers map[string]string
+	// IdempotencyKey lets Resend collapse retries of the same message into a
+	// single send. Keyed on the outbox row ID, it prevents duplicates both when
+	// MarkSent fails after a successful send and when more than one dispatcher
+	// replica claims the same row.
+	IdempotencyKey string
 }
 
 // Client is a thin HTTP client for the Resend REST API.
@@ -107,6 +112,10 @@ func (c *Client) Send(ctx context.Context, msg Message) (string, error) {
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+
+	if key := strings.TrimSpace(msg.IdempotencyKey); key != "" {
+		req.Header.Set("Idempotency-Key", key)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {

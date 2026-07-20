@@ -22,7 +22,7 @@ type layoutData struct {
 }
 
 const layoutHTML = `<!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -45,7 +45,7 @@ const layoutHTML = `<!doctype html>
 </td></tr>
 <tr><td style="padding:8px 32px 28px 32px;border-top:1px solid #f0f0f1;">
 {{if .FooterNote}}<p style="margin:14px 0 0 0;font-size:12px;line-height:1.5;color:#9ca3af;">{{.FooterNote}}</p>{{end}}
-{{if .ShowUnsubscribe}}<p style="margin:10px 0 0 0;font-size:12px;line-height:1.5;color:#9ca3af;">Don't want these updates? <a href="{{.UnsubscribeURL}}" style="color:#6b7280;">Unsubscribe</a>.</p>{{end}}
+{{if .ShowUnsubscribe}}<p style="margin:10px 0 0 0;font-size:12px;line-height:1.5;color:#9ca3af;">Не хотите получать такие письма? <a href="{{.UnsubscribeURL}}" style="color:#6b7280;">Отписаться</a>.</p>{{end}}
 </td></tr>
 </table>
 </td></tr>
@@ -105,7 +105,7 @@ func layoutText(d layoutData) string {
 	}
 
 	if d.ShowUnsubscribe {
-		b.WriteString("Unsubscribe: ")
+		b.WriteString("Отписаться: ")
 		b.WriteString(d.UnsubscribeURL)
 		b.WriteString("\n")
 	}
@@ -115,41 +115,36 @@ func layoutText(d layoutData) string {
 
 func (s *Service) renderWelcome(name string) (rendered, error) {
 	return s.render(entityWelcomeSubject, layoutData{
-		Preheader: "Your account is ready — here's how to get started.",
-		Heading:   "Welcome to SnapClaw 🐾",
+		Preheader: "Ваш аккаунт готов — рассказываем, с чего начать.",
+		Heading:   "Добро пожаловать в SnapClaw 🐾",
 		Paragraphs: []string{
-			"Hi " + name + ",",
-			"Welcome to SnapClaw! Your account is all set up and ready to go.",
-			"Here's what you can do right now:",
+			greeting(name),
+			"Рады, что вы с нами! Аккаунт создан и полностью готов к работе.",
+			"Вот с чего можно начать:",
 		},
 		Bullets: []string{
-			"[Create your first claw] — [one line on what a claw does]",
-			"[Connect it to Telegram] — [one line]",
-			"[Explore the dashboard] — manage everything in one place",
+			"Создайте свой первый claw",
+			"Подключите его к своему Telegram",
+			"Управляйте всем из личного кабинета",
 		},
-		CTALabel:   "Open my dashboard",
+		CTALabel:   "Открыть личный кабинет",
 		CTAURL:     s.appURL,
-		FooterNote: "You're receiving this because you signed up for SnapClaw. Questions? Just reply to this email.",
+		FooterNote: "Вы получили это письмо, потому что зарегистрировались в SnapClaw. Есть вопросы? Просто ответьте на это письмо.",
 	})
 }
 
 func (s *Service) renderPremiumGranted(name string) (rendered, error) {
 	return s.render(entityPremiumSubject, layoutData{
-		Preheader: "Premium is now active on your account.",
-		Heading:   "You've got SnapClaw Premium ✨",
+		Preheader: "Premium уже активен в вашем аккаунте.",
+		Heading:   "У вас теперь SnapClaw Premium ✨",
 		Paragraphs: []string{
-			"Hi " + name + ",",
-			"Good news — Premium is now active on your account. Nothing to pay, nothing to do.",
-			"What's unlocked:",
+			greeting(name),
+			"Отличные новости — Premium уже активен в вашем аккаунте. Ничего оплачивать или настраивать не нужно.",
+			"Загляните в личный кабинет, чтобы начать пользоваться всеми возможностями Premium.",
 		},
-		Bullets: []string{
-			"[Higher limits / more claws]",
-			"[Priority processing]",
-			"[Premium-only feature]",
-		},
-		CTALabel:   "See what's new",
+		CTALabel:   "Открыть личный кабинет",
 		CTAURL:     s.appURL,
-		FooterNote: "Enjoy — the SnapClaw team.",
+		FooterNote: "Приятного использования! Команда SnapClaw.",
 	})
 }
 
@@ -157,70 +152,70 @@ func (s *Service) renderTopUp(name, amountValue, amountCurrency string) (rendere
 	amount := strings.TrimSpace(amountValue + " " + amountCurrency)
 
 	return s.render(entityTopUpSubject, layoutData{
-		Preheader: "Receipt for your recent top-up.",
-		Heading:   "Your SnapClaw payment was successful",
+		Preheader: "Квитанция о пополнении баланса.",
+		Heading:   "Платёж прошёл успешно",
 		Paragraphs: []string{
-			"Hi " + name + ",",
-			"We've received your payment. Here are the details:",
+			greeting(name),
+			"Мы получили ваш платёж. Детали:",
 		},
 		Rows: [][2]string{
-			{"Amount", amount},
+			{"Сумма", amount},
 		},
-		CTALabel:   "View my balance",
+		CTALabel:   "Посмотреть баланс",
 		CTAURL:     s.appURL,
-		FooterNote: "Thanks for using SnapClaw!",
+		FooterNote: "Спасибо, что пользуетесь SnapClaw!",
 	})
 }
 
 func (s *Service) renderSupportReply(name, ticketSubject, replyPreview, ticketURL string) (rendered, error) {
-	intro := "Our support team just replied to your request:"
+	intro := "Наша команда поддержки ответила на ваше обращение:"
 	if strings.TrimSpace(ticketSubject) != "" {
-		intro = "Our support team just replied to your request \"" + ticketSubject + "\":"
+		intro = "Наша команда поддержки ответила на ваше обращение «" + ticketSubject + "»:"
 	}
 
-	paragraphs := []string{"Hi " + name + ",", intro}
+	paragraphs := []string{greeting(name), intro}
 	if strings.TrimSpace(replyPreview) != "" {
 		paragraphs = append(paragraphs, replyPreview)
 	}
-	paragraphs = append(paragraphs, "You can reply directly to this email to continue the conversation.")
+	paragraphs = append(paragraphs, "Чтобы продолжить переписку, просто ответьте на это письмо.")
 
 	cta := ""
 	if strings.TrimSpace(ticketURL) != "" {
-		cta = "View the full conversation"
+		cta = "Открыть переписку"
 	}
 
-	return s.render("Re: "+fallback(ticketSubject, "your request")+" — SnapClaw Support", layoutData{
-		Preheader:  "We've replied to your request.",
-		Heading:    "SnapClaw Support replied",
+	return s.render("Re: "+fallback(ticketSubject, "ваше обращение")+" — поддержка SnapClaw", layoutData{
+		Preheader:  "Мы ответили на ваше обращение.",
+		Heading:    "Поддержка SnapClaw ответила",
 		Paragraphs: paragraphs,
 		CTALabel:   cta,
 		CTAURL:     ticketURL,
-		FooterNote: "— SnapClaw Support",
+		FooterNote: "— Поддержка SnapClaw",
 	})
 }
 
 func (s *Service) renderAnnouncement(name, featureName, body, ctaURL, unsubscribeURL string) (rendered, error) {
 	cta := ""
 	if strings.TrimSpace(ctaURL) != "" {
-		cta = "Try it now"
+		cta = "Попробовать"
 	}
 
-	return s.render("New in SnapClaw: "+featureName, layoutData{
+	return s.render("Новое в SnapClaw: "+featureName, layoutData{
 		Preheader:       featureName,
-		Heading:         "New in SnapClaw: " + featureName,
-		Paragraphs:      []string{"Hi " + name + ",", body},
+		Heading:         "Новое в SnapClaw: " + featureName,
+		Paragraphs:      []string{greeting(name), body},
 		CTALabel:        cta,
 		CTAURL:          ctaURL,
-		FooterNote:      "You're getting this because you opted in to product updates from SnapClaw.",
+		FooterNote:      "Вы получаете это письмо, потому что подписались на новости о продукте SnapClaw.",
 		ShowUnsubscribe: strings.TrimSpace(unsubscribeURL) != "",
 		UnsubscribeURL:  unsubscribeURL,
 	})
 }
 
 const (
-	entityWelcomeSubject = "Welcome to SnapClaw 🐾"
-	entityPremiumSubject = "You've got SnapClaw Premium ✨"
-	entityTopUpSubject   = "Your SnapClaw payment was successful"
+	entityWelcomeSubject = "Добро пожаловать в SnapClaw 🐾"
+	entityPremiumSubject = "У вас теперь SnapClaw Premium ✨"
+	entityTopUpSubject   = "Платёж в SnapClaw прошёл успешно"
 )
 
 func fallback(value, def string) string {
@@ -229,4 +224,15 @@ func fallback(value, def string) string {
 	}
 
 	return value
+}
+
+// greeting builds the salutation. With no name it drops the name entirely
+// rather than falling back to a placeholder word.
+func greeting(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "Привет!"
+	}
+
+	return "Привет, " + name + "!"
 }

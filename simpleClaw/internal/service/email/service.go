@@ -10,17 +10,28 @@ import (
 	"html/template"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"simpleClaw/internal/entities"
 	infraemail "simpleClaw/internal/infra/email"
+	"simpleClaw/internal/infra/sql"
 
 	"github.com/google/uuid"
 )
 
+// ErrInvalidToken marks an unsubscribe request that can never succeed (bad,
+// tampered, or stale token, or a user that no longer exists). Callers map it to
+// a 4xx; every other error is transient and should surface as a 5xx so RFC 8058
+// one-click clients retry instead of reporting the link as broken.
+var ErrInvalidToken = errors.New("email: invalid unsubscribe token")
+
 const (
 	defaultBatchSize   = 20
 	defaultMaxAttempts = 5
+	defaultConcurrency = 5
+	defaultRetention   = 30 * 24 * time.Hour
+	pruneInterval      = time.Hour
 	unsubscribePath    = "/email/unsubscribe"
 )
 
@@ -33,6 +44,7 @@ type outboxStore interface {
 	ClaimDue(ctx context.Context, now time.Time, limit int) ([]entities.OutboxEmail, error)
 	MarkSent(ctx context.Context, id uuid.UUID, providerMessageID string, sentAt time.Time) error
 	MarkFailed(ctx context.Context, id uuid.UUID, attempts int, lastErr string, nextAttemptAt time.Time, status entities.EmailStatus) error
+	DeleteExpired(ctx context.Context, before time.Time) (int64, error)
 }
 
 type userReader interface {
@@ -49,6 +61,8 @@ type Options struct {
 	UnsubscribeSecret string
 	BatchSize         int
 	MaxAttempts       int
+	Concurrency       int
+	Retention         time.Duration
 }
 
 type Service struct {
@@ -64,6 +78,9 @@ type Service struct {
 	unsubscribeSecret string
 	batchSize         int
 	maxAttempts       int
+	concurrency       int
+	retention         time.Duration
+	lastPruneAt       time.Time
 	logger            *slog.Logger
 }
 
@@ -83,6 +100,14 @@ func New(outbox outboxStore, client sender, users userReader, opts Options) *Ser
 		opts.MaxAttempts = defaultMaxAttempts
 	}
 
+	if opts.Concurrency <= 0 {
+		opts.Concurrency = defaultConcurrency
+	}
+
+	if opts.Retention <= 0 {
+		opts.Retention = defaultRetention
+	}
+
 	return &Service{
 		outbox:            outbox,
 		client:            client,
@@ -96,6 +121,8 @@ func New(outbox outboxStore, client sender, users userReader, opts Options) *Ser
 		unsubscribeSecret: opts.UnsubscribeSecret,
 		batchSize:         opts.BatchSize,
 		maxAttempts:       opts.MaxAttempts,
+		concurrency:       opts.Concurrency,
+		retention:         opts.Retention,
 		logger:            slog.Default(),
 	}
 }
@@ -103,7 +130,7 @@ func New(outbox outboxStore, client sender, users userReader, opts Options) *Ser
 // EnqueueWelcome queues the registration welcome email. The user entity is
 // already in hand at sign-up, so no extra lookup is needed.
 func (s *Service) EnqueueWelcome(ctx context.Context, u entities.User) error {
-	r, err := s.renderWelcome(displayName(u.Name))
+	r, err := s.renderWelcome(u.Name)
 	if err != nil {
 		return err
 	}
@@ -117,7 +144,7 @@ func (s *Service) EnqueuePremiumGranted(ctx context.Context, userID uuid.UUID) e
 		return err
 	}
 
-	r, err := s.renderPremiumGranted(displayName(u.Name))
+	r, err := s.renderPremiumGranted(u.Name)
 	if err != nil {
 		return err
 	}
@@ -135,7 +162,7 @@ func (s *Service) EnqueueTopUpConfirmation(
 		return err
 	}
 
-	r, err := s.renderTopUp(displayName(u.Name), amountValue, amountCurrency)
+	r, err := s.renderTopUp(u.Name, amountValue, amountCurrency)
 	if err != nil {
 		return err
 	}
@@ -153,7 +180,7 @@ func (s *Service) EnqueueSupportReply(
 		return err
 	}
 
-	r, err := s.renderSupportReply(displayName(u.Name), ticketSubject, replyPreview, ticketURL)
+	r, err := s.renderSupportReply(u.Name, ticketSubject, replyPreview, ticketURL)
 	if err != nil {
 		return err
 	}
@@ -179,7 +206,7 @@ func (s *Service) EnqueueFeatureAnnouncement(
 
 	unsubURL := s.unsubscribeURL(userID)
 
-	r, err := s.renderAnnouncement(displayName(u.Name), featureName, body, ctaURL, unsubURL)
+	r, err := s.renderAnnouncement(u.Name, featureName, body, ctaURL, unsubURL)
 	if err != nil {
 		return err
 	}
@@ -239,12 +266,21 @@ func (s *Service) RunDispatcher(ctx context.Context, interval time.Duration) {
 
 	s.logger.Info("email dispatcher started", slog.Duration("interval", interval))
 
+	// Work once immediately, then on each tick — mirrors RunReconciler so the
+	// first welcome emails and receipts aren't delayed a full interval.
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		default:
+		}
+
+		s.dispatchBatch(ctx)
+
+		select {
+		case <-ctx.Done():
+			return
 		case <-ticker.C:
-			s.dispatchBatch(ctx)
 		}
 	}
 }
@@ -252,27 +288,79 @@ func (s *Service) RunDispatcher(ctx context.Context, interval time.Duration) {
 func (s *Service) dispatchBatch(ctx context.Context) {
 	now := time.Now()
 
+	s.prune(ctx, now)
+
 	due, err := s.outbox.ClaimDue(ctx, now, s.batchSize)
 	if err != nil {
 		s.logger.Error("email dispatcher: claim due failed", slog.Any("err", err))
 		return
 	}
 
+	if len(due) == 0 {
+		return
+	}
+
+	sem := make(chan struct{}, s.concurrency)
+	var wg sync.WaitGroup
+
 	for _, m := range due {
 		if ctx.Err() != nil {
-			return
+			break
 		}
 
-		providerID, sendErr := s.client.Send(ctx, s.toMessage(m))
-		if sendErr != nil {
-			s.markFailure(ctx, m, sendErr)
-			continue
-		}
+		wg.Add(1)
+		sem <- struct{}{}
 
-		if err := s.outbox.MarkSent(ctx, m.ID, providerID, time.Now()); err != nil {
-			s.logger.Error("email dispatcher: mark sent failed",
-				slog.String("email_id", m.ID.String()), slog.Any("err", err))
-		}
+		go func(m entities.OutboxEmail) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			s.deliver(ctx, m)
+		}(m)
+	}
+
+	wg.Wait()
+}
+
+func (s *Service) deliver(ctx context.Context, m entities.OutboxEmail) {
+	if ctx.Err() != nil {
+		return
+	}
+
+	providerID, sendErr := s.client.Send(ctx, s.toMessage(m))
+	if sendErr != nil {
+		s.markFailure(ctx, m, sendErr)
+		return
+	}
+
+	if err := s.outbox.MarkSent(ctx, m.ID, providerID, time.Now()); err != nil {
+		s.logger.Error("email dispatcher: mark sent failed",
+			slog.String("email_id", m.ID.String()), slog.Any("err", err))
+	}
+}
+
+// prune deletes old terminal rows so the outbox doesn't grow unbounded. It is
+// throttled to at most once per pruneInterval and runs on the dispatcher's
+// goroutine, so lastPruneAt needs no synchronization.
+func (s *Service) prune(ctx context.Context, now time.Time) {
+	if s.retention <= 0 {
+		return
+	}
+
+	if !s.lastPruneAt.IsZero() && now.Sub(s.lastPruneAt) < pruneInterval {
+		return
+	}
+
+	s.lastPruneAt = now
+
+	deleted, err := s.outbox.DeleteExpired(ctx, now.Add(-s.retention))
+	if err != nil {
+		s.logger.Error("email dispatcher: prune failed", slog.Any("err", err))
+		return
+	}
+
+	if deleted > 0 {
+		s.logger.Info("email dispatcher: pruned terminal rows", slog.Int64("count", deleted))
 	}
 }
 
@@ -307,13 +395,14 @@ func (s *Service) markFailure(ctx context.Context, m entities.OutboxEmail, sendE
 
 func (s *Service) toMessage(m entities.OutboxEmail) infraemail.Message {
 	return infraemail.Message{
-		From:    s.fromHeader(),
-		To:      m.ToAddress,
-		Subject: m.Subject,
-		HTML:    m.HTMLBody,
-		Text:    m.TextBody,
-		ReplyTo: s.replyTo,
-		Headers: m.Headers,
+		From:           s.fromHeader(),
+		To:             m.ToAddress,
+		Subject:        m.Subject,
+		HTML:           m.HTMLBody,
+		Text:           m.TextBody,
+		ReplyTo:        s.replyTo,
+		Headers:        m.Headers,
+		IdempotencyKey: m.ID.String(),
 	}
 }
 
@@ -332,7 +421,15 @@ func (s *Service) Unsubscribe(ctx context.Context, token string) error {
 		return err
 	}
 
-	return s.users.SetMarketingOptOut(ctx, userID, true)
+	if err := s.users.SetMarketingOptOut(ctx, userID, true); err != nil {
+		if errors.Is(err, sql.ErrNotFound) {
+			return fmt.Errorf("%w: %w", ErrInvalidToken, err)
+		}
+
+		return err
+	}
+
+	return nil
 }
 
 func (s *Service) unsubscribeURL(userID uuid.UUID) string {
@@ -354,26 +451,26 @@ func (s *Service) unsubscribeToken(userID uuid.UUID) string {
 func (s *Service) verifyUnsubscribeToken(token string) (uuid.UUID, error) {
 	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(token))
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("email: decode unsubscribe token: %w", err)
+		return uuid.Nil, fmt.Errorf("%w: decode: %w", ErrInvalidToken, err)
 	}
 
 	parts := strings.SplitN(string(decoded), ".", 2)
 	if len(parts) != 2 {
-		return uuid.Nil, errors.New("email: malformed unsubscribe token")
+		return uuid.Nil, fmt.Errorf("%w: malformed", ErrInvalidToken)
 	}
 
 	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("email: decode unsubscribe signature: %w", err)
+		return uuid.Nil, fmt.Errorf("%w: decode signature: %w", ErrInvalidToken, err)
 	}
 
 	if !hmac.Equal(sig, s.sign(parts[0])) {
-		return uuid.Nil, errors.New("email: invalid unsubscribe signature")
+		return uuid.Nil, fmt.Errorf("%w: bad signature", ErrInvalidToken)
 	}
 
 	userID, err := uuid.Parse(parts[0])
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("email: parse unsubscribe user id: %w", err)
+		return uuid.Nil, fmt.Errorf("%w: parse user id: %w", ErrInvalidToken, err)
 	}
 
 	return userID, nil
@@ -399,13 +496,4 @@ func backoffFor(attempts int) time.Duration {
 	default:
 		return 6 * time.Hour
 	}
-}
-
-func displayName(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "there"
-	}
-
-	return name
 }

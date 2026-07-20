@@ -60,6 +60,13 @@ func (s *Storage) Enqueue(ctx context.Context, m entities.OutboxEmail) error {
 }
 
 // ClaimDue returns pending emails whose next attempt time has arrived.
+//
+// It intentionally does not lock rows: the dispatcher runs as a single
+// goroutine, and duplicate delivery under multiple replicas is prevented at the
+// provider via the per-row Idempotency-Key carried on each Message. If strict
+// once-only claiming is ever required, switch to a conditional
+// UPDATE ... RETURNING or SELECT ... FOR UPDATE SKIP LOCKED paired with a
+// pending -> sending status transition.
 func (s *Storage) ClaimDue(ctx context.Context, now time.Time, limit int) ([]entities.OutboxEmail, error) {
 	const op = "storages.EmailOutbox.ClaimDue"
 
@@ -71,7 +78,7 @@ func (s *Storage) ClaimDue(ctx context.Context, now time.Time, limit int) ([]ent
 
 	err := s.db.WithContext(ctx).
 		Where("status = ? AND next_attempt_at <= ?", string(entities.EmailStatusPending), now).
-		Order("created_at ASC").
+		Order("next_attempt_at ASC").
 		Limit(limit).
 		Find(&rows).Error
 	if err != nil {
@@ -139,6 +146,26 @@ func (s *Storage) MarkFailed(
 	}
 
 	return nil
+}
+
+// DeleteExpired removes terminal (sent/failed) rows last updated before the
+// cutoff, keeping the outbox from growing unbounded. Pending rows are never
+// touched, so nothing awaiting delivery can be dropped.
+func (s *Storage) DeleteExpired(ctx context.Context, before time.Time) (int64, error) {
+	const op = "storages.EmailOutbox.DeleteExpired"
+
+	tx := s.db.WithContext(ctx).
+		Where(
+			"status IN ? AND updated_at < ?",
+			[]string{string(entities.EmailStatusSent), string(entities.EmailStatusFailed)},
+			before,
+		).
+		Delete(&models.EmailOutbox{})
+	if tx.Error != nil {
+		return 0, fmt.Errorf("%s: %w", op, sql.TranslateError(tx.Error))
+	}
+
+	return tx.RowsAffected, nil
 }
 
 func toEntity(row models.EmailOutbox) entities.OutboxEmail {
