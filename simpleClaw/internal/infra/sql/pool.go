@@ -25,5 +25,6 @@ func Migration(db *gorm.DB) error {
 		&models.UserSubscription{},
 		&models.UserBalanceEntry{},
 		&models.OpenRouterUsageEvent{},
+		&models.EmailOutbox{},
 	)
 }

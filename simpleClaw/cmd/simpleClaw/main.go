@@ -27,6 +27,7 @@ import (
 	"simpleClaw/internal/api/rest/controllers"
 	appmw "simpleClaw/internal/api/rest/middleware"
 	"simpleClaw/internal/entities"
+	emailinfra "simpleClaw/internal/infra/email"
 	"simpleClaw/internal/infra/hosting"
 	"simpleClaw/internal/infra/openrouter"
 	"simpleClaw/internal/infra/sql"
@@ -34,6 +35,7 @@ import (
 	"simpleClaw/internal/infra/storages/clawcapabilities"
 	"simpleClaw/internal/infra/storages/clawoperations"
 	"simpleClaw/internal/infra/storages/claws"
+	"simpleClaw/internal/infra/storages/emailoutbox"
 	"simpleClaw/internal/infra/storages/integrations"
 	"simpleClaw/internal/infra/storages/servers"
 	telegrammanagerstorage "simpleClaw/internal/infra/storages/telegrammanager"
@@ -42,6 +44,7 @@ import (
 	billingservice "simpleClaw/internal/service/billing"
 	"simpleClaw/internal/service/claw"
 	clawcapabilityservice "simpleClaw/internal/service/clawcapability"
+	emailservice "simpleClaw/internal/service/email"
 	integrationservice "simpleClaw/internal/service/integrations"
 	"simpleClaw/internal/service/integrations/googleoauth"
 	serverservice "simpleClaw/internal/service/server"
@@ -166,6 +169,29 @@ func main() {
 	subscriptionsStorage := subscriptions.NewStorage(db)
 	balanceEntriesStorage := balanceentries.NewStorage(db)
 	telegramManagerStorage := telegrammanagerstorage.NewStorage(db)
+	emailOutboxStorage := emailoutbox.NewStorage(db)
+
+	var emailSvc *emailservice.Service
+	if cfg.Email.Enabled {
+		resendClient := emailinfra.New(cfg.Email.BaseURL, cfg.Email.APIKey, cfg.Email.Timeout)
+		emailSvc = emailservice.New(
+			emailOutboxStorage,
+			resendClient,
+			userStorage,
+			emailservice.Options{
+				FromName:          cfg.Email.FromName,
+				FromAddress:       cfg.Email.FromAddress,
+				ReplyToAddress:    cfg.Email.ReplyToAddress,
+				AppURL:            cfg.Email.AppURL,
+				PublicBaseURL:     cfg.Email.PublicBaseURL,
+				UnsubscribeSecret: cfg.Email.UnsubscribeSecret,
+				BatchSize:         cfg.Email.BatchSize,
+				MaxAttempts:       cfg.Email.MaxAttempts,
+			},
+		)
+	} else {
+		logger.Info("email notifications are disabled; set EMAIL_ENABLED=true to enable")
+	}
 
 	j := jwt.New(
 		[]byte(cfg.Auth.Jwt.AccessSecretPrivate),
@@ -284,6 +310,11 @@ func main() {
 	).WithBraveAPIKey(cfg.Brave.APIKey).WithCapabilityDependencies(clawCapabilityStorage, integrationStorage)
 	billingSvc.WithBootstrapClawReader(clawService)
 	billingSvc.WithBootstrapManagedBotReader(telegramManagerStorage)
+	if emailSvc != nil {
+		uService.WithNotifier(emailSvc)
+		billingSvc.WithNotifier(emailSvc)
+		go emailSvc.RunDispatcher(rootCtx, cfg.Email.DispatchInterval)
+	}
 	go clawService.RunLifecycleWorker(rootCtx, 0)
 	go clawService.RunReconciler(rootCtx, 0)
 	if cfg.Hosting.ContainerManager.RuntimeSync.Enabled {
@@ -356,6 +387,11 @@ func main() {
 		Metrics:        pubSubMetrics,
 	})
 
+	var emailController *controllers.Email
+	if emailSvc != nil {
+		emailController = controllers.NewEmail(emailSvc)
+	}
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -376,6 +412,9 @@ func main() {
 	}
 	billingController.Register(r)
 	proxyController.Register(r)
+	if emailController != nil {
+		emailController.Register(r)
+	}
 
 	var handler http.Handler = r
 

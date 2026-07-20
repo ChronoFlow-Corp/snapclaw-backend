@@ -50,6 +50,12 @@ const (
 	defaultRuntimeSyncBatchSize  = 100
 	defaultRuntimeSyncWorkers    = 8
 	defaultTracingRatio          = 1.0
+	defaultResendBaseURL         = "https://api.resend.com"
+	defaultEmailFromName         = "SnapClaw"
+	defaultEmailTimeout          = 15 * time.Second
+	defaultEmailDispatchInterval = 30 * time.Second
+	defaultEmailBatchSize        = 20
+	defaultEmailMaxAttempts      = 5
 )
 
 type Config struct {
@@ -65,6 +71,7 @@ type Config struct {
 	TelegramManager telegramManager `mapstructure:"telegram_manager"`
 	Observability   observability   `mapstructure:"observability"`
 	Payment         payment         `mapstructure:"payment"`
+	Email           email           `mapstructure:"email"`
 }
 
 type http struct {
@@ -187,6 +194,22 @@ type yookassa struct {
 
 type openrouterPayment struct {
 	WebhookSecret string `mapstructure:"webhook_secret"`
+}
+
+type email struct {
+	Enabled           bool          `mapstructure:"enabled"`
+	APIKey            string        `mapstructure:"api_key"`
+	BaseURL           string        `mapstructure:"base_url"`
+	FromName          string        `mapstructure:"from_name"`
+	FromAddress       string        `mapstructure:"from_address"`
+	ReplyToAddress    string        `mapstructure:"reply_to_address"`
+	AppURL            string        `mapstructure:"app_url"`
+	PublicBaseURL     string        `mapstructure:"public_base_url"`
+	UnsubscribeSecret string        `mapstructure:"unsubscribe_secret"`
+	Timeout           time.Duration `mapstructure:"timeout"`
+	DispatchInterval  time.Duration `mapstructure:"dispatch_interval"`
+	BatchSize         int           `mapstructure:"batch_size"`
+	MaxAttempts       int           `mapstructure:"max_attempts"`
 }
 
 func New() Config {
@@ -382,6 +405,35 @@ func (c *Config) applyEnvOverrides() error {
 	applyStringEnv(&c.Payment.Yookassa.SecretKey, "YOOKASSA_SECRET_KEY")
 	applyStringEnv(&c.Payment.OpenRouter.WebhookSecret, "OPENROUTER_WEBHOOK_SECRET")
 
+	if err := applyBoolEnv(&c.Email.Enabled, "EMAIL_ENABLED"); err != nil {
+		return err
+	}
+
+	applyStringEnv(&c.Email.APIKey, "RESEND_API_KEY")
+	applyStringEnv(&c.Email.BaseURL, "EMAIL_BASE_URL")
+	applyStringEnv(&c.Email.FromName, "EMAIL_FROM_NAME")
+	applyStringEnv(&c.Email.FromAddress, "EMAIL_FROM_ADDRESS")
+	applyStringEnv(&c.Email.ReplyToAddress, "EMAIL_REPLY_TO_ADDRESS")
+	applyStringEnv(&c.Email.AppURL, "EMAIL_APP_URL")
+	applyStringEnv(&c.Email.PublicBaseURL, "EMAIL_PUBLIC_BASE_URL")
+	applyStringEnv(&c.Email.UnsubscribeSecret, "EMAIL_UNSUBSCRIBE_SECRET")
+
+	if err := applyDurationEnv(&c.Email.Timeout, "EMAIL_TIMEOUT"); err != nil {
+		return err
+	}
+
+	if err := applyDurationEnv(&c.Email.DispatchInterval, "EMAIL_DISPATCH_INTERVAL"); err != nil {
+		return err
+	}
+
+	if err := applyIntEnv(&c.Email.BatchSize, "EMAIL_BATCH_SIZE"); err != nil {
+		return err
+	}
+
+	if err := applyIntEnv(&c.Email.MaxAttempts, "EMAIL_MAX_ATTEMPTS"); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -422,6 +474,7 @@ func (c *Config) applyDefaults(configPath string) {
 	}
 
 	c.applyJWTDefaults(configPath)
+	c.applyEmailDefaults()
 
 	if c.Environment != EnvDevelopment {
 		return
@@ -556,6 +609,32 @@ func lookupNonEmptyEnv(envName string) (string, bool) {
 	return value, true
 }
 
+func (c *Config) applyEmailDefaults() {
+	if strings.TrimSpace(c.Email.BaseURL) == "" {
+		c.Email.BaseURL = defaultResendBaseURL
+	}
+
+	if strings.TrimSpace(c.Email.FromName) == "" {
+		c.Email.FromName = defaultEmailFromName
+	}
+
+	if c.Email.Timeout <= 0 {
+		c.Email.Timeout = defaultEmailTimeout
+	}
+
+	if c.Email.DispatchInterval <= 0 {
+		c.Email.DispatchInterval = defaultEmailDispatchInterval
+	}
+
+	if c.Email.BatchSize <= 0 {
+		c.Email.BatchSize = defaultEmailBatchSize
+	}
+
+	if c.Email.MaxAttempts <= 0 {
+		c.Email.MaxAttempts = defaultEmailMaxAttempts
+	}
+}
+
 func (c *Config) applyJWTDefaults(configPath string) {
 	if strings.TrimSpace(c.Auth.Jwt.RefreshSecret) == "" && c.Environment == EnvDevelopment {
 		c.Auth.Jwt.RefreshSecret = defaultJWTRefreshDev
@@ -653,6 +732,20 @@ func (c *Config) validate() error {
 		}
 	}
 
+	if c.Email.Enabled {
+		if strings.TrimSpace(c.Email.APIKey) == "" {
+			return fmt.Errorf("email.api_key is required when email is enabled")
+		}
+
+		if strings.TrimSpace(c.Email.FromAddress) == "" {
+			return fmt.Errorf("email.from_address is required when email is enabled")
+		}
+
+		if strings.TrimSpace(c.Email.UnsubscribeSecret) == "" {
+			return fmt.Errorf("email.unsubscribe_secret is required when email is enabled")
+		}
+	}
+
 	return nil
 }
 
@@ -717,6 +810,15 @@ func (c *Config) normalize() {
 	c.TelegramManager.PublicWebhookURL = strings.TrimSpace(c.TelegramManager.PublicWebhookURL)
 	c.TelegramManager.ManagerUsername = strings.TrimSpace(strings.TrimPrefix(c.TelegramManager.ManagerUsername, "@"))
 	c.Observability.Metrics.Path = normalizeMetricsPath(c.Observability.Metrics.Path)
+
+	c.Email.BaseURL = strings.TrimRight(strings.TrimSpace(c.Email.BaseURL), "/")
+	c.Email.FromAddress = strings.TrimSpace(c.Email.FromAddress)
+	c.Email.ReplyToAddress = strings.TrimSpace(c.Email.ReplyToAddress)
+	c.Email.PublicBaseURL = strings.TrimRight(strings.TrimSpace(c.Email.PublicBaseURL), "/")
+	if strings.TrimSpace(c.Email.AppURL) == "" {
+		c.Email.AppURL = c.Auth.Google.FrontendURL
+	}
+	c.Email.AppURL = strings.TrimRight(strings.TrimSpace(c.Email.AppURL), "/")
 }
 
 func normalizeEmails(values []string) []string {

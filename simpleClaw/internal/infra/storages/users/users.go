@@ -52,6 +52,7 @@ func (s *Storage) Create(ctx context.Context, u entities.User) error {
 		OpenRouterApiKey: u.OpenRouterApiKey,
 		OpenRouterKeyID:  u.OpenRouterKeyID,
 		BalanceMinor:     u.BalanceMinor,
+		MarketingOptOut:  u.MarketingOptOut,
 		CreatedAt:        u.CreatedAt,
 	})
 	if err != nil {
@@ -126,6 +127,7 @@ func (s *Storage) GetByEmail(ctx context.Context, email string) (entities.User, 
 		OpenRouterApiKey: uDB.OpenRouterApiKey,
 		OpenRouterKeyID:  uDB.OpenRouterKeyID,
 		BalanceMinor:     uDB.BalanceMinor,
+		MarketingOptOut:  uDB.MarketingOptOut,
 		CreatedAt:        uDB.CreatedAt,
 	}, nil
 }
@@ -175,8 +177,30 @@ func (s *Storage) GetByID(ctx context.Context, id uuid.UUID) (entities.User, err
 		OpenRouterApiKey: uDB.OpenRouterApiKey,
 		OpenRouterKeyID:  uDB.OpenRouterKeyID,
 		BalanceMinor:     uDB.BalanceMinor,
+		MarketingOptOut:  uDB.MarketingOptOut,
 		CreatedAt:        uDB.CreatedAt,
 	}, nil
+}
+
+func (s *Storage) SetMarketingOptOut(ctx context.Context, id uuid.UUID, optOut bool) (err error) {
+	const op = "storages.Users.SetMarketingOptOut"
+
+	ctx, _, finish := observability.StartOperation(ctx, slog.Default(), s.metrics, "storage.users", "storage.user.set_marketing_opt_out", "user_profile")
+
+	defer func() { finish(err) }()
+
+	tx := s.db.WithContext(ctx).Model(&models.User{}).
+		Where("id = ?", id).
+		Update("marketing_opt_out", optOut)
+	if err := tx.Error; err != nil {
+		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
+	}
+
+	if tx.RowsAffected == 0 {
+		return fmt.Errorf("%s: %w", op, sql.ErrNotFound)
+	}
+
+	return nil
 }
 
 func (s *Storage) DeleteSession(ctx context.Context, session entities.Session) (err error) {

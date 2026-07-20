@@ -16,6 +16,7 @@ type User struct {
 	OpenRouterKeyID  string             `gorm:"type:varchar(128)"`
 	OpenRouterApiKey string             `gorm:"type:varchar(355)"`
 	BalanceMinor     int64              `gorm:"not null;default:0"`
+	MarketingOptOut  bool               `gorm:"not null;default:false"`
 	CreatedAt        time.Time          `gorm:"autoCreateTime"`
 	UpdatedAt        time.Time          `gorm:"autoUpdateTime"`
 	Sessions         []Session          `gorm:"constraint:OnDelete:CASCADE"`

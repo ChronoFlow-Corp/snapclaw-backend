@@ -15,14 +15,19 @@ import (
 	"github.com/google/uuid"
 )
 
+type Notifier interface {
+	EnqueueWelcome(ctx context.Context, u entities.User) error
+}
+
 type Service struct {
-	j       jwt.JWT
-	uSt     UStorage
-	chSt    ChannelStorage
-	pmSt    paymentMethodStorage
-	keys    apiKeyManager
-	admins  map[string]struct{}
-	metrics *observability.OperationMetrics
+	j        jwt.JWT
+	uSt      UStorage
+	chSt     ChannelStorage
+	pmSt     paymentMethodStorage
+	keys     apiKeyManager
+	notifier Notifier
+	admins   map[string]struct{}
+	metrics  *observability.OperationMetrics
 }
 
 func NewUser(
@@ -49,6 +54,14 @@ func NewUser(
 		admins:  buildAdminSet(admins),
 		metrics: opMetrics,
 	}
+}
+
+// WithNotifier attaches an optional outbound-notification sink (e.g. email).
+// A nil notifier leaves notifications disabled.
+func (s *Service) WithNotifier(n Notifier) *Service {
+	s.notifier = n
+
+	return s
 }
 
 func (s *Service) SignIn(
@@ -92,6 +105,16 @@ func (s *Service) SignIn(
 		err = s.uSt.Create(ctx, u)
 		if err != nil {
 			return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
+		}
+
+		if s.notifier != nil {
+			if nErr := s.notifier.EnqueueWelcome(ctx, u); nErr != nil {
+				slog.Default().Warn(
+					"enqueue welcome email failed",
+					slog.String("user_id", u.ID.String()),
+					slog.Any("err", nErr),
+				)
+			}
 		}
 	} else if u.Role != role {
 		err := s.uSt.UpdateRole(ctx, u.ID, role)
