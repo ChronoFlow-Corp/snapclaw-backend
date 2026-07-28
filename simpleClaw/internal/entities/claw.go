@@ -6,18 +6,21 @@ import (
 	"github.com/google/uuid"
 )
 
-const (
-	StatusStop    = "stop"
-	StatusRunning = "running"
-)
-
 type Claw struct {
-	ID        uuid.UUID
-	Name      string
-	UserID    uuid.UUID
-	ServerID  uuid.UUID
-	Status    string
-	Config    ClawConfig
+	ID uuid.UUID
+
+	Name   string
+	UserID uuid.UUID
+
+	ServerID    uuid.UUID
+	ContainerID string
+
+	ClawLifecycleState
+
+	Config ClawConfig
+
+	OnboardingComplete bool
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

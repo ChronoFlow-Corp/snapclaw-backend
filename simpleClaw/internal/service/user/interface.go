@@ -15,7 +15,15 @@ type UStorage interface {
 	DeleteSession(ctx context.Context, session entities.Session) error
 	GetSessions(ctx context.Context, userID uuid.UUID) ([]entities.Session, error)
 	GetSession(ctx context.Context, id uuid.UUID) (entities.Session, error)
+	UpdateSessionRefresh(
+		ctx context.Context,
+		sessionID, userID uuid.UUID,
+		refreshToken string,
+	) error
 	GetByEmail(ctx context.Context, email string) (entities.User, error)
+	GetByID(ctx context.Context, id uuid.UUID) (entities.User, error)
+	UpdateRole(ctx context.Context, id uuid.UUID, role string) error
+	UpdateOpenRouterKey(ctx context.Context, id uuid.UUID, key entities.OpenRouterKey) error
 }
 
 type ChannelStorage interface {
@@ -24,4 +32,22 @@ type ChannelStorage interface {
 	GetByUserID(ctx context.Context, userID uuid.UUID) ([]entities.Channel, error)
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	Update(ctx context.Context, ch entities.Channel) error
+}
+
+type paymentMethodStorage interface {
+	Create(ctx context.Context, method entities.PaymentMethod) error
+	GetByID(ctx context.Context, id, userID uuid.UUID) (entities.PaymentMethod, error)
+	GetByUserID(ctx context.Context, userID uuid.UUID) ([]entities.PaymentMethod, error)
+	UpdateDefault(ctx context.Context, id, userID uuid.UUID, isDefault bool) error
+	Delete(ctx context.Context, id, userID uuid.UUID) error
+	ClearDefaultByUserID(ctx context.Context, userID uuid.UUID) error
+	CountByUserID(ctx context.Context, userID uuid.UUID) (int64, error)
+}
+
+type apiKeyManager interface {
+	Create(
+		ctx context.Context,
+		userID uuid.UUID,
+		monthlyBudgetUSD float64,
+	) (entities.OpenRouterKey, error)
 }

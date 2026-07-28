@@ -11,6 +11,7 @@
 
 # configuration
 config.yaml
+claw-configs/
 
 # Test binary, built with `go test -c`
 *.test
@@ -25,8 +26,8 @@ profile.cov
 # vendor/
 
 # Go workspace file
-go.work
-go.work.sum
+#go.work
+#go.work.sum
 
 # env file
 .env
@@ -34,3 +35,6 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Local git worktrees
+.worktrees/

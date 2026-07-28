@@ -5,9 +5,9 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+
 	jwt2 "shared/pkg/jwt"
 	"shared/pkg/response"
-
 	"simpleClaw/internal/entities"
 	"simpleClaw/internal/pkg/slctx"
 
@@ -42,6 +42,8 @@ func AuthJwt(j jwtProvider) func(next http.Handler) http.Handler {
 					Code:    http.StatusUnauthorized,
 					Message: "Access token is invalid",
 				})
+
+				return
 			}
 
 			raw := accessCookie.Value
@@ -76,15 +78,20 @@ func AuthJwt(j jwtProvider) func(next http.Handler) http.Handler {
 					)
 				}
 
-				slctx.Logger(r.Context()).Error("Token parse error",
-					slog.String("token", raw),
-					slog.Any("err", err))
+				slctx.Logger(r.Context()).Error("Token parse error", slog.Any("err", err))
 
 				return
 			}
 
 			ctx := context.WithValue(r.Context(), entities.UserIDCtxKey{}, token.Claims.UserID)
 			ctx = context.WithValue(ctx, entities.SessionIDCtxKey{}, token.Claims.SessionID)
+
+			logger := slctx.Logger(ctx).With(
+				slog.String("user_id", token.Claims.UserID.String()),
+				slog.String("session_id", token.Claims.SessionID.String()),
+			)
+			ctx = slctx.WithLogger(ctx, logger)
+
 			r = r.WithContext(ctx)
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			next.ServeHTTP(ww, r)

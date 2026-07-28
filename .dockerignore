@@ -1,0 +1,20 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+
+# Секреты и рантайм-конфиги: монтируются volume'ами в docker-compose,
+# при сборке образа не нужны.
+deploy/keys
+
+# Случайно собранные локально бинарники, лежащие в дереве модулей
+# (например simpleClaw/simpleClaw на 36 МБ).
+simpleClaw/simpleClaw
+containerManager/containerManager
+
+# Логи и временное
+*.log
+tmp/

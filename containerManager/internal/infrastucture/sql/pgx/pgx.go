@@ -7,7 +7,6 @@ import (
 )
 
 func New(ctx context.Context, url string) (*pgxpool.Pool, error) {
-
 	pool, err := pgxpool.New(ctx, url)
 	if err != nil {
 		return nil, err

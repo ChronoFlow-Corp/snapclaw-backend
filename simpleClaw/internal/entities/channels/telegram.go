@@ -26,20 +26,20 @@ const (
 )
 
 type TelegramConfig struct {
-	DmPolicy             DmPolicy                `json:"dmPolicy,omitempty"`
-	AllowFrom            []string                `json:"allowFrom,omitempty"`
-	Enabled              bool                    `json:"enabled"`
-	BotToken             string                  `json:"botToken,omitempty"`
-	GroupPolicy          string                  `json:"groupPolicy,omitempty"`
-	CustomCommands       []TelegramCustomCommand `json:"customCommands,omitempty"`
-	LinkPreview          bool                    `json:"linkPreview,omitempty"`
-	Streaming            Streaming               `json:"streaming,omitempty"`
-	Actions              Actions                 `json:"actions,omitempty"`
-	ReactionNotification Reaction                `json:"reactionNotification,omitempty"`
-	MediaMaxMb           int                     `json:"mediaMaxMb,omitempty"`
-	GroupAllowFrom       []string                `json:"groupAllowFrom,omitempty"`
-	HistoryLimit         int                     `json:"historyLimit,omitempty"`
-	ReplyToMode          string                  `json:"replyToMode,omitempty"`
+	DmPolicy              DmPolicy                `json:"dmPolicy,omitempty"`
+	AllowFrom             []string                `json:"allowFrom,omitempty"`
+	Enabled               bool                    `json:"enabled"`
+	BotToken              string                  `json:"botToken,omitempty"`
+	GroupPolicy           string                  `json:"groupPolicy,omitempty"`
+	CustomCommands        []TelegramCustomCommand `json:"customCommands,omitempty"`
+	LinkPreview           bool                    `json:"linkPreview,omitempty"`
+	Streaming             Streaming               `json:"streaming,omitempty"`
+	Actions               Actions                 `json:"actions,omitempty"`
+	ReactionNotifications Reaction                `json:"reactionNotifications,omitempty"`
+	MediaMaxMb            int                     `json:"mediaMaxMb,omitempty"`
+	GroupAllowFrom        []string                `json:"groupAllowFrom,omitempty"`
+	HistoryLimit          int                     `json:"historyLimit,omitempty"`
+	ReplyToMode           string                  `json:"replyToMode,omitempty"`
 	// TODO: add groups type
 	Groups map[string]interface{} `json:"groups,omitempty"`
 }
@@ -50,6 +50,6 @@ type TelegramCustomCommand struct {
 }
 
 type Actions struct {
-	Reactions    bool `json:"reactions,omitempty"`
-	SendMessages bool `json:"sendMessages,omitempty"`
+	Reactions   bool `json:"reactions,omitempty"`
+	SendMessage bool `json:"sendMessage,omitempty"`
 }

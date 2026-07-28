@@ -1,0 +1,36 @@
+version: '3'
+
+tasks:
+  up:
+    desc: Start local dev stack
+    cmd: docker compose up -d
+
+  up-obs:
+    desc: Start local dev stack with observability
+    cmd: docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+
+  down:
+    desc: Stop docker compose stack
+    cmd: docker compose -f docker-compose.yml -f docker-compose.observability.yml down
+
+  restart:
+    desc: Restart local dev stack
+    cmds:
+      - task: down
+      - task: up
+
+  logs:
+    desc: Follow docker compose logs
+    cmd: docker compose logs -f
+
+  logs-obs:
+    desc: Follow docker compose logs including observability
+    cmd: docker compose -f docker-compose.yml -f docker-compose.observability.yml logs -f
+
+  ps:
+    desc: Show docker compose services
+    cmd: docker compose -f docker-compose.yml -f docker-compose.observability.yml ps
+
+  build:
+    desc: Build local dev stack and start it
+    cmd: docker compose up --build -d

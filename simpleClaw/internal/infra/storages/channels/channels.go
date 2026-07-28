@@ -3,12 +3,11 @@ package channels
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
-	"simpleClaw/internal/infra/sql/models"
-
 	"simpleClaw/internal/entities"
+	"simpleClaw/internal/infra/sql"
+	"simpleClaw/internal/infra/sql/models"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -40,7 +39,7 @@ func (s *Storage) Create(ctx context.Context, ch entities.Channel) error {
 		OpenClawConfig: raw,
 	})
 	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	return nil
@@ -51,7 +50,7 @@ func (s *Storage) GetByID(ctx context.Context, id, userID uuid.UUID) (entities.C
 
 	chDB, err := gorm.G[models.Channel](s.db).Where("id = ? AND user_id = ?", id, userID).First(ctx)
 	if err != nil {
-		return entities.Channel{}, fmt.Errorf("%s: %w", op, err)
+		return entities.Channel{}, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	ch := entities.Channel{
@@ -87,11 +86,11 @@ func (s *Storage) Update(ctx context.Context, ch entities.Channel) error {
 			OpenClawConfig: raw,
 		})
 	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	if affected == 0 {
-		return errors.New("not found channel")
+		return fmt.Errorf("%s: %w", op, sql.ErrNotFound)
 	}
 
 	return nil
@@ -102,13 +101,55 @@ func (s *Storage) GetByUserID(ctx context.Context, userID uuid.UUID) ([]entities
 
 	chsDB, err := gorm.G[models.Channel](s.db).Where("user_id = ?", userID).Find(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", op, err)
+		return nil, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	chs := make([]entities.Channel, 0, len(chsDB))
 
 	for _, chDB := range chsDB {
 		var cfg entities.ClawChannels
+
+		err = json.Unmarshal(chDB.OpenClawConfig, &cfg)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", op, err)
+		}
+
+		chs = append(chs, entities.Channel{
+			ID:          chDB.ID,
+			Name:        chDB.Name,
+			UserID:      chDB.UserID,
+			ChannelType: chDB.ChannelType,
+			CreatedAt:   chDB.CreatedAt,
+			Config:      cfg,
+		})
+	}
+
+	return chs, nil
+}
+
+func (s *Storage) GetByIDs(
+	ctx context.Context,
+	ids []uuid.UUID,
+	userID uuid.UUID,
+) ([]entities.Channel, error) {
+	const op = "storages.Channels.GetByIDs"
+
+	if len(ids) == 0 {
+		return []entities.Channel{}, nil
+	}
+
+	chsDB, err := gorm.G[models.Channel](s.db).
+		Where("user_id = ? AND id IN ?", userID, ids).
+		Find(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
+	}
+
+	chs := make([]entities.Channel, 0, len(chsDB))
+
+	for _, chDB := range chsDB {
+		var cfg entities.ClawChannels
+
 		err = json.Unmarshal(chDB.OpenClawConfig, &cfg)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", op, err)
@@ -135,11 +176,11 @@ func (s *Storage) Delete(ctx context.Context, id, userID uuid.UUID) error {
 	).Where("id = ? AND user_id = ?", id, userID).
 		Delete(ctx)
 	if err != nil {
-		return fmt.Errorf("%s: %w", op, err)
+		return fmt.Errorf("%s: %w", op, sql.TranslateError(err))
 	}
 
 	if affected == 0 {
-		return errors.New("not found")
+		return fmt.Errorf("%s: %w", op, sql.ErrNotFound)
 	}
 
 	return nil

@@ -1,22 +1,25 @@
 package main
 
 import (
-	"archive/tar"
-	"bytes"
 	"context"
-	"io"
-	"io/fs"
+	"log/slog"
+	"net/http"
 	"os"
-	"path/filepath"
+	"os/signal"
+	"shared/pkg/observability"
 	"strings"
+	"syscall"
+	"time"
 
 	"containermanager/config"
 	"containermanager/internal/infrastucture/pkg/configurer"
 	"containermanager/internal/infrastucture/pkg/docker"
+	"containermanager/internal/infrastucture/sql/migrations"
 	"containermanager/internal/infrastucture/sql/pgx"
 	"containermanager/internal/infrastucture/sql/storage"
 	"containermanager/internal/interface/rest"
 	"containermanager/internal/interface/rest/controllers"
+	restmw "containermanager/internal/interface/rest/middleware"
 	"containermanager/internal/service"
 
 	"github.com/docker/docker/client"
@@ -25,190 +28,179 @@ import (
 )
 
 func main() {
-	cfg := config.MustLoadConfig()
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	ctx := context.Background()
+	cfg := config.MustLoadConfig()
+	logger := setupLogger()
+
+	maxClaws, err := cfg.MaxClaws.ResolveLinux()
+	if err != nil {
+		panic(err)
+	}
+
+	shutdownTracing, err := observability.SetupTracing(
+		rootCtx,
+		observability.TracingConfig{
+			ServiceName: "containermanager",
+			Environment: cfg.Environment,
+			Enabled:     cfg.Observability.Tracing.Enabled,
+			Endpoint:    cfg.Observability.Tracing.Endpoint,
+			Insecure:    cfg.Observability.Tracing.Insecure,
+			SampleRatio: cfg.Observability.Tracing.SampleRatio,
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	defer func() {
+		err := shutdownTracing(context.Background())
+		if err != nil {
+			logger.Error("failed to shutdown tracing provider", slog.Any("err", err))
+		}
+	}()
+
+	ctx := rootCtx
+
+	if cfg.Migrations.Auto {
+		err := migrations.Run(ctx, cfg.Postgres.URL, cfg.Migrations.Path)
+		if err != nil {
+			panic(err)
+		}
+	}
 
 	pool, err := pgx.New(ctx, cfg.Postgres.URL)
 	if err != nil {
 		panic(err)
 	}
 
-	st := storage.NewContainer(pool)
+	metricsRegistry := observability.NewPrometheusRegistry()
 
-	c := configurer.NewClawConfigurer(cfg.Image.BasePath)
+	httpMetrics, err := observability.NewHTTPMetrics(metricsRegistry)
+	if err != nil {
+		panic(err)
+	}
+
+	operationMetrics, err := observability.NewOperationMetrics(metricsRegistry, "containermanager")
+	if err != nil {
+		panic(err)
+	}
+
+	pubSubMetrics, err := observability.NewPubSubFanoutMetrics(metricsRegistry, "containermanager")
+	if err != nil {
+		panic(err)
+	}
+
+	st := storage.NewContainer(pool, operationMetrics)
+
+	c := configurer.NewClawConfigurer(
+		cfg.Image.BasePath,
+		cfg.Image.CredentialsPath,
+		cfg.Image.OwnerUID,
+		cfg.Image.OwnerGID,
+	)
 
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		panic(err)
 	}
 
-	m := docker.NewManager(ctx, cli)
-
-	buildCtx := bytes.NewBuffer([]byte{})
-
-	err = TarDir(buildCtx, cfg.Image.BuildCtx...)
+	m, err := docker.NewManager(ctx, cli, operationMetrics)
 	if err != nil {
 		panic(err)
 	}
 
-	err = m.Build(ctx, buildCtx)
+	err = m.Build(ctx, cfg.Image.Dockerfile, cfg.Image.BuildCtx)
 	if err != nil {
 		panic(err)
 	}
 
-	s := service.NewContainer(c, st, m)
+	s, err := service.NewContainer(c, st, m, maxClaws, service.GogConfig{
+		KeyringBackend:  cfg.Gog.KeyringBackend,
+		KeyringPassword: cfg.Gog.KeyringPassword,
+	}, operationMetrics)
+	if err != nil {
+		panic(err)
+	}
 
-	cl := controllers.NewClaw(s)
+	watcher := service.NewRuntimeWatcher(st, m, cfg.RuntimeWatcher.Interval, cfg.RuntimeWatcher.InspectTimeout)
+
+	cl := controllers.NewClaw(s, cfg.Http.ApiKey, controllers.ClawOptions{
+		PubSubForwardTimeout: cfg.PubSub.ForwardTimeout,
+		PubSubWorkers:        cfg.PubSub.Workers,
+		PubSubDedupTTL:       cfg.PubSub.DedupTTL,
+		MaxClaws:             maxClaws,
+		Metrics:              pubSubMetrics,
+	})
 
 	mux := chi.NewRouter()
-	mux.Use(middleware.Logger)
+	mux.Use(middleware.RequestID)
+	mux.Use(middleware.RealIP)
+	mux.Use(restmw.Logger())
 	mux.Use(middleware.Recoverer)
+	mux.Use(httpMetrics.Middleware(restmw.ClassifyActionFlow, restmw.RoutePattern))
+
+	if cfg.Observability.Metrics.Enabled {
+		mux.Handle(cfg.Observability.Metrics.Path, observability.Handler(metricsRegistry))
+	}
 
 	cl.Register(mux)
 
-	server := rest.NewServer("localhost:8080", mux)
+	var handler http.Handler = mux
 
-	server.Start()
-}
-
-func TarDir(w io.Writer, roots ...string) error {
-	tw := tar.NewWriter(w)
-	defer tw.Close()
-
-	wd, _ := os.Getwd()
-
-	for _, root := range roots {
-		root = filepath.Clean(root)
-
-		var archiveRoot string
-
-		if strings.HasPrefix(root, "."+string(os.PathSeparator)) {
-			archiveRoot = root[2:]
-		} else if !filepath.IsAbs(root) {
-			archiveRoot = root
-		} else {
-			if rel, err := filepath.Rel(wd, root); err == nil && !strings.HasPrefix(rel, "..") {
-				archiveRoot = rel
-			} else {
-				archiveRoot = filepath.Base(root)
-			}
-		}
-
-		archiveRoot = filepath.ToSlash(archiveRoot)
-
-		info, err := os.Lstat(root)
-		if err != nil {
-			return err
-		}
-
-		if !info.IsDir() {
-			var link string
-
-			if info.Mode()&os.ModeSymlink != 0 {
-				link, err = os.Readlink(root)
-				if err != nil {
-					return err
-				}
-			}
-
-			hdr, err := tar.FileInfoHeader(info, link)
-			if err != nil {
-				return err
-			}
-
-			hdr.Name = archiveRoot
-			if info.IsDir() && !strings.HasSuffix(hdr.Name, "/") {
-				hdr.Name += "/"
-			}
-
-			if err := tw.WriteHeader(hdr); err != nil {
-				return err
-			}
-
-			if info.Mode().IsRegular() {
-				f, err := os.Open(root)
-				if err != nil {
-					return err
-				}
-
-				_, err = io.Copy(tw, f)
-				_ = f.Close()
-
-				if err != nil {
-					return err
-				}
-			}
-
-			continue
-		}
-
-		err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				return err
-			}
-
-			var archPath string
-
-			if rel == "." {
-				archPath = archiveRoot
-			} else {
-				archPath = filepath.ToSlash(filepath.Join(archiveRoot, rel))
-			}
-
-			info, err := d.Info()
-			if err != nil {
-				return err
-			}
-
-			var link string
-
-			if info.Mode()&os.ModeSymlink != 0 {
-				link, err = os.Readlink(path)
-				if err != nil {
-					return err
-				}
-			}
-
-			hdr, err := tar.FileInfoHeader(info, link)
-			if err != nil {
-				return err
-			}
-
-			hdr.Name = archPath
-			if info.IsDir() && !strings.HasSuffix(hdr.Name, "/") {
-				hdr.Name += "/"
-			}
-
-			if err := tw.WriteHeader(hdr); err != nil {
-				return err
-			}
-
-			if info.Mode().IsRegular() {
-				f, err := os.Open(path)
-				if err != nil {
-					return err
-				}
-
-				_, err = io.Copy(tw, f)
-				_ = f.Close()
-
-				if err != nil {
-					return err
-				}
-			}
-
-			return nil
-		})
-		if err != nil {
-			return err
-		}
+	if cfg.Observability.Tracing.Enabled {
+		handler = observability.WrapHTTPHandler(handler, "containermanager.http")
 	}
 
-	return nil
+	server := rest.NewServer(cfg.Http.Addr, handler)
+
+	logger.Info("containerManager server starting", slog.String("addr", cfg.Http.Addr))
+
+	if cfg.RuntimeWatcher.Enabled {
+		go watcher.Run(rootCtx)
+	}
+
+	serverErrCh := make(chan error, 1)
+	go func() {
+		serverErrCh <- server.Start()
+	}()
+
+	select {
+	case err := <-serverErrCh:
+		logger.Error("containerManager server stopped", slog.Any("err", err))
+		panic(err)
+	case <-rootCtx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := server.Stop(shutdownCtx); err != nil {
+			logger.Error("containerManager shutdown failed", slog.Any("err", err))
+			panic(err)
+		}
+	}
+}
+
+func setupLogger() *slog.Logger {
+	level := new(slog.LevelVar)
+	level.Set(slog.LevelInfo)
+
+	switch strings.ToLower(os.Getenv("LOG_LEVEL")) {
+	case "debug":
+		level.Set(slog.LevelDebug)
+	case "info":
+		level.Set(slog.LevelInfo)
+	case "warn", "warning":
+		level.Set(slog.LevelWarn)
+	case "error":
+		level.Set(slog.LevelError)
+	}
+
+	logger := slog.New(
+		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}),
+	).With("service", "containermanager")
+
+	slog.SetDefault(logger)
+
+	return logger
 }

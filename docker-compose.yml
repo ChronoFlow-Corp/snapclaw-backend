@@ -1,0 +1,78 @@
+name: snapclaw
+
+services:
+  simpleclaw-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: simpleclaw
+      POSTGRES_PASSWORD: simpleclaw
+      POSTGRES_DB: simpleclaw
+    volumes:
+      - simpleclaw_db:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+
+  containermanager-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: containermanager
+      POSTGRES_PASSWORD: containermanager
+      POSTGRES_DB: containermanager
+    volumes:
+      - containermanager_db:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5434:5432"
+
+  containermanager:
+    build:
+      context: .
+      dockerfile: containerManager/Dockerfile
+    environment:
+      CONFIG_PATH: /config/dev-config.yaml
+      CLAW_CONFIGS: ${CLAW_CONFIGS}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    user: "0"
+    volumes:
+      - ./deploy/containerManager/dev-config.yaml:/config/dev-config.yaml:ro
+      - ./:/workspace:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${CLAW_CONFIGS}:${CLAW_CONFIGS}
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - containermanager-db
+
+  simpleclaw:
+    user: "0"
+    build:
+      context: .
+      dockerfile: simpleClaw/Dockerfile
+    environment:
+      CONFIG_PATH: /config/dev-config.yaml
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DEV_HOST: ${DEV_HOST:-localhost}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      OPENROUTER_API_TOKEN: ${OPENROUTER_API_TOKEN:-}
+      EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-}
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-}
+      EMAIL_REPLY_TO_ADDRESS: ${EMAIL_REPLY_TO_ADDRESS:-}
+      EMAIL_PUBLIC_BASE_URL: ${EMAIL_PUBLIC_BASE_URL:-}
+      EMAIL_UNSUBSCRIBE_SECRET: ${EMAIL_UNSUBSCRIBE_SECRET:-}
+    volumes:
+      - ./deploy/simpleClaw/dev-config.yaml:/config/dev-config.yaml:ro
+      - ./deploy/simpleClaw/keys:/config/keys
+      - simpleclaw_backups:/data/simpleclaw/backups
+    ports:
+      - "127.0.0.1:1337:1337"
+    depends_on:
+      - simpleclaw-db
+      - containermanager
+
+volumes:
+  simpleclaw_db:
+  containermanager_db:
+  claw_configs:
+  simpleclaw_backups:

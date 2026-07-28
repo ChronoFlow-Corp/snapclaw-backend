@@ -17,17 +17,25 @@ type (
 )
 
 type User struct {
-	ID        uuid.UUID
-	Name      string
-	Email     string
-	Role      string
-	CreatedAt time.Time
+	ID               uuid.UUID
+	Name             string
+	Nickname         string
+	AvatarURL        string
+	Email            string
+	OpenRouterKeyID  string
+	OpenRouterApiKey string
+	BalanceMinor     int64
+	Role             string
+	MarketingOptOut  bool
+	CreatedAt        time.Time
 }
 
-func NewUser(name string, email string, role string) User {
+func NewUser(name string, nickname, avatarUrl, email string, role string) User {
 	return User{
 		ID:        uuid.New(),
 		Name:      name,
+		Nickname:  nickname,
+		AvatarURL: avatarUrl,
 		Email:     email,
 		Role:      role,
 		CreatedAt: time.Now(),

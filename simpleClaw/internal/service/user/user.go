@@ -4,29 +4,64 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"shared/pkg/jwt"
-
-	"simpleClaw/internal/infra/sql"
+	"shared/pkg/observability"
 
 	"simpleClaw/internal/entities"
-
+	"simpleClaw/internal/infra/sql"
 	"simpleClaw/internal/service/user/commands"
 
 	"github.com/google/uuid"
 )
 
-type Service struct {
-	j    jwt.JWT
-	uSt  UStorage
-	chSt ChannelStorage
+type Notifier interface {
+	EnqueueWelcome(ctx context.Context, u entities.User) error
 }
 
-func NewUser(j jwt.JWT, uSt UStorage, chSt ChannelStorage) *Service {
-	return &Service{
-		j:    j,
-		uSt:  uSt,
-		chSt: chSt,
+type Service struct {
+	j        jwt.JWT
+	uSt      UStorage
+	chSt     ChannelStorage
+	pmSt     paymentMethodStorage
+	keys     apiKeyManager
+	notifier Notifier
+	admins   map[string]struct{}
+	metrics  *observability.OperationMetrics
+}
+
+func NewUser(
+	j jwt.JWT,
+	uSt UStorage,
+	chSt ChannelStorage,
+	pmSt paymentMethodStorage,
+	keys apiKeyManager,
+	admins []string,
+	metrics ...*observability.OperationMetrics,
+) *Service {
+	var opMetrics *observability.OperationMetrics
+
+	if len(metrics) > 0 {
+		opMetrics = metrics[0]
 	}
+
+	return &Service{
+		j:       j,
+		uSt:     uSt,
+		chSt:    chSt,
+		pmSt:    pmSt,
+		keys:    keys,
+		admins:  buildAdminSet(admins),
+		metrics: opMetrics,
+	}
+}
+
+// WithNotifier attaches an optional outbound-notification sink (e.g. email).
+// A nil notifier leaves notifications disabled.
+func (s *Service) WithNotifier(n Notifier) *Service {
+	s.notifier = n
+
+	return s
 }
 
 func (s *Service) SignIn(
@@ -35,28 +70,71 @@ func (s *Service) SignIn(
 ) (access jwt.AccessToken, refresh jwt.RefreshToken, err error) {
 	const op = "service.Service.Sign"
 
-	u, err := s.uSt.GetByEmail(ctx, cm.Email)
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"auth.sign_in",
+		"auth",
+	)
+
+	defer func() { finish(err) }()
+
+	email := normalizeEmail(cm.Email)
+	role := s.roleForEmail(email)
+
+	u, err := s.uSt.GetByEmail(ctx, email)
 	if err != nil && !errors.Is(err, sql.ErrNotFound) {
 		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
 	}
 
 	if errors.Is(err, sql.ErrNotFound) {
-		fmt.Println("THIS")
-		u = entities.NewUser(cm.Name, cm.Email, entities.UserRole)
+		u = entities.NewUser(cm.Name, cm.NickName, cm.AvatarURL, email, role)
+
+		if s.keys != nil {
+			key, keyErr := s.keys.Create(ctx, u.ID, 0)
+			if keyErr != nil {
+				return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, keyErr)
+			}
+
+			u.OpenRouterApiKey = key.Secret
+			u.OpenRouterKeyID = key.ID
+		}
 
 		err = s.uSt.Create(ctx, u)
 		if err != nil {
 			return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
 		}
+
+		if s.notifier != nil {
+			if nErr := s.notifier.EnqueueWelcome(ctx, u); nErr != nil {
+				slog.Default().Warn(
+					"enqueue welcome email failed",
+					slog.String("user_id", u.ID.String()),
+					slog.Any("err", nErr),
+				)
+			}
+		}
+	} else if u.Role != role {
+		err := s.uSt.UpdateRole(ctx, u.ID, role)
+		if err != nil {
+			return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
+		}
+
+		u.Role = role
 	}
 
 	session := entities.NewSession(u.ID)
-	err = s.uSt.CreateSession(ctx, session)
+
+	access, refresh, err = s.j.GeneratePair(u.ID, session.ID)
 	if err != nil {
 		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
 	}
 
-	access, refresh, err = s.j.GeneratePair(u.ID, session.ID)
+	session.RefreshToken = refresh.Raw
+
+	err = s.uSt.CreateSession(ctx, session)
 	if err != nil {
 		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
 	}
@@ -64,8 +142,114 @@ func (s *Service) SignIn(
 	return access, refresh, nil
 }
 
-func (s *Service) SignOut() {
-	const op = "service.Service.SignOut"
+func (s *Service) Logout(ctx context.Context, cm commands.Logout) (err error) {
+	const op = "service.Service.Logout"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"auth.logout",
+		"auth",
+	)
+
+	defer func() { finish(err) }()
+
+	err = s.uSt.DeleteSession(ctx, entities.Session{
+		ID:     cm.SessionID,
+		UserID: cm.UserID,
+	})
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Service) Refresh(
+	ctx context.Context,
+	rawRefresh string,
+) (access jwt.AccessToken, refresh jwt.RefreshToken, err error) {
+	const op = "service.Service.Refresh"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"auth.refresh",
+		"auth",
+	)
+
+	defer func() { finish(err) }()
+
+	t, err := s.j.ParseRefresh(rawRefresh)
+	if err != nil {
+		if errors.Is(err, jwt.ErrExpired) {
+			expiredToken, parseErr := s.j.ParseRefreshAllowExpired(rawRefresh)
+			if parseErr == nil {
+				deleteErr := s.uSt.DeleteSession(ctx, entities.Session{
+					ID:     expiredToken.Claims.SessionID,
+					UserID: expiredToken.Claims.UserID,
+				})
+				if deleteErr != nil {
+					return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, deleteErr)
+				}
+			}
+		}
+
+		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	session, err := s.uSt.GetSession(ctx, t.Claims.SessionID)
+	if err != nil {
+		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	if session.UserID != t.Claims.UserID {
+		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, sql.ErrNotFound)
+	}
+
+	if session.RefreshToken == "" || session.RefreshToken != rawRefresh {
+		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, jwt.ErrInvalid)
+	}
+
+	access, refresh, err = s.j.GeneratePair(t.Claims.UserID, t.Claims.SessionID)
+	if err != nil {
+		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	err = s.uSt.UpdateSessionRefresh(ctx, session.ID, session.UserID, refresh.Raw)
+	if err != nil {
+		return jwt.AccessToken{}, jwt.RefreshToken{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return access, refresh, nil
+}
+
+func (s *Service) UserInfo(ctx context.Context, userID uuid.UUID) (entities.User, error) {
+	const op = "service.Service.UserInfo"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"user.info.get",
+		"user_profile",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
+	user, err := s.uSt.GetByID(ctx, userID)
+	if err != nil {
+		return entities.User{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return user, nil
 }
 
 func (s *Service) AddChannel(
@@ -74,23 +258,29 @@ func (s *Service) AddChannel(
 ) (entities.Channel, error) {
 	const op = "service.Service.AddChannel"
 
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"channel.add",
+		"channel_connect",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
 	var ch entities.Channel
 
 	switch {
 	case cm.Telegram != nil:
-		cfg := addTgCfg(*cm.Telegram)
-		ch = entities.NewChannel(
-			entities.ChannelTelegramType,
-			cm.Name,
-			entities.ClawChannels{Telegram: &cfg},
-			cm.UserID,
-		)
+		ch = NewTelegramChannel(cm.Name, *cm.Telegram, cm.UserID)
 	default:
-		// TODO: err type
-		return entities.Channel{}, errors.New("channel is not supported")
+		return entities.Channel{}, ErrChannelUnsupported
 	}
 
-	err := s.chSt.Create(ctx, ch)
+	err = s.chSt.Create(ctx, ch)
 	if err != nil {
 		return entities.Channel{}, fmt.Errorf("%s: %w", op, err)
 	}
@@ -98,10 +288,21 @@ func (s *Service) AddChannel(
 	return ch, nil
 }
 
-func (s *Service) RemoveChannel(ctx context.Context, cm commands.RemoveChannel) error {
+func (s *Service) RemoveChannel(ctx context.Context, cm commands.RemoveChannel) (err error) {
 	const op = "service.Service.RemoveChannel"
 
-	err := s.chSt.Delete(ctx, cm.ChannelID, cm.UserID)
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"channel.delete",
+		"channel_connect",
+	)
+
+	defer func() { finish(err) }()
+
+	err = s.chSt.Delete(ctx, cm.ChannelID, cm.UserID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -109,28 +310,32 @@ func (s *Service) RemoveChannel(ctx context.Context, cm commands.RemoveChannel) 
 	return nil
 }
 
-func (s *Service) UpdateChannel(ctx context.Context, cm commands.UpdateChannel) error {
+func (s *Service) UpdateChannel(ctx context.Context, cm commands.UpdateChannel) (err error) {
 	const op = "service.Service.UpdateChannel"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"channel.update",
+		"channel_connect",
+	)
+
+	defer func() { finish(err) }()
 
 	var ch entities.Channel
 
 	switch {
 	case cm.Telegram != nil:
-		cfg := addTgCfg(*cm.Telegram)
-		ch = entities.NewChannel(
-			entities.ChannelTelegramType,
-			cm.Name,
-			entities.ClawChannels{Telegram: &cfg},
-			cm.UserID,
-		)
+		ch = NewTelegramChannel(cm.Name, *cm.Telegram, cm.UserID)
 	default:
-		// TODO: err type
-		return errors.New("channel is not supported")
+		return ErrChannelUnsupported
 	}
 
 	ch.ID = cm.ChannelID
 
-	err := s.chSt.Update(ctx, ch)
+	err = s.chSt.Update(ctx, ch)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
@@ -144,6 +349,19 @@ func (s *Service) GetChannel(
 ) (entities.Channel, error) {
 	const op = "service.Service.GetChannel"
 
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"channel.get",
+		"channel_connect",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
 	ch, err := s.chSt.GetByID(ctx, channelID, userID)
 	if err != nil {
 		return entities.Channel{}, fmt.Errorf("%s: %w", op, err)
@@ -155,10 +373,153 @@ func (s *Service) GetChannel(
 func (s *Service) GetChannels(ctx context.Context, userID uuid.UUID) ([]entities.Channel, error) {
 	const op = "service.Service.GetChannels"
 
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"channel.list",
+		"channel_connect",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
 	chs, err := s.chSt.GetByUserID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
 
 	return chs, nil
+}
+
+func (s *Service) GetPaymentMethod(
+	ctx context.Context,
+	methodID, userID uuid.UUID,
+) (entities.PaymentMethod, error) {
+	const op = "service.Service.GetPaymentMethod"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"payment_method.get",
+		"payment_method",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
+	if methodID == uuid.Nil || userID == uuid.Nil {
+		return entities.PaymentMethod{}, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	method, err := s.pmSt.GetByID(ctx, methodID, userID)
+	if err != nil {
+		return entities.PaymentMethod{}, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return method, nil
+}
+
+func (s *Service) GetPaymentMethods(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]entities.PaymentMethod, error) {
+	const op = "service.Service.GetPaymentMethods"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"payment_method.list",
+		"payment_method",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
+	if userID == uuid.Nil {
+		return nil, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	methods, err := s.pmSt.GetByUserID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, err)
+	}
+
+	return methods, nil
+}
+
+func (s *Service) SetDefaultPaymentMethod(
+	ctx context.Context,
+	cm commands.SetDefaultPaymentMethod,
+) error {
+	const op = "service.Service.SetDefaultPaymentMethod"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"payment_method.default.set",
+		"payment_method",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
+	if cm.UserID == uuid.Nil || cm.PaymentMethodID == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	if _, err = s.pmSt.GetByID(ctx, cm.PaymentMethodID, cm.UserID); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err = s.pmSt.ClearDefaultByUserID(ctx, cm.UserID); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	if err = s.pmSt.UpdateDefault(ctx, cm.PaymentMethodID, cm.UserID, true); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
+}
+
+func (s *Service) RemovePaymentMethod(
+	ctx context.Context,
+	methodID, userID uuid.UUID,
+) error {
+	const op = "service.Service.RemovePaymentMethod"
+
+	ctx, _, finish := observability.StartOperation(
+		ctx,
+		slog.Default(),
+		s.metrics,
+		"service.user",
+		"payment_method.delete",
+		"payment_method",
+	)
+
+	var err error
+
+	defer func() { finish(err) }()
+
+	if methodID == uuid.Nil || userID == uuid.Nil {
+		return fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	if err = s.pmSt.Delete(ctx, methodID, userID); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+
+	return nil
 }

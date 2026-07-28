@@ -3,16 +3,21 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/url"
 	"shared/pkg/jwt"
 	"shared/pkg/response"
+	"strings"
 	"time"
 
-	"simpleClaw/internal/api/rest/dto"
-	"simpleClaw/internal/entities"
-
 	"simpleClaw/config"
-
+	"simpleClaw/internal/api/rest/dto"
+	"simpleClaw/internal/api/rest/middleware"
+	"simpleClaw/internal/entities"
+	"simpleClaw/internal/infra/sql"
+	integrationservice "simpleClaw/internal/service/integrations"
+	"simpleClaw/internal/service/integrations/googleoauth"
 	"simpleClaw/internal/service/user/commands"
 
 	"github.com/go-chi/chi/v5"
@@ -25,22 +30,65 @@ type service interface {
 		ctx context.Context,
 		cm commands.SignIn,
 	) (access jwt.AccessToken, refresh jwt.RefreshToken, err error)
+	Refresh(
+		ctx context.Context,
+		rawRefresh string,
+	) (access jwt.AccessToken, refresh jwt.RefreshToken, err error)
+	Logout(ctx context.Context, cm commands.Logout) error
+	UserInfo(ctx context.Context, userID uuid.UUID) (entities.User, error)
 
 	AddChannel(
 		ctx context.Context,
 		cm commands.AddChannel,
 	) (entities.Channel, error)
+	GetPaymentMethod(
+		ctx context.Context,
+		methodID, userID uuid.UUID,
+	) (entities.PaymentMethod, error)
+	GetPaymentMethods(
+		ctx context.Context,
+		userID uuid.UUID,
+	) ([]entities.PaymentMethod, error)
+	SetDefaultPaymentMethod(ctx context.Context, cm commands.SetDefaultPaymentMethod) error
+	RemovePaymentMethod(ctx context.Context, methodID, userID uuid.UUID) error
 }
 type User struct {
-	env     string
-	service service
-	j       jwt.JWT
+	env                string
+	service            service
+	integrationService integrationService
+	googleOAuthService googleOAuthService
+	frontendURL        string
+	j                  jwt.JWT
 }
 
-func NewUser(env string, service service) *User {
+type integrationService interface {
+	List(ctx context.Context, userID uuid.UUID) ([]entities.AccountIntegration, error)
+	Connect(
+		ctx context.Context,
+		cmd integrationservice.ConnectCommand,
+	) (entities.AccountIntegration, error)
+}
+
+type googleOAuthService interface {
+	Start(ctx context.Context, cmd googleoauth.StartCommand) (googleoauth.StartResult, error)
+	Complete(ctx context.Context, cmd googleoauth.CompleteCommand) (googleoauth.CompleteResult, error)
+}
+
+func NewUser(
+	env string,
+	service service,
+	integrationService integrationService,
+	googleOAuthService googleOAuthService,
+	j jwt.JWT,
+	frontendURL string,
+) *User {
 	return &User{
-		env:     env,
-		service: service,
+		env:                env,
+		service:            service,
+		integrationService: integrationService,
+		googleOAuthService: googleOAuthService,
+		j:                  j,
+		frontendURL:        frontendURL,
 	}
 }
 
@@ -48,32 +96,43 @@ func (u *User) Register(r chi.Router) {
 	r.Route("/auth", func(r chi.Router) {
 		r.Get("/connect/{provider}", u.Login)
 		r.Get("/connect/{provider}/callback", u.Callback)
+		r.Get("/google/integrations/callback", u.GoogleIntegrationCallback)
+		r.Post("/refresh", u.Refresh)
+		r.With(middleware.AuthJwt(u.j)).Post("/logout", u.Logout)
 	})
 
-	r.Group(func(r chi.Router) {
-		// r.Use(middleware.AuthJwt(u.j))
+	r.Route("/me", func(r chi.Router) {
+		r.Use(middleware.AuthJwt(u.j))
+		r.Get("/user-info", u.UserInfo)
 		r.Post("/channel", u.AddChannel)
+		r.Post("/logout", u.Logout)
+		r.Get("/payment-method", u.ListPaymentMethods)
+		r.Get("/payment-method/{id}", u.GetPaymentMethod)
+		r.Patch("/payment-method/{id}", u.SetDefaultPaymentMethod)
+		r.Delete("/payment-method/{id}", u.RemovePaymentMethod)
+		r.Get("/integrations", u.ListIntegrations)
+		r.Post("/integrations/{provider}/connect", u.ConnectIntegration)
+		r.Post("/integrations/google/oauth/start", u.StartGoogleIntegrationOAuth)
 	})
 }
 
 func (u *User) Login(w http.ResponseWriter, r *http.Request) {
 	if gothUser, err := gothic.CompleteUserAuth(w, r); err == nil {
 		access, refresh, err := u.service.SignIn(r.Context(), commands.SignIn{
-			Name:  gothUser.NickName,
-			Email: gothUser.Email,
+			NickName:  gothUser.NickName,
+			AvatarURL: gothUser.AvatarURL,
+			Name:      gothUser.FirstName,
+			Email:     gothUser.Email,
 		})
 		if err != nil {
-			response.RespondError(w, response.Error{
-				Code:    http.StatusUnauthorized,
-				Message: err.Error(),
-			})
+			respondServiceError(w, err)
 
 			return
 		}
 
 		u.setCookie(w, "/", "access_token", access.Raw, access.Claims.ExpiresAt.Time)
 		u.setCookie(w, "/", "refresh_token", refresh.Raw, refresh.Claims.ExpiresAt.Time)
-
+		http.Redirect(w, r, u.frontendURL, http.StatusFound)
 	} else {
 		gothic.BeginAuthHandler(w, r)
 	}
@@ -82,24 +141,30 @@ func (u *User) Login(w http.ResponseWriter, r *http.Request) {
 func (u *User) Callback(w http.ResponseWriter, r *http.Request) {
 	gothUser, err := gothic.CompleteUserAuth(w, r)
 	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "oauth callback failed",
+		})
+
 		return
 	}
 
 	access, refresh, err := u.service.SignIn(r.Context(), commands.SignIn{
-		Name:  gothUser.NickName,
-		Email: gothUser.Email,
+		NickName:  gothUser.NickName,
+		AvatarURL: gothUser.AvatarURL,
+		Name:      gothUser.FirstName,
+		Email:     gothUser.Email,
 	})
 	if err != nil {
-		response.RespondError(w, response.Error{
-			Code:    http.StatusUnauthorized,
-			Message: err.Error(),
-		})
+		respondServiceError(w, err)
 
 		return
 	}
 
 	u.setCookie(w, "/", "access_token", access.Raw, access.Claims.ExpiresAt.Time)
 	u.setCookie(w, "/", "refresh_token", refresh.Raw, refresh.Claims.ExpiresAt.Time)
+
+	http.Redirect(w, r, u.frontendURL, http.StatusFound)
 }
 
 func (u *User) AddChannel(w http.ResponseWriter, r *http.Request) {
@@ -109,23 +174,21 @@ func (u *User) AddChannel(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.RespondError(w, response.Error{
 			Code:    http.StatusBadRequest,
-			Message: err.Error(),
+			Message: "invalid request body",
 		})
 
 		return
 	}
 
-	//userID, ok := r.Context().Value("user_id").(uuid.UUID)
-	//if !ok {
-	//	response.RespondError(w, response.Error{
-	//		Code:    http.StatusBadRequest,
-	//		Message: "User ID should be a UUID",
-	//	})
-	//
-	//	return
-	//}
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
 
-	userID, _ := uuid.Parse("d3612cab-4fbd-465d-85a6-6c360afc8812")
+		return
+	}
 
 	ch, err := u.service.AddChannel(r.Context(), commands.AddChannel{
 		UserID: userID,
@@ -137,13 +200,491 @@ func (u *User) AddChannel(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	res := dto.AddChannelResponse{
+		ID:        ch.ID.String(),
+		Name:      ch.Name,
+		BotToken:  ch.Config.Telegram.BotToken,
+		DmPolicy:  string(ch.Config.Telegram.DmPolicy),
+		AllowFrom: ch.Config.Telegram.AllowFrom,
+	}
+
+	response.RespondOK(w, res)
+}
+
+func (u *User) ListPaymentMethods(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
 		response.RespondError(w, response.Error{
-			Code:    http.StatusInternalServerError,
-			Message: err.Error(),
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	methods, err := u.service.GetPaymentMethods(r.Context(), userID)
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	result := make([]dto.PaymentMethodResponse, 0, len(methods))
+	for _, method := range methods {
+		result = append(result, paymentMethodResponse(method))
+	}
+
+	response.RespondOK(w, result)
+}
+
+func (u *User) GetPaymentMethod(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	methodID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid payment method id",
+		})
+
+		return
+	}
+
+	method, err := u.service.GetPaymentMethod(r.Context(), methodID, userID)
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	response.RespondOK(w, paymentMethodResponse(method))
+}
+
+func (u *User) SetDefaultPaymentMethod(w http.ResponseWriter, r *http.Request) {
+	var req dto.SetDefaultPaymentMethodRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid request body",
+		})
+
+		return
+	}
+
+	if !req.IsDefault {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "is_default must be true",
+		})
+
+		return
+	}
+
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	methodID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid payment method id",
+		})
+
+		return
+	}
+
+	if err := u.service.SetDefaultPaymentMethod(r.Context(), commands.SetDefaultPaymentMethod{
+		UserID:          userID,
+		PaymentMethodID: methodID,
+	}); err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	response.RespondOK(w, map[string]any{"updated": true})
+}
+
+func (u *User) RemovePaymentMethod(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	methodID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid payment method id",
+		})
+
+		return
+	}
+
+	if err := u.service.RemovePaymentMethod(r.Context(), methodID, userID); err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	response.RespondOK(w, map[string]any{"deleted": true})
+}
+
+func (u *User) ListIntegrations(w http.ResponseWriter, r *http.Request) {
+	if u.integrationService == nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusServiceUnavailable,
+			Message: "integration service is not configured",
+		})
+
+		return
+	}
+
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	integrations, err := u.integrationService.List(r.Context(), userID)
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	result := make([]dto.IntegrationResponse, 0, len(integrations))
+	for _, integration := range integrations {
+		result = append(result, dto.IntegrationResponse{
+			ID:                integration.ID.String(),
+			Capability:        string(integration.CapabilityID),
+			Provider:          integration.Provider,
+			ExternalAccountID: integration.ExternalAccountID,
+			DisplayName:       integration.DisplayName,
+			Status:            string(integration.Status),
+			Metadata:          integration.Metadata,
 		})
 	}
 
-	response.RespondOK(w, ch)
+	response.RespondOK(w, result)
+}
+
+func (u *User) ConnectIntegration(w http.ResponseWriter, r *http.Request) {
+	if u.integrationService == nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusServiceUnavailable,
+			Message: "integration service is not configured",
+		})
+
+		return
+	}
+
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	var req dto.ConnectIntegrationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid request body",
+		})
+
+		return
+	}
+
+	var integrationID uuid.UUID
+	if raw := strings.TrimSpace(req.ID); raw != "" {
+		integrationID, err = uuid.Parse(raw)
+		if err != nil {
+			response.RespondError(w, response.Error{
+				Code:    http.StatusBadRequest,
+				Message: "invalid integration id",
+			})
+
+			return
+		}
+	}
+
+	integration, err := u.integrationService.Connect(r.Context(), integrationservice.ConnectCommand{
+		UserID:            userID,
+		ID:                integrationID,
+		Provider:          chi.URLParam(r, "provider"),
+		ExternalAccountID: req.ExternalAccountID,
+		DisplayName:       req.DisplayName,
+		SecretPayload:     req.SecretPayload,
+		Metadata:          req.Metadata,
+	})
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	response.RespondOK(w, dto.IntegrationResponse{
+		ID:                integration.ID.String(),
+		Capability:        string(integration.CapabilityID),
+		Provider:          integration.Provider,
+		ExternalAccountID: integration.ExternalAccountID,
+		DisplayName:       integration.DisplayName,
+		Status:            string(integration.Status),
+		Metadata:          integration.Metadata,
+	})
+}
+
+func (u *User) StartGoogleIntegrationOAuth(w http.ResponseWriter, r *http.Request) {
+	if u.googleOAuthService == nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusServiceUnavailable,
+			Message: "google oauth service is not configured",
+		})
+
+		return
+	}
+
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	var req dto.GoogleIntegrationOAuthStartRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusBadRequest,
+			Message: "invalid request body",
+		})
+
+		return
+	}
+
+	result, err := u.googleOAuthService.Start(r.Context(), googleoauth.StartCommand{
+		UserID:       userID,
+		Capabilities: req.Capabilities,
+		ReturnTo:     req.ReturnTo,
+	})
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	response.RespondOK(w, dto.GoogleIntegrationOAuthStartResponse{
+		AuthURL:      result.AuthURL,
+		Capabilities: result.Capabilities,
+	})
+}
+
+func (u *User) GoogleIntegrationCallback(w http.ResponseWriter, r *http.Request) {
+	if u.googleOAuthService == nil {
+		http.Redirect(w, r, u.integrationOAuthRedirectURL("", false), http.StatusFound)
+		return
+	}
+
+	if strings.TrimSpace(r.URL.Query().Get("error")) != "" {
+		http.Redirect(w, r, u.integrationOAuthRedirectURL("", false), http.StatusFound)
+		return
+	}
+
+	result, err := u.googleOAuthService.Complete(r.Context(), googleoauth.CompleteCommand{
+		RawState: r.URL.Query().Get("state"),
+		Code:     r.URL.Query().Get("code"),
+	})
+	if err != nil {
+		http.Redirect(w, r, u.integrationOAuthRedirectURL("", false), http.StatusFound)
+		return
+	}
+
+	http.Redirect(w, r, u.integrationOAuthRedirectURL(result.ReturnTo, true), http.StatusFound)
+}
+
+func (u *User) integrationOAuthRedirectURL(returnTo string, success bool) string {
+	base := strings.TrimRight(strings.TrimSpace(u.frontendURL), "/")
+	path := normalizeFrontendPath(returnTo)
+	if path == "" {
+		path = "/onboard"
+	}
+
+	status := "error"
+	if success {
+		status = "success"
+	}
+
+	target, err := url.Parse(base + path)
+	if err != nil {
+		return base + "/onboard?integration_oauth=error"
+	}
+
+	query := target.Query()
+	query.Set("integration_oauth", status)
+	target.RawQuery = query.Encode()
+
+	return target.String()
+}
+
+func normalizeFrontendPath(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || strings.Contains(raw, "://") {
+		return ""
+	}
+
+	return raw
+}
+
+func (u *User) Refresh(w http.ResponseWriter, r *http.Request) {
+	refreshCookie, err := r.Cookie("refresh_token")
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "Refresh token required",
+		})
+
+		return
+	}
+
+	if err = refreshCookie.Valid(); err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "Refresh token is invalid",
+		})
+
+		return
+	}
+
+	access, refresh, err := u.service.Refresh(r.Context(), refreshCookie.Value)
+	if err != nil {
+		code := http.StatusUnauthorized
+		message := "Refresh token invalid"
+
+		switch {
+		case errors.Is(err, jwt.ErrExpired):
+			message = "Refresh token expired"
+			u.clearAuthCookies(w)
+		case errors.Is(err, jwt.ErrInvalid), errors.Is(err, sql.ErrNotFound):
+			message = "Refresh token invalid"
+		default:
+			code = http.StatusInternalServerError
+			message = "internal error"
+		}
+
+		response.RespondError(w, response.Error{Code: code, Message: message})
+
+		return
+	}
+
+	u.setCookie(w, "/", "access_token", access.Raw, access.Claims.ExpiresAt.Time)
+	u.setCookie(w, "/", "refresh_token", refresh.Raw, refresh.Claims.ExpiresAt.Time)
+
+	response.RespondOK(w, map[string]any{"refreshed": true})
+}
+
+func (u *User) Logout(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	sessionID, err := sessionIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid session id",
+		})
+
+		return
+	}
+
+	err = u.service.Logout(r.Context(), commands.Logout{
+		UserID:    userID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	u.clearAuthCookies(w)
+	response.RespondOK(w, map[string]any{"loggedOut": true})
+}
+
+func (u *User) UserInfo(w http.ResponseWriter, r *http.Request) {
+	userID, err := userIDFromContext(r.Context())
+	if err != nil {
+		response.RespondError(w, response.Error{
+			Code:    http.StatusUnauthorized,
+			Message: "invalid user id",
+		})
+
+		return
+	}
+
+	user, err := u.service.UserInfo(r.Context(), userID)
+	if err != nil {
+		respondServiceError(w, err)
+
+		return
+	}
+
+	response.RespondOK(w, dto.UserInfoResponse{
+		ID:           user.ID.String(),
+		Name:         user.Name,
+		Email:        user.Email,
+		NickName:     user.Nickname,
+		AvatarURL:    user.AvatarURL,
+		BalanceMinor: user.BalanceMinor,
+		Role:         user.Role,
+		CreatedAt:    user.CreatedAt,
+	})
 }
 
 func (u *User) setCookie(w http.ResponseWriter, path, name, value string, expires time.Time) {
@@ -161,4 +702,37 @@ func (u *User) setCookie(w http.ResponseWriter, path, name, value string, expire
 	}
 
 	http.SetCookie(w, cookie)
+}
+
+func (u *User) clearAuthCookies(w http.ResponseWriter) {
+	u.clearCookie(w, "/", "access_token")
+	u.clearCookie(w, "/", "refresh_token")
+}
+
+func (u *User) clearCookie(w http.ResponseWriter, path, name string) {
+	cookie := &http.Cookie{
+		Name:     name,
+		Value:    "",
+		Path:     path,
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}
+
+	if u.env == config.EnvProduction {
+		cookie.Secure = true
+	}
+
+	http.SetCookie(w, cookie)
+}
+
+func paymentMethodResponse(method entities.PaymentMethod) dto.PaymentMethodResponse {
+	return dto.PaymentMethodResponse{
+		ID:         method.ID.String(),
+		Title:      method.Title,
+		IsDefault:  method.IsDefault,
+		CreatedAt:  method.CreatedAt,
+		LastUsedAt: method.LastUsedAt,
+	}
 }

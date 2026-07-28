@@ -3,6 +3,8 @@ package slctx
 import (
 	"context"
 	"log/slog"
+
+	"shared/pkg/observability"
 )
 
 type ctxLoggerKey struct{}
@@ -10,10 +12,10 @@ type ctxLoggerKey struct{}
 func Logger(ctx context.Context) *slog.Logger {
 	l, ok := ctx.Value(ctxLoggerKey{}).(*slog.Logger)
 	if !ok {
-		return slog.Default()
+		return observability.EnrichLogger(ctx, slog.Default())
 	}
 
-	return l
+	return observability.EnrichLogger(ctx, l)
 }
 
 func WithLogger(ctx context.Context, l *slog.Logger) context.Context {
