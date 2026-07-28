@@ -118,6 +118,29 @@ func (s *Storage) GetLatestByUserID(ctx context.Context, userID uuid.UUID) (enti
 	return mapToEntity(model), nil
 }
 
+func (s *Storage) ListByUserID(ctx context.Context, userID uuid.UUID) ([]entities.UserSubscription, error) {
+	const op = "storages.Subscriptions.ListByUserID"
+
+	if userID == uuid.Nil {
+		return nil, fmt.Errorf("%s: %w", op, invalidSubscription("subscription user_id is required"))
+	}
+
+	rows, err := gorm.G[models.UserSubscription](s.db).
+		Where("user_id = ?", userID).
+		Order("created_at DESC").
+		Find(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
+	}
+
+	out := make([]entities.UserSubscription, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, mapToEntity(row))
+	}
+
+	return out, nil
+}
+
 func (s *Storage) Update(ctx context.Context, subscription entities.UserSubscription) error {
 	const op = "storages.Subscriptions.Update"
 

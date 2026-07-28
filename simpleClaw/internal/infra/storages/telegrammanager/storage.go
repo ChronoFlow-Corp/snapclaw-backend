@@ -248,6 +248,32 @@ func (s *Storage) GetLatestManagedBotByClawID(
 	return mapManagedBot(row), nil
 }
 
+func (s *Storage) ListManagedBotsByUserID(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]entities.TelegramManagedBot, error) {
+	const op = "storages.TelegramManager.ListManagedBotsByUserID"
+
+	if userID == uuid.Nil {
+		return nil, fmt.Errorf("%s: %w", op, sql.ErrInvalid)
+	}
+
+	var rows []models.TelegramManagedBot
+	if err := s.db.WithContext(ctx).
+		Where("user_id = ?", userID).
+		Order("created_at DESC").
+		Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("%s: %w", op, sql.TranslateError(err))
+	}
+
+	out := make([]entities.TelegramManagedBot, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, mapManagedBot(row))
+	}
+
+	return out, nil
+}
+
 func mapAccountLink(row models.TelegramAccountLink) entities.TelegramAccountLink {
 	return entities.TelegramAccountLink{
 		ID:               row.ID,

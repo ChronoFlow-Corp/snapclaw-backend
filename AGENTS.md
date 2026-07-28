@@ -324,6 +324,32 @@
 | `/servers/{id}` | `PUT` | Обновить execution host | path `id`, body `name`, `ip`, `url`, `proxyUrl`, `status`, `secretKey` | нет |
 | `/servers/{id}` | `DELETE` | Удалить execution host | path `id` | body нет |
 
+#### Admin Console (back-office read API)
+
+Read-only поверхность для внутренней админки (`snapclaw/admin`). Все роуты gated `AuthJwt` + `AdminOnly`
+(role `admin`), контроллер `internal/api/rest/controllers/admin.go`, aggregate-service
+`internal/service/admin`, статистика — `internal/infra/storages/adminstats`. Ответы users/детали в
+snake_case; claw-подресурсы переиспользуют существующие user-facing мапперы. Мутация claw из админки
+(`PUT /admin/claws/{id}`) пока намеренно не реализована (нетривиальная reconciliation capability/integration).
+
+| Path | Method | Purpose | Required | Optional |
+|---|---|---|---|---|
+| `/admin/users` | `GET` | Пагинированный список пользователей с computed `claws_count`, `has_active_subscription`, `has_issues` | JWT admin | query `page`, `page_size`, `sort` (`-created_at`\|`created_at`\|`-balance_minor`\|`balance_minor`\|`email`), `q`, `role`, `has_active_subscription`, `has_issues`, `registered_from`, `registered_to` |
+| `/admin/users/counts` | `GET` | Dashboard-счётчики `total`, `with_active_subscription`, `with_issues`, `admins` | JWT admin | нет |
+| `/admin/users/{id}` | `GET` | 360° карточка пользователя + агрегированный `summary` (claws total/running/error, subscription, payments_total_minor, usage_month) | JWT admin, path `id` | нет |
+| `/admin/users/{id}/claws` | `GET` | Claw'ы пользователя (admin-shape: `serverId`, `createdAt`, enabled `capabilities`) | JWT admin, path `id` | нет |
+| `/admin/users/{id}/subscription` | `GET` | История подписок пользователя | JWT admin, path `id` | нет |
+| `/admin/users/{id}/payments` | `GET` | Платежи пользователя | JWT admin, path `id` | нет |
+| `/admin/users/{id}/payment-methods` | `GET` | Сохранённые payment methods | JWT admin, path `id` | нет |
+| `/admin/users/{id}/balance-entries` | `GET` | Записи balance ledger (последние `200`) | JWT admin, path `id` | нет |
+| `/admin/users/{id}/integrations` | `GET` | Account integrations (секреты вырезаны) | JWT admin, path `id` | нет |
+| `/admin/users/{id}/telegram-bots` | `GET` | Managed Telegram bots пользователя | JWT admin, path `id` | нет |
+| `/admin/users/{id}/usage` | `GET` | Usage aggregation (`ExpanseAnalyze` по target user) | JWT admin, path `id` | нет |
+| `/admin/claws/{id}` | `GET` | Один claw по id (admin-scope, без owner) + enabled capabilities | JWT admin, path `id` | нет |
+
+Правило "issue": claw считается проблемным, если `observed_state = 'error'` или `lifecycle_status = 'failed'`.
+Это единый предикат для `has_issues` (список), `with_issues` (counts) и `claws_error` (summary).
+
 #### Infra / Proxy
 
 | Path | Method | Purpose | Required | Optional |

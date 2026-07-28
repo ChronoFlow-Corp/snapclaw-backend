@@ -8,6 +8,7 @@ import (
 	"simpleClaw/internal/infra/hosting"
 	"simpleClaw/internal/infra/openrouter"
 	"simpleClaw/internal/infra/sql"
+	"simpleClaw/internal/service/admin"
 	"simpleClaw/internal/service/billing"
 	"simpleClaw/internal/service/claw"
 	"simpleClaw/internal/service/integrations/googleoauth"
@@ -125,6 +126,16 @@ var serviceErrorMappings = []serviceErrorMapping{
 		err:     user.ErrAccessTokenRequired,
 		code:    http.StatusBadRequest,
 		message: "access token is required",
+	},
+	{
+		err:     admin.ErrUserIDRequired,
+		code:    http.StatusBadRequest,
+		message: "user id is required",
+	},
+	{
+		err:     admin.ErrClawIDRequired,
+		code:    http.StatusBadRequest,
+		message: "claw id is required",
 	},
 	{
 		err:     claw.ErrUserIDRequired,
