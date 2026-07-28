@@ -16,6 +16,7 @@ import (
 
 	"simpleClaw/internal/infra/payment"
 
+	"simpleClaw/internal/infra/storages/adminstats"
 	"simpleClaw/internal/infra/storages/balanceentries"
 	"simpleClaw/internal/infra/storages/paymentmethods"
 	"simpleClaw/internal/infra/storages/payments"
@@ -41,6 +42,7 @@ import (
 	telegrammanagerstorage "simpleClaw/internal/infra/storages/telegrammanager"
 	"simpleClaw/internal/infra/storages/users"
 	telegraminfra "simpleClaw/internal/infra/telegram"
+	adminservice "simpleClaw/internal/service/admin"
 	billingservice "simpleClaw/internal/service/billing"
 	"simpleClaw/internal/service/claw"
 	clawcapabilityservice "simpleClaw/internal/service/clawcapability"
@@ -170,6 +172,7 @@ func main() {
 	balanceEntriesStorage := balanceentries.NewStorage(db)
 	telegramManagerStorage := telegrammanagerstorage.NewStorage(db)
 	emailOutboxStorage := emailoutbox.NewStorage(db)
+	adminStatsStorage := adminstats.NewStorage(db, operationMetrics)
 
 	var emailSvc *emailservice.Service
 	if cfg.Email.Enabled {
@@ -261,6 +264,20 @@ func main() {
 		operationMetrics,
 	)
 
+	adminSvc := adminservice.New(adminservice.Deps{
+		Stats:          adminStatsStorage,
+		Users:          userStorage,
+		Claws:          clawStorage,
+		Capabilities:   clawCapabilityStorage,
+		Subscriptions:  subscriptionsStorage,
+		Payments:       paymentStorage,
+		PaymentMethods: paymentMethodStorage,
+		Balance:        balanceEntriesStorage,
+		Integrations:   integrationStorage,
+		Telegram:       telegramManagerStorage,
+		Usage:          billingSvc,
+	}, operationMetrics)
+
 	serverService := serverservice.New(serversStorage, hostingManager, operationMetrics)
 	integrationSvc := integrationservice.NewService(integrationStorage)
 	googleOAuthSvc := googleoauth.NewService(googleoauth.ServiceOptions{
@@ -337,6 +354,7 @@ func main() {
 	)
 	clawController := controllers.NewClaw(clawService, clawCapabilitySvc, j)
 	serverController := controllers.NewServer(serverService, uService, j)
+	adminController := controllers.NewAdmin(adminSvc, uService, j)
 	var telegramManagerController *controllers.TelegramManager
 	var telegramManagerSvc *telegrammanagerservice.Service
 	if cfg.TelegramManager.Enabled {
@@ -407,6 +425,7 @@ func main() {
 	uController.Register(r)
 	clawController.Register(r)
 	serverController.Register(r)
+	adminController.Register(r)
 	if telegramManagerController != nil {
 		telegramManagerController.Register(r)
 	}
