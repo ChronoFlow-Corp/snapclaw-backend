@@ -485,11 +485,11 @@ func clawResponse(cl entities.Claw) dto.ClawResponse {
 		LifecycleStatus:    string(cl.LifecycleStatus),
 		CurrentOperationID: stringifyUUID(cl.CurrentOperationID),
 		LastError:          cl.LastError,
-		Telegram:           clawTelegramResponse(cl.Config),
+		Telegram:           clawTelegramResponse(cl.Config, cl.OnboardingComplete),
 	}
 }
 
-func clawTelegramResponse(cfg entities.ClawConfig) dto.ClawTelegramResponse {
+func clawTelegramResponse(cfg entities.ClawConfig, onboardingComplete bool) dto.ClawTelegramResponse {
 	if cfg.Channels == nil || cfg.Channels.Telegram == nil || !cfg.Channels.Telegram.Enabled {
 		return dto.ClawTelegramResponse{
 			Connected: false,
@@ -497,7 +497,7 @@ func clawTelegramResponse(cfg entities.ClawConfig) dto.ClawTelegramResponse {
 		}
 	}
 
-	if cfg.Channels.Telegram.DmPolicy == entitychannels.DmPairing {
+	if cfg.Channels.Telegram.DmPolicy == entitychannels.DmPairing && !onboardingComplete {
 		return dto.ClawTelegramResponse{
 			Connected: false,
 			Status:    "pending_confirmation",
